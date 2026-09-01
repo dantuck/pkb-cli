@@ -142,9 +142,7 @@ def cmd_new(args):
         "links": [],
         "title": args.title,
     }
-    slug = "".join(c if c.isalnum() else "-" for c in args.title.lower()).strip("-")
-    slug = "-".join(filter(None, slug.split("-")))[:60] or "untitled"
-    path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{slug}.md")
+    path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{pc.slugify(args.title)}.md")
     pc.write_entry(path, fm, f"# {args.title}\n\n")
     print(path)
     return 0
@@ -196,6 +194,8 @@ def cmd_inbox(args):
     if not files:
         print("inbox is empty")
         return 0
+
+    items = []
     for name in files:
         path = os.path.join(inbox_dir, name)
         try:
@@ -207,7 +207,97 @@ def cmd_inbox(args):
             title = name
         created_dt = pc.parse_iso(created)
         age = (now - created_dt).days if created_dt else "?"
+        items.append((name, age, title))
+
+    interactive = not args.plain and shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+    if interactive:
+        return _inbox_interactive(root, items)
+
+    for name, age, title in items:
         print(f"{age!s:>4}d  {name:<30} {title}")
+    if not shutil.which("fzf"):
+        print("\n(install fzf for an interactive picker: promote/redirect/discard)")
+    return 0
+
+
+def _inbox_interactive(root, items):
+    """fzf-based triage: select an item (live content preview), then promote
+    (choose a Diataxis type, moved there with extension cleared), redirect
+    (appended into that day's journal entry, per its created date), or discard.
+    Every inbox item must end in one of exactly these three states (spec S5) --
+    this is what lets kb inbox actually resolve that, not just report on it."""
+    inbox_dir = os.path.join(root, "inbox")
+    lines = []
+    for name, age, title in items:
+        lines.append(f"{name}\t{age}d\t{title}")
+
+    preview_cmd = f"cat {shlex.quote(inbox_dir)}/{{1}}"
+    picker = subprocess.run(
+        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
+         "--preview", preview_cmd, "--preview-window", "right:60%",
+         "--prompt", "inbox> ", "--header", "enter: promote / redirect / discard this item"],
+        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
+    )
+    if picker.returncode != 0 or not picker.stdout.strip():
+        return 0  # cancelled
+    chosen_name = picker.stdout.split("\t", 1)[0].strip()
+    chosen_path = os.path.join(inbox_dir, chosen_name)
+    fm, body = pc.read_entry(chosen_path)
+    title = fm.get("title") or chosen_name
+
+    action = subprocess.run(
+        ["fzf", "--prompt", f"{chosen_name}> ", "--header", f"{title} -- promote/redirect/discard/cancel"],
+        input="promote\nredirect\ndiscard\ncancel", text=True, stdout=subprocess.PIPE,
+    )
+    if action.returncode != 0 or not action.stdout.strip():
+        return 0
+    choice = action.stdout.strip()
+    if choice == "cancel":
+        return 0
+
+    if choice == "promote":
+        type_pick = subprocess.run(
+            ["fzf", "--prompt", "type> ", "--header", "promote to which Diataxis type?"],
+            input="\n".join(pc.CORE_TYPES), text=True, stdout=subprocess.PIPE,
+        )
+        if type_pick.returncode != 0 or not type_pick.stdout.strip():
+            return 0
+        target_type = type_pick.stdout.strip()
+        fm["type"] = target_type
+        fm["extension"] = None
+        fm["updated"] = pc.now_iso()
+        new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{fm['id']}-{pc.slugify(title)}.md")
+        pc.write_entry(new_path, fm, body)
+        os.remove(chosen_path)
+        print(f"promoted -> {os.path.relpath(new_path, root)}")
+
+    elif choice == "redirect":
+        created_dt = pc.parse_iso(fm.get("created")) or datetime.now().astimezone()
+        journal_dir = os.path.join(root, "journal", f"{created_dt.year:04d}", f"{created_dt.month:02d}")
+        journal_path = os.path.join(journal_dir, f"{created_dt.date().isoformat()}.md")
+        if not os.path.exists(journal_path):
+            all_ids = pc.collect_existing_ids(root)
+            jid = pc.gen_id(all_ids, dt=created_dt)
+            now_s = pc.now_iso()
+            jfm = {
+                "id": jid, "created": now_s, "updated": now_s,
+                "type": "journal", "extension": "journal", "source": "manual",
+                "source_id": None, "tags": [], "links": [],
+                "title": created_dt.date().isoformat(),
+            }
+            pc.write_entry(journal_path, jfm, f"# {created_dt.date().isoformat()}\n\n")
+        with open(journal_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+        with open(journal_path, "w", encoding="utf-8") as f:
+            f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
+        os.remove(chosen_path)
+        print(f"redirected -> {os.path.relpath(journal_path, root)}")
+
+    elif choice == "discard":
+        os.remove(chosen_path)
+        print(f"discarded {chosen_name}")
+
+    run_script("index_fts.py")
     return 0
 
 
@@ -891,7 +981,20 @@ def main():
                     help="YYYY-MM-DD, or 'today' (default)")
     p.set_defaults(func=cmd_journal)
 
-    p = sub.add_parser("inbox", help="list inbox contents with age")
+    p = sub.add_parser(
+        "inbox", help="list inbox contents with age",
+        description="List inbox contents with age.",
+        epilog=(
+            "if fzf is installed and you're in a real terminal, this opens an "
+            "interactive picker by default: select an item (with a live preview), "
+            "then promote (to a Diataxis type), redirect (into that day's journal "
+            "entry), or discard -- resolving it, not just reporting on it. "
+            "--plain always skips it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--plain", action="store_true",
+                    help="force the plain list even if fzf + a terminal make interactive mode available")
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("triage", help="flag inbox items overdue for triage")

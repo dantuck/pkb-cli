@@ -59,6 +59,8 @@ def main():
     for r in rows:
         flag = "OVERDUE" if r["overdue"] else "ok"
         print(f"  [{flag:7}] {r['age_days']:>4}d  {r['id'] or '?':<18} {r['title'] or r['path']}")
+    if overdue:
+        print("\nrun `kb inbox` to promote/redirect/discard -- triage only reports, it doesn't act")
     return 1 if overdue else 0
 
 

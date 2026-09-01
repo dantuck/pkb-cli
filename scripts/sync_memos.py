@@ -91,7 +91,7 @@ def existing_source_paths(root, source):
     return paths
 
 
-def write_memo(root, memo, existing_paths, all_ids, threshold):
+def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
     """Write or refresh the sources/memos/ mirror for one memo.
 
     A source_id already on disk gets its mirror updated in place (title/body/
@@ -107,9 +107,13 @@ def write_memo(root, memo, existing_paths, all_ids, threshold):
 
     created = memo.get("createTime") or pc.now_iso()
     updated = memo.get("updateTime") or created
-    content = memo.get("content", "")
+    raw_content = memo.get("content", "")
     tags = memo.get("tags") or []
-    title = (content.strip().splitlines() or [""])[0][:80] or f"memo {source_id}"
+    title = (raw_content.strip().splitlines() or [""])[0][:80] or f"memo {source_id}"
+    # web route confirmed against usememos' own frontend router source
+    # (web/src/router/index.tsx: "memos/:uid" -> <MemoDetail />), not /m/<uid>.
+    permalink = f"{base_url.rstrip('/')}/memos/{source_id}"
+    content = f"{raw_content}\n\n[Memo]({permalink})\n" if raw_content else f"[Memo]({permalink})\n"
 
     existing_path = existing_paths.get(source_id)
     if existing_path:
@@ -138,7 +142,7 @@ def write_memo(root, memo, existing_paths, all_ids, threshold):
     path = os.path.join(root, "sources", "memos", f"{entry_id}.md")
     pc.write_entry(path, fm, content)
 
-    if len(content) >= threshold:
+    if len(raw_content) >= threshold:
         inbox_id = pc.gen_id(all_ids)
         inbox_fm = dict(fm)
         inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
@@ -177,7 +181,7 @@ def main():
     last_updated_time = since_updated_time
     try:
         for memo in memos:
-            path, outcome = write_memo(root, memo, existing_paths, all_ids, config["inbox_min_length"])
+            path, outcome = write_memo(root, memo, existing_paths, all_ids, config["inbox_min_length"], base_url)
             source_id = memo_source_id(memo)
             if source_id:
                 existing_paths[source_id] = path

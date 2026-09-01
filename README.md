@@ -48,8 +48,8 @@ kb new how-to "Tailscale sidecar config for Synology"
 kb journal                      # today's journal file
 kb search "tailscale" --type how-to
 kb search "tailscale" --all     # include journal/inbox/sources; interactive picker if fzf+terminal (--plain to skip)
-kb inbox                        # what's waiting for triage
-kb triage                       # flag anything overdue (> 14 days)
+kb inbox                        # what's waiting -- interactive picker: promote/redirect/discard each item
+kb triage                       # read-only: flag anything overdue (> 14 days), for scripts/monitoring
 kb links 2026-08-31-1423        # forward links + backlinks for an entry
 kb todo                         # open bd TODOs, sorted by priority (--all for closed too)
 kb bd show kb-nux                # act on one: any bd command, pointed at the resolved repo

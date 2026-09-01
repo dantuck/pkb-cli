@@ -164,6 +164,12 @@ def dump_frontmatter(data):
     return "\n".join(lines) + "\n"
 
 
+def slugify(title):
+    slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")
+    slug = "-".join(filter(None, slug.split("-")))[:60] or "untitled"
+    return slug
+
+
 def read_entry(path):
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
