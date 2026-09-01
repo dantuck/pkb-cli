@@ -238,6 +238,10 @@ def cmd_todo(args):
     for i in issues:
         status = f" [{i['status']}]" if args.all and i["status"] != "open" else ""
         print(f"{i['id']:<10} P{i['priority']}  {i['title']}{status}")
+
+    example = issues[0]["id"]
+    print(f"\nact on one: kb bd show {example}  |  kb bd close {example}  |  "
+          f"kb bd comment {example} \"...\"  (see `kb todo -h` for more)")
     return 0
 
 
@@ -732,7 +736,21 @@ def main():
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
     p.set_defaults(func=cmd_links)
 
-    p = sub.add_parser("todo", help="list open bd (beads) TODOs, sorted by priority")
+    p = sub.add_parser(
+        "todo", help="list open bd (beads) TODOs, sorted by priority",
+        description="List open bd (beads) TODOs, sorted by priority.",
+        epilog=(
+            "act on one with `kb bd`, which points any bd command at the resolved "
+            "data repo the same way this command does:\n"
+            "  kb bd show <id>              full details\n"
+            "  kb bd comment <id> \"...\"      log progress\n"
+            "  kb bd close <id>              mark done\n"
+            "  kb bd update <id> --priority <0-4>\n"
+            "  kb bd create --title \"...\" --type task    add a new one\n"
+            "see `bd --help` (or `kb bd <command> --help`) for the full bd surface."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--all", action="store_true", help="include closed issues")
     p.set_defaults(func=cmd_todo)
 
