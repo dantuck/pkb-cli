@@ -52,6 +52,8 @@ kb inbox                        # what's waiting for triage
 kb triage                       # flag anything overdue (> 14 days)
 kb links 2026-08-31-1423        # forward links + backlinks for an entry
 kb todo                         # open bd TODOs, sorted by priority (--all for closed too)
+kb bd show kb-nux                # act on one: any bd command, pointed at the resolved repo
+kb bd close kb-nux                # e.g. show/close/comment/create/update -- all of bd, not just list
 kb validate                     # frontmatter/id/link checks (also runs pre-commit)
 kb index                        # incremental reindex after edits
 kb sync all                     # pull in usememos / GitLab / beads

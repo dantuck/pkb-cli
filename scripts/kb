@@ -241,6 +241,18 @@ def cmd_todo(args):
     return 0
 
 
+def cmd_bd(args):
+    """Passthrough to `bd`, pointed at the resolved data repo root via -C -- so
+    every other bd action (show/close/comment/create/update/...) works from
+    anywhere the same way `kb todo` does, without hand-wrapping each one."""
+    if not shutil.which("bd"):
+        print("bd CLI not found -- install it (`brew install beads`).", file=sys.stderr)
+        return 1
+    root = pc.get_repo_root()
+    result = subprocess.run(["bd", "-C", root, *args.bd_args])
+    return result.returncode
+
+
 def find_install_dir():
     """Return (dir, already_on_path). Prefers a candidate already on PATH; falls
     back to ~/.local/bin (created if needed) so --install always succeeds on a
@@ -723,6 +735,11 @@ def main():
     p = sub.add_parser("todo", help="list open bd (beads) TODOs, sorted by priority")
     p.add_argument("--all", action="store_true", help="include closed issues")
     p.set_defaults(func=cmd_todo)
+
+    p = sub.add_parser("bd", help="run any bd command against the resolved data repo "
+                                   "(e.g. kb bd show kb-nux, kb bd close kb-nux)")
+    p.add_argument("bd_args", nargs=argparse.REMAINDER, help="arguments passed straight to bd")
+    p.set_defaults(func=cmd_bd)
 
     p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
