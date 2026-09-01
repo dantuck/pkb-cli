@@ -320,11 +320,26 @@ def cmd_setup(args):
             todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
                         "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
 
-    # 5. what's actually configured for sync right now (informational)
+    # 5. glab (required for GitLab sync)
+    glab_ready = False
+    if shutil.which("glab"):
+        glab_ready = subprocess.run(["glab", "auth", "status"], capture_output=True).returncode == 0
+        if not glab_ready:
+            todo.append("glab is installed but not authenticated -- run `glab auth login` for kb sync gitlab")
+    else:
+        todo.append("glab CLI not found -- `brew install glab` (+ `glab auth login`) if you want kb sync gitlab")
+
+    # 6. rg/fzf (Tier 1 search, optional -- kb search/index work without them)
+    missing_search_tools = [t for t in ("rg", "fzf") if not shutil.which(t)]
+    if missing_search_tools:
+        todo.append(f"{'/'.join(missing_search_tools)} not found -- optional, only needed for zero-setup "
+                     f"search (`brew install ripgrep fzf`); kb search/index don't need them")
+
+    # 7. what's actually configured for sync right now (informational)
     configured = []
     if os.environ.get("PKB_MEMOS_URL") and os.environ.get("PKB_MEMOS_TOKEN"):
         configured.append("memos")
-    if os.environ.get("PKB_GITLAB_PROJECT"):
+    if os.environ.get("PKB_GITLAB_PROJECT") and glab_ready:
         configured.append("gitlab")
     if shutil.which("bd"):
         configured.append("beads")
