@@ -71,26 +71,6 @@ def fetch_memos(base_url, token, since_updated_time):
     return memos
 
 
-def existing_source_paths(root, source):
-    """Map source_id -> mirror file path for every already-synced item.
-
-    Keyed on source_id, not path, so a re-fetch of a changed item updates the
-    same mirror file in place instead of creating a duplicate (see write_memo).
-    """
-    paths = {}
-    for path in pc.iter_markdown_files(root):
-        rel = os.path.relpath(path, root)
-        if not rel.startswith(f"sources{os.sep}{source}{os.sep}"):
-            continue
-        try:
-            fm, _ = pc.read_entry(path)
-        except ValueError:
-            continue
-        if fm.get("source_id"):
-            paths[str(fm["source_id"])] = path
-    return paths
-
-
 def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
     """Write or refresh the sources/memos/ mirror for one memo.
 
@@ -175,7 +155,7 @@ def main():
         print("sync_memos: no new memos")
         return
 
-    existing_paths = existing_source_paths(root, "memos")
+    existing_paths = pc.existing_source_paths(root, "memos")
     all_ids = pc.collect_existing_ids(root)
     added, updated_count = 0, 0
     last_updated_time = since_updated_time

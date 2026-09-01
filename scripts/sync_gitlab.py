@@ -46,26 +46,6 @@ def urlquote(s):
     return urllib.parse.quote(s, safe="")
 
 
-def existing_source_paths(root, source):
-    """Map source_id -> mirror file path for every already-synced item.
-
-    Keyed on source_id, not path, so a re-fetch of a changed item updates the
-    same mirror file in place instead of creating a duplicate (see write_issue).
-    """
-    paths = {}
-    for path in pc.iter_markdown_files(root):
-        rel = os.path.relpath(path, root)
-        if not rel.startswith(f"sources{os.sep}{source}{os.sep}"):
-            continue
-        try:
-            fm, _ = pc.read_entry(path)
-        except ValueError:
-            continue
-        if fm.get("source_id"):
-            paths[str(fm["source_id"])] = path
-    return paths
-
-
 def write_issue(root, issue, existing_paths, all_ids, inbox_all):
     """Write or refresh the sources/gitlab/ mirror for one issue.
 
@@ -139,7 +119,7 @@ def main():
         print("sync_gitlab: no new/updated issues")
         return
 
-    existing_paths = existing_source_paths(root, "gitlab")
+    existing_paths = pc.existing_source_paths(root, "gitlab")
     all_ids = pc.collect_existing_ids(root)
     added, updated_count = 0, 0
     last_updated = updated_after

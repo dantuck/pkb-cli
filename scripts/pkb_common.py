@@ -248,6 +248,27 @@ def gen_id(existing_ids, dt=None):
     return candidate
 
 
+def existing_source_paths(root, source):
+    """Map source_id -> mirror file path for every already-synced item under
+    sources/<source>/.
+
+    Keyed on source_id, not path, so a re-fetch of a changed item updates the
+    same mirror file in place instead of creating a duplicate.
+    """
+    paths = {}
+    for path in iter_markdown_files(root):
+        rel = os.path.relpath(path, root)
+        if not rel.startswith(f"sources{os.sep}{source}{os.sep}"):
+            continue
+        try:
+            fm, _ = read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("source_id"):
+            paths[str(fm["source_id"])] = path
+    return paths
+
+
 def collect_existing_ids(root):
     ids = set()
     for path in iter_markdown_files(root):
