@@ -4,6 +4,7 @@ one-shot per invocation. Operates on a data repo (found by walking up from cwd t
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -235,13 +236,65 @@ def cmd_todo(args):
     if not issues:
         print("no open todos" if not args.all else "no todos")
         return 0
+
+    # interactive by default when the tooling supports it: fzf installed, and both
+    # ends are real terminals (not piped/redirected -- a script consuming `kb todo`
+    # output must keep getting the plain list). --plain forces the old behavior.
+    interactive = not args.plain and shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+    if interactive:
+        return _todo_interactive(root, issues)
+
     for i in issues:
         status = f" [{i['status']}]" if args.all and i["status"] != "open" else ""
         print(f"{i['id']:<10} P{i['priority']}  {i['title']}{status}")
 
     example = issues[0]["id"]
-    print(f"\nact on one: kb bd show {example}  |  kb bd close {example}  |  "
-          f"kb bd comment {example} \"...\"  (see `kb todo -h` for more)")
+    hint = f"\nact on one: kb bd show {example}  |  kb bd close {example}  |  kb bd comment {example} \"...\""
+    if not shutil.which("fzf"):
+        hint += "  (install fzf for an interactive picker)"
+    print(hint)
+    return 0
+
+
+def _todo_interactive(root, issues):
+    """fzf-based picker: select an item (with a live `bd show` preview), then an
+    action. Falls back to nothing fancy for the action step -- another small fzf
+    menu, since that's the same tool the user just used to pick the item."""
+    lines, by_id = [], {}
+    for i in issues:
+        status = f" [{i['status']}]" if i["status"] != "open" else ""
+        lines.append(f"{i['id']}\tP{i['priority']}\t{i['title']}{status}")
+        by_id[i["id"]] = i
+
+    preview_cmd = f"bd -C {shlex.quote(root)} show {{1}}"
+    picker = subprocess.run(
+        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
+         "--preview", preview_cmd, "--preview-window", "right:60%",
+         "--prompt", "todo> ", "--header", "enter: choose an action for this item"],
+        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
+    )
+    if picker.returncode != 0 or not picker.stdout.strip():
+        return 0  # cancelled (esc / ctrl-c)
+    chosen_id = picker.stdout.split("\t", 1)[0].strip()
+    chosen = by_id.get(chosen_id)
+
+    action = subprocess.run(
+        ["fzf", "--prompt", f"{chosen_id}> ",
+         "--header", f"{chosen['title'] if chosen else chosen_id} -- choose an action"],
+        input="show\nclose\ncomment\ncancel", text=True, stdout=subprocess.PIPE,
+    )
+    if action.returncode != 0 or not action.stdout.strip():
+        return 0
+    choice = action.stdout.strip()
+
+    if choice == "show":
+        subprocess.run(["bd", "-C", root, "show", chosen_id])
+    elif choice == "close":
+        subprocess.run(["bd", "-C", root, "close", chosen_id])
+    elif choice == "comment":
+        text = input(f"comment on {chosen_id}: ").strip()
+        if text:
+            subprocess.run(["bd", "-C", root, "comment", chosen_id, text])
     return 0
 
 
@@ -740,8 +793,11 @@ def main():
         "todo", help="list open bd (beads) TODOs, sorted by priority",
         description="List open bd (beads) TODOs, sorted by priority.",
         epilog=(
-            "act on one with `kb bd`, which points any bd command at the resolved "
-            "data repo the same way this command does:\n"
+            "if fzf is installed and you're in a real terminal, this opens an "
+            "interactive picker by default: select an item (with a live preview), "
+            "then an action (show/close/comment). --plain always skips it.\n\n"
+            "otherwise (or with --plain), act on one with `kb bd`, which points any "
+            "bd command at the resolved data repo the same way this command does:\n"
             "  kb bd show <id>              full details\n"
             "  kb bd comment <id> \"...\"      log progress\n"
             "  kb bd close <id>              mark done\n"
@@ -752,6 +808,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--all", action="store_true", help="include closed issues")
+    p.add_argument("--plain", action="store_true",
+                    help="force the plain list even if fzf + a terminal make interactive mode available")
     p.set_defaults(func=cmd_todo)
 
     p = sub.add_parser("bd", help="run any bd command against the resolved data repo "
