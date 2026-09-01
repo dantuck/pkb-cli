@@ -3,6 +3,7 @@
 No third-party dependencies (no pyyaml) so the toolchain stays fully offline/portable
 with only the stdlib.
 """
+import copy
 import json
 import os
 import re
@@ -338,30 +339,46 @@ def _parse_simple_config(text):
     return result
 
 
-def _dump_simple_config(data, indent=0):
-    lines = []
-    pad = "  " * indent
-    for key, value in data.items():
-        if isinstance(value, dict):
-            lines.append(f"{pad}{key}:")
-            lines.append(_dump_simple_config(value, indent + 1))
-        elif isinstance(value, list):
-            lines.append(f"{pad}{key}: [{', '.join(str(i) for i in value)}]")
-        elif isinstance(value, bool):
-            lines.append(f"{pad}{key}: {str(value).lower()}")
+def _deep_merge(base, override):
+    """Merge override onto a deep copy of base, recursively for nested dicts.
+
+    Lets a data repo's config.yml override just the keys it cares about
+    (e.g. only inbox_triage_days) without losing the rest of DEFAULT_CONFIG,
+    such as the sync.* blocks every sync script indexes into directly.
+
+    A deep (not shallow) copy of base is taken so the returned dict never
+    shares a nested dict object with DEFAULT_CONFIG -- otherwise an untouched
+    sub-dict (e.g. sync.beads, when only inbox_triage_days is overridden)
+    would alias the module-level constant, and any future in-place edit of it
+    would silently corrupt DEFAULT_CONFIG for the rest of the process.
+
+    If a key that's dict-shaped in `base` (e.g. `sync`) is overridden with a
+    non-dict value (e.g. `sync: null` in config.yml), the override is ignored
+    for that key rather than replacing the whole structured section -- every
+    caller indexes into sync.memos/gitlab/beads directly and would otherwise
+    crash on a config typo that was probably meant to mean "leave it alone".
+    """
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        base_value = result.get(key)
+        if isinstance(base_value, dict):
+            if isinstance(value, dict):
+                result[key] = _deep_merge(base_value, value)
+            # else: base_value is a structured section -- ignore an
+            # incompatible override instead of dropping it.
         else:
-            lines.append(f"{pad}{key}: {value}")
-    return "\n".join(lines)
+            result[key] = value
+    return result
 
 
 def load_config(root=None):
     root = root or get_repo_root()
     path = os.path.join(root, ".pkb", "config.yml")
     if not os.path.exists(path):
-        return dict(DEFAULT_CONFIG)
+        return copy.deepcopy(DEFAULT_CONFIG)
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
-    return _parse_simple_config(text)
+    return _deep_merge(DEFAULT_CONFIG, _parse_simple_config(text))
 
 
 def load_cursors(root=None):
