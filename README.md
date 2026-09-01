@@ -79,7 +79,10 @@ how those get set. Options:
   (GitLab, via an authenticated `glab`) directly.
 - Or use [sops](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age):
   a data repo can commit `.sops.yaml` + `.pkb/secrets.enc.env` (ciphertext, safe to
-  commit) and run `sops exec-env .pkb/secrets.enc.env 'kb sync memos'`. See
+  commit). `kb secrets` opens it in `$EDITOR` via sops (resolved-repo-aware, same as
+  every other kb command -- no need to remember the path), then
+  `sops exec-env .pkb/secrets.enc.env 'kb sync memos'` runs a sync with the decrypted
+  values injected only into that one subprocess. See
   [templates/secrets.env.example](templates/secrets.env.example) for the expected keys.
 - **beads**: requires the `bd` CLI on `PATH`. By default it points `bd` at your
   resolved data repo (`~/.pkb`, or whichever repo you're standing inside) rather

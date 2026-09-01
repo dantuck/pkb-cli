@@ -310,6 +310,26 @@ def cmd_bd(args):
     return result.returncode
 
 
+def cmd_secrets(args):
+    """Open the resolved data repo's encrypted secrets file in sops, creating it
+    (per .sops.yaml) on first run. Hands off to sops entirely via exec -- it needs
+    real interactive control to spawn $EDITOR, same reasoning as `kb journal`'s
+    EDITOR handoff. The real secret values never pass through kb or this process:
+    sops decrypts straight into the editor and re-encrypts straight from it."""
+    if not shutil.which("sops"):
+        print("sops CLI not found -- install it to manage encrypted credentials "
+              "(e.g. `brew install sops`), or export PKB_MEMOS_URL/PKB_MEMOS_TOKEN/"
+              "PKB_GITLAB_PROJECT directly instead.", file=sys.stderr)
+        return 1
+    root = pc.get_repo_root()
+    if not os.path.exists(os.path.join(root, ".sops.yaml")):
+        print(f"error: no .sops.yaml in {root} -- this data repo isn't set up for sops-encrypted "
+              f"secrets yet. See pkb-cli's templates/secrets.env.example and README.", file=sys.stderr)
+        return 1
+    secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
+    os.execvp("sops", ["sops", secrets_path])
+
+
 def find_install_dir():
     """Return (dir, already_on_path). Prefers a candidate already on PATH; falls
     back to ~/.local/bin (created if needed) so --install always succeeds on a
@@ -511,8 +531,8 @@ def cmd_setup(args):
                 ok.append(".pkb/secrets.enc.env already set up")
             elif tools["sops"]:
                 example_path = os.path.join(SCRIPT_DIR, "..", "templates", "secrets.env.example")
-                todo.append("run `sops .pkb/secrets.enc.env` to create encrypted memos/gitlab credentials "
-                            f"(see {os.path.normpath(example_path)})")
+                todo.append("run `kb secrets` to create encrypted memos/gitlab credentials "
+                            f"(see {os.path.normpath(example_path)} for the expected keys)")
             else:
                 todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
                             "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
@@ -636,7 +656,7 @@ def cmd_doctor(args):
         # secrets
         sops_configured, secrets_exists = secrets_status(root)
         if sops_configured and not secrets_exists:
-            todo.append("no .pkb/secrets.enc.env yet -- run `sops .pkb/secrets.enc.env` if you sync memos/gitlab")
+            todo.append("no .pkb/secrets.enc.env yet -- run `kb secrets` if you sync memos/gitlab")
         elif sops_configured:
             ok.append(".pkb/secrets.enc.env is present")
 
@@ -816,6 +836,9 @@ def main():
                                    "(e.g. kb bd show kb-nux, kb bd close kb-nux)")
     p.add_argument("bd_args", nargs=argparse.REMAINDER, help="arguments passed straight to bd")
     p.set_defaults(func=cmd_bd)
+
+    p = sub.add_parser("secrets", help="edit encrypted memos/gitlab credentials via sops")
+    p.set_defaults(func=cmd_secrets)
 
     p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
