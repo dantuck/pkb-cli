@@ -342,50 +342,70 @@ def cmd_setup(args):
     return 1 if any("failed" in t for t in todo) else 0
 
 
-def main():
-    parser = argparse.ArgumentParser(prog="kb")
-    sub = parser.add_subparsers(dest="command", required=True)
+EPILOG = """\
+examples:
+  kb new how-to "Tailscale sidecar config for Synology"
+  kb search tailscale --type how-to
+  kb sync all && kb triage
+  kb setup --install
 
-    p = sub.add_parser("search")
-    p.add_argument("query")
-    p.add_argument("--type", choices=pc.CORE_TYPES)
-    p.add_argument("--tag")
-    p.add_argument("--all", action="store_true")
+kb operates on a data repo found by walking up from the current directory to a
+.pkb/ directory. Run 'kb <command> -h' for details on a specific command.
+"""
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="kb",
+        description="A CLI for a Diataxis-based personal knowledge base: search, "
+                     "create, triage, and sync your notes.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
+
+    p = sub.add_parser("search", help="search indexed content")
+    p.add_argument("query", help="search terms (FTS5 match syntax)")
+    p.add_argument("--type", choices=pc.CORE_TYPES, help="restrict to one Diataxis type")
+    p.add_argument("--tag", help="restrict to entries with this tag")
+    p.add_argument("--all", action="store_true", help="include journal/inbox/sources (default: core content only)")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("new")
-    p.add_argument("type", choices=pc.CORE_TYPES)
-    p.add_argument("title")
+    p = sub.add_parser("new", help="scaffold a new core entry")
+    p.add_argument("type", choices=pc.CORE_TYPES, help="Diataxis type")
+    p.add_argument("title", help="entry title")
     p.set_defaults(func=cmd_new)
 
-    p = sub.add_parser("journal")
-    p.add_argument("date", nargs="?", default=None)
+    p = sub.add_parser("journal", help="open or create a journal entry")
+    p.add_argument("date", nargs="?", default=None, metavar="DATE",
+                    help="YYYY-MM-DD, or 'today' (default)")
     p.set_defaults(func=cmd_journal)
 
-    p = sub.add_parser("inbox")
+    p = sub.add_parser("inbox", help="list inbox contents with age")
     p.set_defaults(func=cmd_inbox)
 
-    p = sub.add_parser("triage")
+    p = sub.add_parser("triage", help="flag inbox items overdue for triage")
     p.set_defaults(func=cmd_triage)
 
-    p = sub.add_parser("sync")
-    p.add_argument("source", nargs="?", choices=["memos", "gitlab", "beads", "all"], default="all")
+    p = sub.add_parser("sync", help="pull in usememos / GitLab / beads")
+    p.add_argument("source", nargs="?", choices=["memos", "gitlab", "beads", "all"], default="all",
+                    help="which source to sync (default: all)")
     p.set_defaults(func=cmd_sync)
 
-    p = sub.add_parser("index")
-    p.add_argument("--full", action="store_true")
+    p = sub.add_parser("index", help="rebuild or refresh the FTS5 search index")
+    p.add_argument("--full", action="store_true", help="rebuild from scratch instead of incrementally")
     p.set_defaults(func=cmd_index)
 
-    p = sub.add_parser("validate")
+    p = sub.add_parser("validate", help="check frontmatter, id, and link integrity")
     p.set_defaults(func=cmd_validate)
 
-    p = sub.add_parser("links")
-    p.add_argument("id")
+    p = sub.add_parser("links", help="show forward links and backlinks for an entry")
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
     p.set_defaults(func=cmd_links)
 
-    p = sub.add_parser("setup")
+    p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
-                    help="symlink kb onto PATH (auto-detects ~/.local/bin, /opt/homebrew/bin, "
+                    help="also symlink kb onto PATH (auto-detects ~/.local/bin, /opt/homebrew/bin, "
                          "/usr/local/bin, or pass a specific DIR)")
     p.set_defaults(func=cmd_setup)
 
