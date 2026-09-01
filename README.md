@@ -57,14 +57,22 @@ repo first.
 ## Command surface
 
 ```bash
-kb new how-to "Tailscale sidecar config for Synology"
+kb new how-to "Tailscale sidecar config for Synology" --tags networking --body "..."
 kb journal                      # today's journal file
 kb search "tailscale" --type how-to
 kb search "tailscale" --all     # include journal/inbox/sources; interactive picker if fzf+terminal (--plain to skip)
+kb search "tailscale" --json    # machine-readable output, e.g. for a script or an agent
 kb inbox                        # what's waiting -- interactive picker: promote/redirect/discard each item
-kb triage                       # read-only: flag anything overdue (> 14 days), for scripts/monitoring
-kb links 2026-08-31-1423        # forward links + backlinks for an entry
-kb todo                         # open bd TODOs, sorted by priority (--all for closed too)
+kb inbox <id> promote how-to    # non-interactive triage (no fzf/terminal needed): move into core content
+kb inbox <id> redirect          # ...or append into that day's journal entry
+kb inbox <id> discard           # ...or delete outright
+kb triage                       # read-only: flag anything overdue (> 14 days), for scripts/monitoring (--json)
+kb links 2026-08-31-1423        # forward links + backlinks for an entry (--json for machine-readable)
+kb show 2026-08-31-1423         # print an entry's full content by id (--json for frontmatter+body separately)
+kb tag 2026-08-31-1423 add networking    # add/remove tags -- the sanctioned way, never hand-edit frontmatter
+kb link 2026-08-31-1423 add 2026-08-20-0900   # add/remove links, same reasoning
+kb todo                         # open bd TODOs, sorted by priority (--all for closed too, --json for scripts)
+kb todo -a "fix the flaky test" -p 1 -t bug     # quick-add a TODO; bare -a opens bd's full form
 kb bd show kb-nux                # act on one: any bd command, pointed at the resolved repo
 kb bd close kb-nux                # e.g. show/close/comment/create/update -- all of bd, not just list
 kb validate                     # frontmatter/id/link checks (also runs pre-commit)
