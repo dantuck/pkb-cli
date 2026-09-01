@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 TOOL_ROOT = os.path.dirname(SCRIPT_DIR)  # the pkb-cli checkout itself, not the data repo
@@ -77,6 +77,25 @@ def cmd_search(args):
     return 0
 
 
+def _fzf_select(lines, prompt, header, delimiter=None, with_nth=None,
+                 preview_cmd=None, preview_window="right:60%"):
+    """Run fzf over `lines`, returning the raw selected line, or None if
+    cancelled (esc/ctrl-c) or nothing was selected. Shared by every
+    interactive picker in this file -- search/inbox/todo/journal each used to
+    hand-roll this same subprocess.run + cancel-check."""
+    cmd = ["fzf", "--prompt", prompt, "--header", header]
+    if delimiter is not None:
+        cmd += ["--delimiter", delimiter]
+    if with_nth is not None:
+        cmd += ["--with-nth", with_nth]
+    if preview_cmd is not None:
+        cmd += ["--preview", preview_cmd, "--preview-window", preview_window]
+    result = subprocess.run(cmd, input="\n".join(lines), text=True, stdout=subprocess.PIPE)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return result.stdout.rstrip("\n")
+
+
 def _search_interactive(root, rows):
     """fzf-based picker: select a result (with a live file-content preview), then
     an action -- view (print full content), edit ($EDITOR), links (forward/back),
@@ -87,26 +106,18 @@ def _search_interactive(root, rows):
         lines.append(f"{entry_id}\t{entry_type}\t{title}\t{abs_path}")
         by_id[entry_id] = (title, abs_path)
 
-    preview_cmd = "cat {4}"
-    picker = subprocess.run(
-        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
-         "--preview", preview_cmd, "--preview-window", "right:60%",
-         "--prompt", "search> ", "--header", "enter: choose an action for this result"],
-        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
-    )
-    if picker.returncode != 0 or not picker.stdout.strip():
+    selected = _fzf_select(lines, "search> ", "enter: choose an action for this result",
+                            delimiter="\t", with_nth="1,2,3", preview_cmd="cat {4}")
+    if selected is None:
         return 0  # cancelled
-    fields = picker.stdout.rstrip("\n").split("\t")
+    fields = selected.split("\t")
     chosen_id, chosen_path = fields[0], fields[3]
     title = by_id.get(chosen_id, ("", chosen_path))[0]
 
-    action = subprocess.run(
-        ["fzf", "--prompt", f"{chosen_id}> ", "--header", f"{title} -- choose an action"],
-        input="view\nedit\nlinks\ncancel", text=True, stdout=subprocess.PIPE,
-    )
-    if action.returncode != 0 or not action.stdout.strip():
+    choice = _fzf_select(["view", "edit", "links", "cancel"],
+                          f"{chosen_id}> ", f"{title} -- choose an action")
+    if choice is None:
         return 0
-    choice = action.stdout.strip()
 
     if choice == "view":
         subprocess.run(["cat", chosen_path])
@@ -349,17 +360,13 @@ def _journal_interactive(root):
         tag = "new" if not os.path.exists(path) else ""
         lines.append(f"{date_str}\t{tag}\t{path}")
 
-    preview_cmd = "cat {3} 2>/dev/null || echo '(no entry yet)'"
-    picker = subprocess.run(
-        ["fzf", "--delimiter", "\t", "--with-nth", "1,2",
-         "--preview", preview_cmd, "--preview-window", "right:60%",
-         "--prompt", "journal> ", "--header", "enter: open this entry (created if new)"],
-        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
-    )
-    if picker.returncode != 0 or not picker.stdout.strip():
+    selected = _fzf_select(lines, "journal> ", "enter: open this entry (created if new)",
+                            delimiter="\t", with_nth="1,2",
+                            preview_cmd="cat {3} 2>/dev/null || echo '(no entry yet)'")
+    if selected is None:
         return 0  # cancelled
 
-    date_str = picker.stdout.split("\t", 1)[0].strip()
+    date_str = selected.split("\t", 1)[0].strip()
     target = datetime.strptime(date_str, "%Y-%m-%d").date()
     file_path = _ensure_journal_entry(root, target)
     _open_in_editor(file_path)
@@ -414,37 +421,24 @@ def _inbox_interactive(root, items):
         lines.append(f"{name}\t{age}d\t{title}")
 
     preview_cmd = f"cat {shlex.quote(inbox_dir)}/{{1}}"
-    picker = subprocess.run(
-        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
-         "--preview", preview_cmd, "--preview-window", "right:60%",
-         "--prompt", "inbox> ", "--header", "enter: promote / redirect / discard this item"],
-        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
-    )
-    if picker.returncode != 0 or not picker.stdout.strip():
+    selected = _fzf_select(lines, "inbox> ", "enter: promote / redirect / discard this item",
+                            delimiter="\t", with_nth="1,2,3", preview_cmd=preview_cmd)
+    if selected is None:
         return 0  # cancelled
-    chosen_name = picker.stdout.split("\t", 1)[0].strip()
+    chosen_name = selected.split("\t", 1)[0].strip()
     chosen_path = os.path.join(inbox_dir, chosen_name)
     fm, body = pc.read_entry(chosen_path)
     title = fm.get("title") or chosen_name
 
-    action = subprocess.run(
-        ["fzf", "--prompt", f"{chosen_name}> ", "--header", f"{title} -- promote/redirect/discard/cancel"],
-        input="promote\nredirect\ndiscard\ncancel", text=True, stdout=subprocess.PIPE,
-    )
-    if action.returncode != 0 or not action.stdout.strip():
-        return 0
-    choice = action.stdout.strip()
-    if choice == "cancel":
+    choice = _fzf_select(["promote", "redirect", "discard", "cancel"],
+                          f"{chosen_name}> ", f"{title} -- promote/redirect/discard/cancel")
+    if choice is None or choice == "cancel":
         return 0
 
     if choice == "promote":
-        type_pick = subprocess.run(
-            ["fzf", "--prompt", "type> ", "--header", "promote to which Diataxis type?"],
-            input="\n".join(pc.CORE_TYPES), text=True, stdout=subprocess.PIPE,
-        )
-        if type_pick.returncode != 0 or not type_pick.stdout.strip():
+        target_type = _fzf_select(pc.CORE_TYPES, "type> ", "promote to which Diataxis type?")
+        if target_type is None:
             return 0
-        target_type = type_pick.stdout.strip()
         fm["type"] = target_type
         fm["extension"] = None
         fm["updated"] = pc.now_iso()
@@ -611,25 +605,17 @@ def _todo_interactive(root, issues):
         by_id[i["id"]] = i
 
     preview_cmd = f"bd -C {shlex.quote(root)} show {{1}}"
-    picker = subprocess.run(
-        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
-         "--preview", preview_cmd, "--preview-window", "right:60%",
-         "--prompt", "todo> ", "--header", "enter: choose an action for this item"],
-        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
-    )
-    if picker.returncode != 0 or not picker.stdout.strip():
+    selected = _fzf_select(lines, "todo> ", "enter: choose an action for this item",
+                            delimiter="\t", with_nth="1,2,3", preview_cmd=preview_cmd)
+    if selected is None:
         return 0  # cancelled (esc / ctrl-c)
-    chosen_id = picker.stdout.split("\t", 1)[0].strip()
+    chosen_id = selected.split("\t", 1)[0].strip()
     chosen = by_id.get(chosen_id)
 
-    action = subprocess.run(
-        ["fzf", "--prompt", f"{chosen_id}> ",
-         "--header", f"{chosen['title'] if chosen else chosen_id} -- choose an action"],
-        input="show\nclose\ncomment\ncancel", text=True, stdout=subprocess.PIPE,
-    )
-    if action.returncode != 0 or not action.stdout.strip():
+    choice = _fzf_select(["show", "close", "comment", "cancel"], f"{chosen_id}> ",
+                          f"{chosen['title'] if chosen else chosen_id} -- choose an action")
+    if choice is None:
         return 0
-    choice = action.stdout.strip()
 
     if choice == "show":
         subprocess.run(["bd", "-C", root, "show", chosen_id])
