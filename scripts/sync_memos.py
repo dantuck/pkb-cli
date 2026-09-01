@@ -14,9 +14,11 @@ Verified against the usememos v1 REST API (ListMemos): the response is
 {"memos": [...], "nextPageToken": ...}; each memo's id is embedded in its
 `name` field as "memos/{id}" (not a top-level `id`); timestamps are
 `createTime`/`updateTime` (ISO 8601); pagination is followed via `nextPageToken`;
-the `filter` query param takes a CEL expression, e.g. updated_ts > "<iso>".
-Filtering on updated_ts (not created_ts) is what makes an edited memo -- same
-createTime, new updateTime -- get re-fetched at all (see write_memo).
+the `filter` query param takes a CEL expression, e.g. updated_ts > timestamp("<iso>")
+-- updated_ts is a native CEL timestamp type; comparing it to a bare string 400s
+("found no matching overload for '_>_' applied to '(timestamp, string)'"), confirmed
+against a real instance. Filtering on updated_ts (not created_ts) is what makes an
+edited memo -- same createTime, new updateTime -- get re-fetched at all (see write_memo).
 """
 import json
 import os
@@ -47,7 +49,7 @@ def fetch_memos(base_url, token, since_updated_time):
         if since_updated_time:
             # small lookback so same-second updates aren't permanently skipped by the
             # strict '>' filter; dedup-by-source_id in write_memo makes re-fetches a no-op
-            params["filter"] = f'updated_ts > "{pc.cursor_lookback(since_updated_time)}"'
+            params["filter"] = f'updated_ts > timestamp("{pc.cursor_lookback(since_updated_time)}")'
         if page_token:
             params["pageToken"] = page_token
         url = f"{base_url.rstrip('/')}/api/v1/memos?{urllib.parse.urlencode(params)}"

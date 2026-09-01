@@ -168,11 +168,25 @@ def cmd_sync(args):
         "gitlab": "sync_gitlab.py",
         "beads": "sync_beads.py",
     }
+    # memos/gitlab read credentials from the environment; if this data repo keeps
+    # them sops-encrypted, decrypt straight into that one subprocess's env via
+    # `sops exec-env` -- no wrapping needed at the call site, and the values never
+    # pass through kb's own environment or output. beads has no secret to inject.
     targets = list(scripts.keys()) if args.source in (None, "all") else [args.source]
+    root = pc.get_repo_root()
+    secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
+    use_sops = shutil.which("sops") and os.path.exists(secrets_path)
+
     rc = 0
     for t in targets:
         print(f"--- sync: {t} ---")
-        rc = run_script(scripts[t]) or rc
+        script_path = os.path.join(SCRIPT_DIR, scripts[t])
+        if use_sops and t in ("memos", "gitlab"):
+            cmd_str = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)}"
+            result = subprocess.run(["sops", "exec-env", secrets_path, cmd_str], env=sops_key_env())
+        else:
+            result = subprocess.run([sys.executable, script_path])
+        rc = result.returncode or rc
     return rc
 
 
@@ -330,8 +344,10 @@ def cmd_secrets(args):
     secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
     # sops discovers .sops.yaml relative to cwd, not the target file's path -- pass
     # it explicitly so this works regardless of where kb secrets was actually run
-    # from (the whole point of resolving `root` in the first place).
-    os.execvp("sops", ["sops", "--config", sops_config, secrets_path])
+    # from (the whole point of resolving `root` in the first place). Re-editing an
+    # existing file also needs the *private* key (sops_key_env), not just the
+    # public recipient in .sops.yaml -- only first-time creation gets away without it.
+    os.execvpe("sops", ["sops", "--config", sops_config, secrets_path], sops_key_env())
 
 
 def find_install_dir():
@@ -407,6 +423,21 @@ def secrets_status(root):
     sops_configured = os.path.exists(os.path.join(root, ".sops.yaml"))
     secrets_exists = os.path.exists(os.path.join(root, ".pkb", "secrets.enc.env"))
     return sops_configured, secrets_exists
+
+
+def sops_key_env():
+    """Env dict for invoking sops (decrypt operations specifically -- this is about
+    the *private* key, unrelated to .sops.yaml's public recipients used for
+    encryption). sops's own built-in default age key location on macOS is under
+    ~/Library/Application Support, not the more common ~/.config/sops/age/keys.txt
+    -- if that's where the key actually lives and SOPS_AGE_KEY_FILE isn't already
+    set, point sops at it explicitly rather than relying on its own discovery."""
+    env = dict(os.environ)
+    if "SOPS_AGE_KEY_FILE" not in env:
+        candidate = os.path.expanduser("~/.config/sops/age/keys.txt")
+        if os.path.isfile(candidate):
+            env["SOPS_AGE_KEY_FILE"] = candidate
+    return env
 
 
 def _git(*args, cwd=TOOL_ROOT):
