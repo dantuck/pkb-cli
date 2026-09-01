@@ -322,12 +322,16 @@ def cmd_secrets(args):
               "PKB_GITLAB_PROJECT directly instead.", file=sys.stderr)
         return 1
     root = pc.get_repo_root()
-    if not os.path.exists(os.path.join(root, ".sops.yaml")):
+    sops_config = os.path.join(root, ".sops.yaml")
+    if not os.path.exists(sops_config):
         print(f"error: no .sops.yaml in {root} -- this data repo isn't set up for sops-encrypted "
               f"secrets yet. See pkb-cli's templates/secrets.env.example and README.", file=sys.stderr)
         return 1
     secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
-    os.execvp("sops", ["sops", secrets_path])
+    # sops discovers .sops.yaml relative to cwd, not the target file's path -- pass
+    # it explicitly so this works regardless of where kb secrets was actually run
+    # from (the whole point of resolving `root` in the first place).
+    os.execvp("sops", ["sops", "--config", sops_config, secrets_path])
 
 
 def find_install_dir():
