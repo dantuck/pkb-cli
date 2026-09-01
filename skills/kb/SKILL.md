@@ -71,10 +71,12 @@ the data repo.
 - **Use `kb journal -m` for quick notes** instead of opening the file
   directly -- it appends correctly formatted, timestamped content and bumps
   the entry's `updated` timestamp.
-- **After editing an entry's body by hand** (never the frontmatter), run
-  `kb index` so search stays current. `kb validate` catches structural
-  mistakes before they're committed (also runs automatically as a
-  pre-commit hook once `kb setup` has been run in the data repo).
+- **`kb new`, `kb tag`, `kb link`, and `kb inbox promote`/`redirect` all
+  reindex automatically** -- an entry is searchable immediately after any of
+  these. Only reach for `kb index` yourself after editing an entry's body by
+  hand (never the frontmatter). `kb validate` catches structural mistakes
+  before they're committed (also runs automatically as a pre-commit hook
+  once `kb setup` has been run in the data repo).
 - **`kb sync` and `kb update` are the only commands that touch the network**;
   search, journal, inbox, and links all work fully offline.
 
