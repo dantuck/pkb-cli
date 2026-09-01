@@ -215,6 +215,32 @@ def cmd_links(args):
     return 0
 
 
+def cmd_todo(args):
+    if not shutil.which("bd"):
+        print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
+              "See `kb doctor`.", file=sys.stderr)
+        return 1
+
+    root = pc.get_repo_root()
+    bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
+    if args.all:
+        bd_args.append("--all")
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"error: bd list failed: {result.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    import json
+    issues = json.loads(result.stdout)
+    if not issues:
+        print("no open todos" if not args.all else "no todos")
+        return 0
+    for i in issues:
+        status = f" [{i['status']}]" if args.all and i["status"] != "open" else ""
+        print(f"{i['id']:<10} P{i['priority']}  {i['title']}{status}")
+    return 0
+
+
 def find_install_dir():
     """Return (dir, already_on_path). Prefers a candidate already on PATH; falls
     back to ~/.local/bin (created if needed) so --install always succeeds on a
@@ -693,6 +719,10 @@ def main():
     p = sub.add_parser("links", help="show forward links and backlinks for an entry")
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
     p.set_defaults(func=cmd_links)
+
+    p = sub.add_parser("todo", help="list open bd (beads) TODOs, sorted by priority")
+    p.add_argument("--all", action="store_true", help="include closed issues")
+    p.set_defaults(func=cmd_todo)
 
     p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
