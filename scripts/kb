@@ -61,7 +61,18 @@ def cmd_search(args):
         return 1
 
     if not rows:
+        if args.json:
+            print("[]")
+            return 0
         print("no results")
+        return 0
+
+    if args.json:
+        import json
+        print(json.dumps([
+            {"id": entry_id, "title": title, "type": entry_type, "path": path}
+            for entry_id, title, entry_type, path, _rank in rows
+        ]))
         return 0
 
     # interactive by default when the tooling supports it, same rule as kb todo:
@@ -146,6 +157,14 @@ def cmd_new(args):
         return 1
 
     all_ids = pc.collect_existing_ids(root)
+
+    links = [t.strip() for t in args.links.split(",") if t.strip()] if args.links else []
+    unknown = [t for t in links if t not in all_ids]
+    if unknown:
+        print(f"error: unknown link target id(s), not found in this repo: {', '.join(unknown)}",
+              file=sys.stderr)
+        return 1
+
     entry_id = pc.gen_id(all_ids)
     now = pc.now_iso()
     fm = {
@@ -156,12 +175,13 @@ def cmd_new(args):
         "extension": None,
         "source": "manual",
         "source_id": None,
-        "tags": [],
-        "links": [],
+        "tags": [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else [],
+        "links": links,
         "title": args.title,
     }
     path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{pc.slugify(args.title)}.md")
-    pc.write_entry(path, fm, f"# {args.title}\n\n")
+    body = f"# {args.title}\n\n{args.body.strip()}\n" if args.body else f"# {args.title}\n\n"
+    pc.write_entry(path, fm, body)
     print(path)
     return 0
 
@@ -589,7 +609,104 @@ def cmd_validate(args):
     return run_script("validate_frontmatter.py")
 
 
-def show_links(root, target_id):
+def _find_entry(root, entry_id):
+    """(path, fm, body) for the entry with this id, or None. Shared by kb tag and
+    kb link -- both need to locate and rewrite one specific entry by id, the only
+    sanctioned way to touch tags/links now that hand-editing frontmatter is off
+    limits (see SKILL.md's "never hand-edit frontmatter" rule)."""
+    for path in pc.iter_markdown_files(root):
+        try:
+            fm, body = pc.read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("id") == entry_id:
+            return path, fm, body
+    return None
+
+
+def cmd_tag(args):
+    """Add/remove tags on an entry -- the only sanctioned way to change `tags`,
+    since hand-editing frontmatter is off limits. With no action, just list the
+    entry's current tags."""
+    root = pc.get_repo_root()
+    found = _find_entry(root, args.id)
+    if found is None:
+        print(f"error: no entry with id '{args.id}'", file=sys.stderr)
+        return 1
+    path, fm, body = found
+    tags = list(fm.get("tags") or [])
+
+    if args.action is None:
+        print(", ".join(tags) if tags else "(no tags)")
+        return 0
+    if not args.values:
+        print(f"error: `kb tag {args.id} {args.action}` needs at least one tag", file=sys.stderr)
+        return 1
+
+    if args.action == "add":
+        changed = [t for t in args.values if t not in tags]
+        tags.extend(changed)
+    else:
+        before = len(tags)
+        tags = [t for t in tags if t not in args.values]
+        changed = before != len(tags)
+
+    if not changed:
+        print(f"no change -- tags for {args.id}: {', '.join(tags) if tags else '(none)'}")
+        return 0
+
+    fm["tags"] = tags
+    fm["updated"] = pc.now_iso()
+    pc.write_entry(path, fm, body)
+    run_script("index_fts.py")
+    print(f"tags for {args.id}: {', '.join(tags) if tags else '(none)'}")
+    return 0
+
+
+def cmd_link(args):
+    """Add/remove forward links on an entry -- the only sanctioned way to change
+    `links`, since hand-editing frontmatter is off limits. With no action, show
+    forward links + backlinks (same as kb links)."""
+    root = pc.get_repo_root()
+    if args.action is None:
+        return show_links(root, args.id, json_out=args.json)
+    if not args.values:
+        print(f"error: `kb link {args.id} {args.action}` needs at least one target id", file=sys.stderr)
+        return 1
+
+    found = _find_entry(root, args.id)
+    if found is None:
+        print(f"error: no entry with id '{args.id}'", file=sys.stderr)
+        return 1
+    path, fm, body = found
+    links = list(fm.get("links") or [])
+
+    if args.action == "add":
+        all_ids = pc.collect_existing_ids(root)
+        unknown = [t for t in args.values if t not in all_ids]
+        if unknown:
+            print(f"error: unknown id(s), not found in this repo: {', '.join(unknown)}", file=sys.stderr)
+            return 1
+        changed = [t for t in args.values if t not in links]
+        links.extend(changed)
+    else:
+        before = len(links)
+        links = [l for l in links if l not in args.values]
+        changed = before != len(links)
+
+    if not changed:
+        print(f"no change -- links for {args.id}: {', '.join(links) if links else '(none)'}")
+        return 0
+
+    fm["links"] = links
+    fm["updated"] = pc.now_iso()
+    pc.write_entry(path, fm, body)
+    run_script("index_fts.py")
+    print(f"links for {args.id}: {', '.join(links) if links else '(none)'}")
+    return 0
+
+
+def show_links(root, target_id, json_out=False):
     """Print forward links + backlinks for an entry. Shared by cmd_links and the
     interactive search picker's 'links' action."""
     forward = None
@@ -608,8 +725,21 @@ def show_links(root, target_id):
             backlinks.append((fm.get("id"), fm.get("title"), os.path.relpath(path, root)))
 
     if forward is None:
-        print(f"error: no entry with id '{target_id}'", file=sys.stderr)
+        if json_out:
+            print(f'{{"error": "no entry with id \'{target_id}\'"}}', file=sys.stderr)
+        else:
+            print(f"error: no entry with id '{target_id}'", file=sys.stderr)
         return 1
+
+    if json_out:
+        import json
+        print(json.dumps({
+            "id": target_id,
+            "path": target_path,
+            "forward": forward,
+            "backlinks": [{"id": lid, "title": title, "path": path} for lid, title, path in backlinks],
+        }))
+        return 0
 
     print(f"{target_id}  ({target_path})")
     print(f"\nforward links ({len(forward)}):")
@@ -623,7 +753,29 @@ def show_links(root, target_id):
 
 def cmd_links(args):
     root = pc.get_repo_root()
-    return show_links(root, args.id)
+    return show_links(root, args.id, json_out=args.json)
+
+
+def cmd_show(args):
+    """Print an entry's full content by id -- the id-addressed counterpart to
+    kb search/kb links, for when you already know the id and just want the
+    content without looking up its path first."""
+    root = pc.get_repo_root()
+    found = _find_entry(root, args.id)
+    if found is None:
+        print(f"error: no entry with id '{args.id}'", file=sys.stderr)
+        return 1
+    path, fm, body = found
+
+    if args.json:
+        import json
+        print(json.dumps({"id": args.id, "path": os.path.relpath(path, root),
+                           "frontmatter": fm, "body": body}))
+        return 0
+
+    with open(path, "r", encoding="utf-8") as f:
+        sys.stdout.write(f.read())
+    return 0
 
 
 def cmd_todo(args):
@@ -633,6 +785,10 @@ def cmd_todo(args):
         return 1
 
     root = pc.get_repo_root()
+
+    if args.add is not None:
+        return _todo_add(root, args)
+
     bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
     if args.all:
         bd_args.append("--all")
@@ -643,6 +799,11 @@ def cmd_todo(args):
 
     import json
     issues = json.loads(result.stdout)
+
+    if args.json:
+        print(json.dumps(issues))
+        return 0
+
     if not issues:
         print("no open todos" if not args.all else "no todos")
         return 0
@@ -663,6 +824,30 @@ def cmd_todo(args):
     if not shutil.which("fzf"):
         hint += "  (install fzf for an interactive picker)"
     print(hint)
+    return 0
+
+
+def _todo_add(root, args):
+    """Create a new TODO. With a title, this is a one-shot `bd create` -- fast to
+    fire off, but still takes --description/--priority/--type/--labels so it can
+    carry as much ticket-shaped detail as you want in one line. With no title
+    (`kb todo -a`), hand off to bd's own interactive form instead of reinventing
+    it -- that already prompts for every field a ticket needs."""
+    if not args.add:
+        os.execvp("bd", ["bd", "-C", root, "create-form"])  # replaces this process
+
+    bd_args = ["bd", "-C", root, "create", "--title", args.add, "--type", args.type,
+               "--priority", args.priority]
+    if args.description:
+        bd_args += ["--description", args.description]
+    if args.labels:
+        bd_args += ["--labels", args.labels]
+
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"error: bd create failed: {result.stderr.strip()}", file=sys.stderr)
+        return 1
+    print(result.stdout.strip())
     return 0
 
 
@@ -1256,11 +1441,23 @@ def main():
     p.add_argument("--all", action="store_true", help="include journal/inbox/sources (default: core content only)")
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
+    p.add_argument("--json", action="store_true", help="machine-readable output; implies --plain")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("new", help="scaffold a new core entry")
+    p = sub.add_parser(
+        "new", help="scaffold a new core entry",
+        description="Scaffold a new core entry with valid frontmatter.",
+        epilog=(
+            "  kb new how-to \"Tailscale sidecar config\" --tags networking,tailscale "
+            "--links 2026-08-20-0900 --body \"first draft notes...\""
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("type", choices=pc.CORE_TYPES, help="Diataxis type")
     p.add_argument("title", help="entry title")
+    p.add_argument("--tags", metavar="TAG,TAG", help="comma-separated initial tags")
+    p.add_argument("--links", metavar="ID,ID", help="comma-separated ids of related entries (must already exist)")
+    p.add_argument("--body", metavar="TEXT", help="initial body text, after the title heading")
     p.set_defaults(func=cmd_new)
 
     p = sub.add_parser(
@@ -1335,7 +1532,48 @@ def main():
 
     p = sub.add_parser("links", help="show forward links and backlinks for an entry")
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_links)
+
+    p = sub.add_parser("show", help="print an entry's full content by id")
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("--json", action="store_true",
+                    help="machine-readable output ({id, path, frontmatter, body})")
+    p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser(
+        "tag", help="view, add, or remove tags on an entry",
+        description="View, add, or remove tags on an entry -- the sanctioned way to "
+                    "change `tags` (never hand-edit frontmatter).",
+        epilog=(
+            "  kb tag 2026-08-31-1423                  list current tags\n"
+            "  kb tag 2026-08-31-1423 add networking homelab\n"
+            "  kb tag 2026-08-31-1423 rm homelab"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
+    p.add_argument("values", nargs="*", metavar="TAG", help="tag(s) to add/remove")
+    p.set_defaults(func=cmd_tag)
+
+    p = sub.add_parser(
+        "link", help="view, add, or remove links (forward references) on an entry",
+        description="View, add, or remove links on an entry -- the sanctioned way to "
+                    "change `links` (never hand-edit frontmatter). With no action, same "
+                    "as `kb links` (forward links + backlinks).",
+        epilog=(
+            "  kb link 2026-08-31-1423                        forward links + backlinks\n"
+            "  kb link 2026-08-31-1423 add 2026-08-20-0900\n"
+            "  kb link 2026-08-31-1423 rm 2026-08-20-0900"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
+    p.add_argument("values", nargs="*", metavar="TARGET_ID", help="id(s) to link/unlink")
+    p.add_argument("--json", action="store_true", help="machine-readable output (no-action form only)")
+    p.set_defaults(func=cmd_link)
 
     p = sub.add_parser(
         "todo", help="list open bd (beads) TODOs, sorted by priority",
@@ -1343,21 +1581,34 @@ def main():
         epilog=(
             "if fzf is installed and you're in a real terminal, this opens an "
             "interactive picker by default: select an item (with a live preview), "
-            "then an action (show/close/comment). --plain always skips it.\n\n"
-            "otherwise (or with --plain), act on one with `kb bd`, which points any "
+            "then an action (show/close/comment). --plain always skips it; --json "
+            "prints bd's own issue JSON instead (implies --plain).\n\n"
+            "otherwise (or with --plain/--json), act on one with `kb bd`, which points any "
             "bd command at the resolved data repo the same way this command does:\n"
             "  kb bd show <id>              full details\n"
             "  kb bd comment <id> \"...\"      log progress\n"
             "  kb bd close <id>              mark done\n"
             "  kb bd update <id> --priority <0-4>\n"
-            "  kb bd create --title \"...\" --type task    add a new one\n"
-            "see `bd --help` (or `kb bd <command> --help`) for the full bd surface."
+            "see `bd --help` (or `kb bd <command> --help`) for the full bd surface.\n\n"
+            "-a/--add TITLE creates a new one -- fast, but still ticket-shaped:\n"
+            "  kb todo -a \"fix the flaky test\" -p 1 -t bug -d \"fails ~1/10 runs in CI\"\n"
+            "-a/--add with no TITLE opens bd's interactive form instead, for filling "
+            "in every field (title, description, type, priority, labels, ...) by hand:\n"
+            "  kb todo -a"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--all", action="store_true", help="include closed issues")
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
+    p.add_argument("--json", action="store_true", help="machine-readable output (bd's own issue JSON); implies --plain")
+    p.add_argument("-a", "--add", nargs="?", const="", default=None, metavar="TITLE",
+                    help="create a new TODO with TITLE; with no TITLE, open bd's interactive form")
+    p.add_argument("-d", "--description", metavar="TEXT", help="description for -a/--add")
+    p.add_argument("-p", "--priority", default="2", metavar="0-4", help="priority for -a/--add (default: 2)")
+    p.add_argument("-t", "--type", default="task", metavar="TYPE",
+                    help="issue type for -a/--add (bug|feature|task|epic|chore|decision; default: task)")
+    p.add_argument("-l", "--labels", metavar="LABELS", help="comma-separated labels for -a/--add")
     p.set_defaults(func=cmd_todo)
 
     p = sub.add_parser("bd", help="run any bd command against the resolved data repo "
