@@ -30,14 +30,37 @@ CONTENT_DIRS = ["tutorials", "how-to", "reference", "explanation", "journal", "i
 
 
 def find_repo_root(start=None):
+    """Resolve the pkb data repo root for `start` (default cwd).
+
+    The central kb lives at ~/.pkb itself -- content dirs are *inside* it
+    (~/.pkb/tutorials), not siblings of it. A repo you're actually standing inside
+    (a directory with its own .pkb/ subdir, sibling-style, e.g. a scratch/work repo
+    elsewhere) always wins; the central kb is only a fallback for when you're not
+    inside one, so kb works from anywhere without cd'ing into a specific repo first.
+    """
     path = os.path.abspath(start or os.getcwd())
+    home = os.path.expanduser("~")
+    central = os.path.join(home, ".pkb")
+
+    if path == central or path.startswith(central + os.sep):
+        return central
+
     while True:
-        if os.path.isdir(os.path.join(path, ".pkb")):
+        # `home` itself is excluded here: it always "contains" .pkb/ (the central
+        # kb), but that's not a sibling-style repo rooted at home -- it's handled
+        # by the central-kb fallback below instead.
+        if path != home and os.path.isdir(os.path.join(path, ".pkb")):
             return path
         parent = os.path.dirname(path)
         if parent == path:
-            raise SystemExit("error: not inside a pkb repo (no .pkb/ directory found)")
+            break
         path = parent
+
+    if os.path.isdir(central):
+        return central
+
+    raise SystemExit("error: not inside a pkb repo (no .pkb/ directory found), "
+                      "and no central kb at ~/.pkb")
 
 
 REPO_ROOT = None  # populated lazily via get_repo_root()
@@ -157,13 +180,16 @@ def write_entry(path, fm, body):
 
 
 def iter_markdown_files(root):
+    # walks only start inside named content dirs (never ".pkb" itself, which isn't
+    # in CONTENT_DIRS), so no exclusion check is needed here -- one used to exist
+    # for a "skip nested .pkb" case that couldn't actually happen, and it broke
+    # once `root` itself started being named ".pkb" (a substring match on the
+    # walked path wrongly matched everything).
     for content_dir in CONTENT_DIRS:
         base = os.path.join(root, content_dir)
         if not os.path.isdir(base):
             continue
         for dirpath, _, filenames in os.walk(base):
-            if os.sep + ".pkb" + os.sep in dirpath:
-                continue
             for name in filenames:
                 if name.endswith(".md"):
                     yield os.path.join(dirpath, name)

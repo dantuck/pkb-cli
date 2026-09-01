@@ -23,16 +23,23 @@ No external Python packages are required — everything runs on the stdlib
 
 ## Use it against your data repo
 
+The central kb lives at `~/.pkb` — content (`tutorials/`, `how-to/`, etc.) sits
+directly inside it, alongside its own `.pkb/` config subdir (`config.yml`,
+`cursors.json`, the generated `fts.db`, optionally sops-encrypted `secrets.enc.env`).
+None of that lives in this tool repo.
+
 ```bash
-git clone <your-private-notes-repo-url>
-cd <your-notes-repo>
+git clone <your-private-notes-repo-url> ~/.pkb
+cd ~/.pkb
 kb setup       # pre-commit hook, search index, local bd store if `bd` is installed
 ```
 
-`kb` finds your data repo by walking up from the current directory to a `.pkb/`
-directory — that directory holds per-repo config (`config.yml`, `cursors.json`),
-the generated search index (`fts.db`, gitignored), and optionally sops-encrypted
-sync credentials (`secrets.enc.env`). None of that lives in this tool repo.
+`kb` resolves which data repo to use by walking up from the current directory
+looking for a `.pkb/` subdirectory (so a repo you're actually standing inside —
+e.g. a separate work/scratch pkb elsewhere — always wins). If that walk finds
+nothing, it falls back to `~/.pkb`, so day-to-day commands (`kb search`, `kb
+triage`, `kb inbox`, ...) work from anywhere without `cd`-ing into a specific
+repo first.
 
 ## Command surface
 
@@ -71,10 +78,12 @@ how those get set. Options:
   a data repo can commit `.sops.yaml` + `.pkb/secrets.enc.env` (ciphertext, safe to
   commit) and run `sops exec-env .pkb/secrets.enc.env 'kb sync memos'`. See
   [templates/secrets.env.example](templates/secrets.env.example) for the expected keys.
-- **beads**: requires the `bd` CLI on `PATH`. By default it auto-discovers a local
-  `.beads/` store upward from cwd (initialize one in your data repo with
-  `bd init --stealth` to keep it out of git). `PKB_BEADS_DIR` points at a different
-  project's store; `PKB_BEADS_GLOBAL=1` uses bd's shared cross-project store.
+- **beads**: requires the `bd` CLI on `PATH`. By default it points `bd` at your
+  resolved data repo (`~/.pkb`, or whichever repo you're standing inside) rather
+  than relying on `bd`'s own cwd-based auto-discovery, which wouldn't know about
+  kb's home-directory fallback. Initialize one in your data repo with
+  `bd init --stealth` to keep it out of git. `PKB_BEADS_DIR` points at a different
+  project's store instead; `PKB_BEADS_GLOBAL=1` uses bd's shared cross-project store.
 
 Sync is the only part of this system that touches the network; search and editing
 always work offline. See [docs/spec.md](docs/spec.md) §4 for the full per-source

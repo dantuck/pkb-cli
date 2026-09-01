@@ -121,11 +121,14 @@ def main():
     root = pc.get_repo_root()
     config = pc.load_config(root)["sync"]["beads"]
     cli = config["cli"]
-    directory = os.environ.get("PKB_BEADS_DIR")
-    # default: no -C/--global, so bd auto-discovers .beads/ upward from cwd (the
-    # common case: a local bd store next to the notes about it). Opt into the
-    # shared cross-project store explicitly with PKB_BEADS_GLOBAL=1.
-    use_global = bool(os.environ.get("PKB_BEADS_GLOBAL")) and not directory
+    use_global = bool(os.environ.get("PKB_BEADS_GLOBAL"))
+    # default to the resolved data repo root, not bd's own cwd-based auto-discovery:
+    # kb can resolve `root` via its home-directory fallback (see find_repo_root)
+    # even when invoked from an unrelated cwd, but bd has no such fallback of its
+    # own -- pointing it at `root` explicitly keeps behavior consistent regardless
+    # of where kb was actually invoked from. PKB_BEADS_DIR overrides for a
+    # different project's store; PKB_BEADS_GLOBAL opts into bd's shared store.
+    directory = os.environ.get("PKB_BEADS_DIR") or (None if use_global else root)
 
     cursors = pc.load_cursors(root)
     since_timestamp = cursors.get("beads", {}).get("last_timestamp")

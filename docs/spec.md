@@ -25,6 +25,16 @@ Non-negotiable principles, in priority order:
 
 ## 2. Repository Layout
 
+> **Implementation note (2026-09-01):** two things below have diverged from this
+> original spec, documented here rather than by rewriting the historical doc:
+> the `scripts/` (and `schema.sql`) now live in a separate tool repo (`pkb-cli`),
+> not inside `.pkb/` in the data repo — see [../README.md](../README.md). And the
+> default data repo location is `~/.pkb` itself (the central kb), not an
+> arbitrarily-named `pkb/` directory elsewhere — `kb` still supports a
+> differently-located repo if you're standing inside one, `~/.pkb` is only the
+> fallback. The internal structure below (content dirs alongside `.pkb/`) is
+> otherwise unchanged.
+
 ```
 pkb/
   tutorials/
