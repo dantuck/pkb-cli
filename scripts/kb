@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""kb — thin CLI wrapper dispatching to sibling scripts in this tool repo. No daemon;
+one-shot per invocation. Operates on a data repo (found by walking up from cwd to a
+.pkb/ directory), which lives separately from wherever this tool is installed."""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timedelta
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+sys.path.insert(0, SCRIPT_DIR)
+import pkb_common as pc
+
+
+def run_script(name, args=None):
+    cmd = [sys.executable, os.path.join(SCRIPT_DIR, name)] + (args or [])
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
+def cmd_search(args):
+    root = pc.get_repo_root()
+    db_path = os.path.join(root, ".pkb", "fts.db")
+    if not os.path.exists(db_path):
+        print("no FTS index found. Run `kb index` first, or use ripgrep directly:")
+        print(f"  rg --heading -n {args.query!r} tutorials how-to reference explanation")
+        return 1
+
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    where = ["fts MATCH ?"]
+    params = [args.query]
+    if not args.all:
+        placeholders = ",".join("?" for _ in pc.CORE_TYPES)
+        where.append(f"fts.type IN ({placeholders})")
+        params.extend(pc.CORE_TYPES)
+    if args.type:
+        where.append("fts.type = ?")
+        params.append(args.type)
+    if args.tag:
+        where.append("fts.tags MATCH ?")
+        params.append(args.tag)
+
+    sql = f"""
+        SELECT f.id, f.title, f.type, f.path, bm25(fts) as rank
+        FROM fts JOIN files f ON f.id = fts.id
+        WHERE {' AND '.join(where)}
+        ORDER BY rank LIMIT 50
+    """
+    try:
+        rows = cur.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"search error: {e}")
+        return 1
+
+    if not rows:
+        print("no results")
+        return 0
+    for entry_id, title, entry_type, path, _rank in rows:
+        print(f"[{entry_type:11}] {entry_id}  {title}\n    {path}")
+    return 0
+
+
+def cmd_new(args):
+    root = pc.get_repo_root()
+    entry_type = args.type
+    if entry_type not in pc.CORE_TYPES:
+        print(f"error: type must be one of {pc.CORE_TYPES}", file=sys.stderr)
+        return 1
+
+    all_ids = pc.collect_existing_ids(root)
+    entry_id = pc.gen_id(all_ids)
+    now = pc.now_iso()
+    fm = {
+        "id": entry_id,
+        "created": now,
+        "updated": now,
+        "type": entry_type,
+        "extension": None,
+        "source": "manual",
+        "source_id": None,
+        "tags": [],
+        "links": [],
+        "title": args.title,
+    }
+    slug = "".join(c if c.isalnum() else "-" for c in args.title.lower()).strip("-")
+    slug = "-".join(filter(None, slug.split("-")))[:60] or "untitled"
+    path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{slug}.md")
+    pc.write_entry(path, fm, f"# {args.title}\n\n")
+    print(path)
+    return 0
+
+
+def cmd_journal(args):
+    root = pc.get_repo_root()
+    if args.date in (None, "today"):
+        target = datetime.now().date()
+    else:
+        target = datetime.strptime(args.date, "%Y-%m-%d").date()
+
+    dir_path = os.path.join(root, "journal", f"{target.year:04d}", f"{target.month:02d}")
+    file_path = os.path.join(dir_path, f"{target.isoformat()}.md")
+
+    if not os.path.exists(file_path):
+        all_ids = pc.collect_existing_ids(root)
+        now = pc.now_iso()
+        entry_id = pc.gen_id(all_ids, dt=datetime.combine(target, datetime.now().time()))
+        fm = {
+            "id": entry_id,
+            "created": now,
+            "updated": now,
+            "type": "journal",
+            "extension": "journal",
+            "source": "manual",
+            "source_id": None,
+            "tags": [],
+            "links": [],
+            "title": target.isoformat(),
+        }
+        pc.write_entry(file_path, fm, f"# {target.isoformat()}\n\n")
+
+    editor = os.environ.get("EDITOR")
+    if editor:
+        os.execvp(editor, [editor, file_path])
+    else:
+        print(file_path)
+    return 0
+
+
+def cmd_inbox(args):
+    root = pc.get_repo_root()
+    inbox_dir = os.path.join(root, "inbox")
+    now = datetime.now().astimezone()
+    files = sorted(
+        f for f in os.listdir(inbox_dir) if f.endswith(".md")
+    ) if os.path.isdir(inbox_dir) else []
+    if not files:
+        print("inbox is empty")
+        return 0
+    for name in files:
+        path = os.path.join(inbox_dir, name)
+        try:
+            fm, _ = pc.read_entry(path)
+            created = fm.get("created")
+            title = fm.get("title") or name
+        except ValueError:
+            created = None
+            title = name
+        created_dt = pc.parse_iso(created)
+        age = (now - created_dt).days if created_dt else "?"
+        print(f"{age!s:>4}d  {name:<30} {title}")
+    return 0
+
+
+def cmd_triage(args):
+    return run_script("triage_report.py")
+
+
+def cmd_sync(args):
+    scripts = {
+        "memos": "sync_memos.py",
+        "gitlab": "sync_gitlab.py",
+        "beads": "sync_beads.py",
+    }
+    targets = list(scripts.keys()) if args.source in (None, "all") else [args.source]
+    rc = 0
+    for t in targets:
+        print(f"--- sync: {t} ---")
+        rc = run_script(scripts[t]) or rc
+    return rc
+
+
+def cmd_index(args):
+    return run_script("index_fts.py", ["--full"] if args.full else [])
+
+
+def cmd_validate(args):
+    return run_script("validate_frontmatter.py")
+
+
+def cmd_links(args):
+    root = pc.get_repo_root()
+    target_id = args.id
+    forward = None
+    backlinks = []
+    target_path = None
+
+    for path in pc.iter_markdown_files(root):
+        try:
+            fm, _ = pc.read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("id") == target_id:
+            forward = fm.get("links") or []
+            target_path = os.path.relpath(path, root)
+        if target_id in (fm.get("links") or []):
+            backlinks.append((fm.get("id"), fm.get("title"), os.path.relpath(path, root)))
+
+    if forward is None:
+        print(f"error: no entry with id '{target_id}'", file=sys.stderr)
+        return 1
+
+    print(f"{target_id}  ({target_path})")
+    print(f"\nforward links ({len(forward)}):")
+    for link_id in forward:
+        print(f"  -> {link_id}")
+    print(f"\nbacklinks ({len(backlinks)}):")
+    for link_id, title, path in backlinks:
+        print(f"  <- {link_id}  {title}  ({path})")
+    return 0
+
+
+def find_install_dir():
+    """Return (dir, already_on_path). Prefers a candidate already on PATH; falls
+    back to ~/.local/bin (created if needed) so --install always succeeds on a
+    completely fresh machine, just with a note to update PATH."""
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    candidates = (os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin")
+    for candidate in candidates:
+        if os.path.isdir(candidate) and candidate in path_dirs:
+            return candidate, True
+    return os.path.expanduser("~/.local/bin"), False
+
+
+def cmd_setup(args):
+    root = pc.get_repo_root()
+    ok, todo = [], []
+
+    # 0. install kb itself onto PATH (opt-in via --install [DIR])
+    if args.install is not None:
+        script_path = os.path.abspath(os.path.join(SCRIPT_DIR, "kb"))
+        if args.install:
+            install_dir, on_path = os.path.expanduser(args.install), args.install in os.environ.get("PATH", "").split(os.pathsep)
+        else:
+            install_dir, on_path = find_install_dir()
+        target = os.path.join(install_dir, "kb")
+        if os.path.islink(target) and os.readlink(target) == script_path:
+            ok.append(f"kb already installed at {target}")
+        elif os.path.exists(target):
+            todo.append(f"--install: {target} already exists and isn't this repo's kb -- remove it "
+                        f"or pass a different --install <dir>")
+        else:
+            os.makedirs(install_dir, exist_ok=True)
+            os.symlink(script_path, target)
+            if on_path:
+                ok.append(f"installed kb -> {target}")
+            else:
+                ok.append(f"installed kb -> {target} (not yet on PATH)")
+                todo.append(f'add this to your shell profile: export PATH="{install_dir}:$PATH"')
+
+    # 1. pre-commit hook -- generated directly (not a symlinked template) since it
+    # must hardcode this machine's path to the tool install, which lives in a
+    # separate repo from the data repo the hook runs in.
+    git_dir = os.path.join(root, ".git")
+    if not os.path.isdir(git_dir):
+        todo.append("not a git repo (or .git not found here) -- pre-commit hook skipped")
+    else:
+        hook_path = os.path.join(git_dir, "hooks", "pre-commit")
+        marker = "# pkb-managed-hook"
+        validate_path = os.path.join(SCRIPT_DIR, "validate_frontmatter.py")
+        hook_content = (
+            "#!/bin/sh\n"
+            f"{marker} -- regenerated by `kb setup`, do not hand-edit\n"
+            f'exec "{sys.executable}" "{validate_path}"\n'
+        )
+        existing = None
+        if os.path.exists(hook_path):
+            with open(hook_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        if existing == hook_content:
+            ok.append("pre-commit hook already installed")
+        elif existing is not None and marker not in existing:
+            todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
+        else:
+            os.makedirs(os.path.dirname(hook_path), exist_ok=True)
+            with open(hook_path, "w", encoding="utf-8") as f:
+                f.write(hook_content)
+            os.chmod(hook_path, 0o755)
+            ok.append("installed pre-commit hook" if existing is None else "refreshed pre-commit hook path")
+
+    # 2. FTS index
+    db_path = os.path.join(root, ".pkb", "fts.db")
+    full = not os.path.exists(db_path)
+    rc = run_script("index_fts.py", ["--full"] if full else [])
+    ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
+
+    # 3. local bd store
+    if shutil.which("bd"):
+        if os.path.isdir(os.path.join(root, ".beads")):
+            ok.append("local bd (beads) store already initialized")
+        else:
+            result = subprocess.run(
+                ["bd", "init", "--stealth", "--non-interactive"],
+                cwd=root, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                ok.append("initialized a local bd store (--stealth: excluded from git)")
+            else:
+                todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
+    else:
+        todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
+
+    # 4. secrets (sops), informational only -- never touch/create real secrets ourselves
+    sops_config = os.path.join(root, ".sops.yaml")
+    secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
+    if os.path.exists(sops_config):
+        if os.path.exists(secrets_path):
+            ok.append(".pkb/secrets.enc.env already set up")
+        elif shutil.which("sops"):
+            todo.append("run `sops .pkb/secrets.enc.env` to create encrypted memos/gitlab credentials "
+                        "(see .pkb/secrets.env.example)")
+        else:
+            todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
+                        "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
+
+    # 5. what's actually configured for sync right now (informational)
+    configured = []
+    if os.environ.get("PKB_MEMOS_URL") and os.environ.get("PKB_MEMOS_TOKEN"):
+        configured.append("memos")
+    if os.environ.get("PKB_GITLAB_PROJECT"):
+        configured.append("gitlab")
+    if shutil.which("bd"):
+        configured.append("beads")
+    if configured:
+        ok.append(f"sync sources ready in this shell: {', '.join(configured)}")
+    else:
+        todo.append("no sync source has credentials in this shell yet (memos/gitlab need env vars, "
+                     "see README 'Ingestion credentials')")
+
+    print("kb setup\n")
+    for line in ok:
+        print(f"  [ok]   {line}")
+    for line in todo:
+        print(f"  [todo] {line}")
+    return 1 if any("failed" in t for t in todo) else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="kb")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("search")
+    p.add_argument("query")
+    p.add_argument("--type", choices=pc.CORE_TYPES)
+    p.add_argument("--tag")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("new")
+    p.add_argument("type", choices=pc.CORE_TYPES)
+    p.add_argument("title")
+    p.set_defaults(func=cmd_new)
+
+    p = sub.add_parser("journal")
+    p.add_argument("date", nargs="?", default=None)
+    p.set_defaults(func=cmd_journal)
+
+    p = sub.add_parser("inbox")
+    p.set_defaults(func=cmd_inbox)
+
+    p = sub.add_parser("triage")
+    p.set_defaults(func=cmd_triage)
+
+    p = sub.add_parser("sync")
+    p.add_argument("source", nargs="?", choices=["memos", "gitlab", "beads", "all"], default="all")
+    p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("index")
+    p.add_argument("--full", action="store_true")
+    p.set_defaults(func=cmd_index)
+
+    p = sub.add_parser("validate")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("links")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_links)
+
+    p = sub.add_parser("setup")
+    p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
+                    help="symlink kb onto PATH (auto-detects ~/.local/bin, /opt/homebrew/bin, "
+                         "/usr/local/bin, or pass a specific DIR)")
+    p.set_defaults(func=cmd_setup)
+
+    args = parser.parse_args()
+    sys.exit(args.func(args) or 0)
+
+
+if __name__ == "__main__":
+    main()

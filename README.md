@@ -1,0 +1,87 @@
+# pkb-cli
+
+The `kb` command-line tool for a [Diataxis](https://diataxis.fr/)-based personal
+knowledge base. This repo is the tool only — it has no opinion about your actual
+notes, which live in a separate (typically private) data repo containing
+`tutorials/`, `how-to/`, `reference/`, `explanation/`, `journal/`, `inbox/`,
+`sources/`, and a `.pkb/` config directory.
+
+Full design rationale: [docs/spec.md](docs/spec.md).
+Zero-setup search without this tool at all: [docs/search.md](docs/search.md).
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | bash
+```
+
+Clones this repo to `~/pkb-cli` (override with `$PKB_CLI_HOME`) and symlinks `kb`
+onto your PATH. Safe to re-run — pulls latest and re-runs setup idempotently.
+
+No external Python packages are required — everything runs on the stdlib
+(`sqlite3` for FTS5, no `pyyaml`).
+
+## Use it against your data repo
+
+```bash
+git clone <your-private-notes-repo-url>
+cd <your-notes-repo>
+kb setup       # pre-commit hook, search index, local bd store if `bd` is installed
+```
+
+`kb` finds your data repo by walking up from the current directory to a `.pkb/`
+directory — that directory holds per-repo config (`config.yml`, `cursors.json`),
+the generated search index (`fts.db`, gitignored), and optionally sops-encrypted
+sync credentials (`secrets.enc.env`). None of that lives in this tool repo.
+
+## Command surface
+
+```bash
+kb new how-to "Tailscale sidecar config for Synology"
+kb journal                      # today's journal file
+kb search "tailscale" --type how-to
+kb search "tailscale" --all     # include journal/inbox/sources
+kb inbox                        # what's waiting for triage
+kb triage                       # flag anything overdue (> 14 days)
+kb links 2026-08-31-1423        # forward links + backlinks for an entry
+kb validate                     # frontmatter/id/link checks (also runs pre-commit)
+kb index                        # incremental reindex after edits
+kb sync all                     # pull in usememos / GitLab / beads
+kb setup [--install [DIR]]      # onboarding: hook, index, bd store, and (with --install) PATH
+```
+
+Search also works with zero setup via `rg`/`fzf` directly on a data repo's file
+tree — see [docs/search.md](docs/search.md).
+
+## Ingestion credentials
+
+Sync scripts read credentials only from the environment — they have no opinion on
+how those get set. Options:
+
+- Export `PKB_MEMOS_URL`/`PKB_MEMOS_TOKEN` (usememos) and `PKB_GITLAB_PROJECT`
+  (GitLab, via an authenticated `glab`) directly.
+- Or use [sops](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age):
+  a data repo can commit `.sops.yaml` + `.pkb/secrets.enc.env` (ciphertext, safe to
+  commit) and run `sops exec-env .pkb/secrets.enc.env 'kb sync memos'`. See
+  [templates/secrets.env.example](templates/secrets.env.example) for the expected keys.
+- **beads**: requires the `bd` CLI on `PATH`. By default it auto-discovers a local
+  `.beads/` store upward from cwd (initialize one in your data repo with
+  `bd init --stealth` to keep it out of git). `PKB_BEADS_DIR` points at a different
+  project's store; `PKB_BEADS_GLOBAL=1` uses bd's shared cross-project store.
+
+Sync is the only part of this system that touches the network; search and editing
+always work offline. See [docs/spec.md](docs/spec.md) §4 for the full per-source
+contract.
+
+## Layout
+
+```
+pkb-cli/
+  scripts/      the kb CLI and everything it dispatches to
+  templates/    schema.sql (loaded at runtime, never copied into a data repo)
+                and secrets.env.example (documentation only)
+  docs/         spec.md, search.md
+  install.sh
+```
+
+See [docs/spec.md](docs/spec.md) §2 for the data repo's own expected layout.
