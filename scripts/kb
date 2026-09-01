@@ -707,6 +707,13 @@ def main():
     p.add_argument("--check", action="store_true", help="only check, don't pull even if behind")
     p.set_defaults(func=cmd_update)
 
+    p = sub.add_parser("help", help="show this help message")
+    p.set_defaults(func=lambda args: parser.print_help() or 0)
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
     args = parser.parse_args()
     sys.exit(args.func(args) or 0)
 
