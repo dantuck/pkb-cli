@@ -3,7 +3,9 @@
 one-shot per invocation. Operates on a data repo (found by walking up from cwd to a
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
+import difflib
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -15,6 +17,32 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 TOOL_ROOT = os.path.dirname(SCRIPT_DIR)  # the pkb-cli checkout itself, not the data repo
 sys.path.insert(0, SCRIPT_DIR)
 import pkb_common as pc
+
+
+class KBArgumentParser(argparse.ArgumentParser):
+    """argparse.ArgumentParser that gives an unknown top-level command a short,
+    readable error (with a 'did you mean' suggestion) instead of the default
+    'invalid choice: ... (choose from ...)' wall of text listing every command
+    on one line."""
+
+    _INVALID_COMMAND_RE = re.compile(r"^argument <command>: invalid choice: '(.+?)'")
+
+    def __init__(self, *args, subcommands=None, **kwargs):
+        self._subcommands = subcommands or []
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        m = self._INVALID_COMMAND_RE.match(message)
+        if not m:
+            super().error(message)
+        bad = m.group(1)
+        self.print_usage(sys.stderr)
+        suggestion = difflib.get_close_matches(bad, self._subcommands, n=1)
+        print(f"kb: unknown command '{bad}'" +
+              (f" -- did you mean '{suggestion[0]}'?" if suggestion else ""),
+              file=sys.stderr)
+        print("run `kb help` to see all commands", file=sys.stderr)
+        sys.exit(2)
 
 
 def run_script(name, args=None):
@@ -1417,12 +1445,16 @@ kb operates on a data repo found by walking up from the current directory to a
 
 
 def main():
-    parser = argparse.ArgumentParser(
+    commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
+                "links", "show", "tag", "link", "todo", "bd", "secrets", "config", "setup",
+                "doctor", "update", "help"]
+    parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
                      "create, triage, and sync your notes.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        subcommands=commands,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
 
