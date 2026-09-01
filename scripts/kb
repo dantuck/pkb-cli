@@ -62,8 +62,61 @@ def cmd_search(args):
     if not rows:
         print("no results")
         return 0
+
+    # interactive by default when the tooling supports it, same rule as kb todo:
+    # fzf installed, both ends real terminals (never for piped/scripted use).
+    interactive = not args.plain and shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+    if interactive:
+        return _search_interactive(root, rows)
+
     for entry_id, title, entry_type, path, _rank in rows:
         print(f"[{entry_type:11}] {entry_id}  {title}\n    {path}")
+    if not shutil.which("fzf"):
+        print("\n(install fzf for an interactive picker)")
+    return 0
+
+
+def _search_interactive(root, rows):
+    """fzf-based picker: select a result (with a live file-content preview), then
+    an action -- view (print full content), edit ($EDITOR), links (forward/back),
+    or cancel. Same two-stage shape as kb todo's picker, for consistency."""
+    lines, by_id = [], {}
+    for entry_id, title, entry_type, path, _rank in rows:
+        abs_path = os.path.join(root, path)
+        lines.append(f"{entry_id}\t{entry_type}\t{title}\t{abs_path}")
+        by_id[entry_id] = (title, abs_path)
+
+    preview_cmd = "cat {4}"
+    picker = subprocess.run(
+        ["fzf", "--delimiter", "\t", "--with-nth", "1,2,3",
+         "--preview", preview_cmd, "--preview-window", "right:60%",
+         "--prompt", "search> ", "--header", "enter: choose an action for this result"],
+        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
+    )
+    if picker.returncode != 0 or not picker.stdout.strip():
+        return 0  # cancelled
+    fields = picker.stdout.rstrip("\n").split("\t")
+    chosen_id, chosen_path = fields[0], fields[3]
+    title = by_id.get(chosen_id, ("", chosen_path))[0]
+
+    action = subprocess.run(
+        ["fzf", "--prompt", f"{chosen_id}> ", "--header", f"{title} -- choose an action"],
+        input="view\nedit\nlinks\ncancel", text=True, stdout=subprocess.PIPE,
+    )
+    if action.returncode != 0 or not action.stdout.strip():
+        return 0
+    choice = action.stdout.strip()
+
+    if choice == "view":
+        subprocess.run(["cat", chosen_path])
+    elif choice == "edit":
+        editor = os.environ.get("EDITOR")
+        if editor:
+            subprocess.run([editor, chosen_path])
+        else:
+            print(f"$EDITOR not set -- {chosen_path}")
+    elif choice == "links":
+        show_links(root, chosen_id)
     return 0
 
 
@@ -198,9 +251,9 @@ def cmd_validate(args):
     return run_script("validate_frontmatter.py")
 
 
-def cmd_links(args):
-    root = pc.get_repo_root()
-    target_id = args.id
+def show_links(root, target_id):
+    """Print forward links + backlinks for an entry. Shared by cmd_links and the
+    interactive search picker's 'links' action."""
     forward = None
     backlinks = []
     target_path = None
@@ -228,6 +281,11 @@ def cmd_links(args):
     for link_id, title, path in backlinks:
         print(f"  <- {link_id}  {title}  ({path})")
     return 0
+
+
+def cmd_links(args):
+    root = pc.get_repo_root()
+    return show_links(root, args.id)
 
 
 def cmd_todo(args):
@@ -805,11 +863,22 @@ def main():
     )
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
 
-    p = sub.add_parser("search", help="search indexed content")
+    p = sub.add_parser(
+        "search", help="search indexed content",
+        description="Search indexed content by keyword (FTS5 match syntax).",
+        epilog=(
+            "if fzf is installed and you're in a real terminal, this opens an "
+            "interactive picker by default: select a result (with a live file "
+            "preview), then an action (view/edit/links). --plain always skips it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("query", help="search terms (FTS5 match syntax)")
     p.add_argument("--type", choices=pc.CORE_TYPES, help="restrict to one Diataxis type")
     p.add_argument("--tag", help="restrict to entries with this tag")
     p.add_argument("--all", action="store_true", help="include journal/inbox/sources (default: core content only)")
+    p.add_argument("--plain", action="store_true",
+                    help="force the plain list even if fzf + a terminal make interactive mode available")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("new", help="scaffold a new core entry")
