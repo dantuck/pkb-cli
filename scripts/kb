@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+TOOL_ROOT = os.path.dirname(SCRIPT_DIR)  # the pkb-cli checkout itself, not the data repo
 sys.path.insert(0, SCRIPT_DIR)
 import pkb_common as pc
 
@@ -289,6 +290,43 @@ def secrets_status(root):
     return sops_configured, secrets_exists
 
 
+def _git(*args, cwd=TOOL_ROOT):
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+
+
+def update_status(fetch=False):
+    """Compare this pkb-cli checkout's HEAD against its upstream.
+
+    fetch=False (used by `kb doctor`) never touches the network -- it only compares
+    against whatever origin/<branch> was last fetched, so it can go stale, but stays
+    within doctor's "never writes, never hits the network" contract. fetch=True (used
+    by `kb update`) refreshes that ref first, so its answer is authoritative.
+
+    Returns a dict: is_git, upstream, local, remote, behind, dirty. Fields are None
+    when they don't apply (e.g. not a git checkout, or no upstream configured).
+    """
+    result = {"is_git": os.path.isdir(os.path.join(TOOL_ROOT, ".git")),
+              "upstream": None, "local": None, "remote": None, "behind": None, "dirty": None}
+    if not result["is_git"]:
+        return result
+
+    if fetch:
+        _git("fetch", "--quiet", "origin")
+
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if upstream.returncode != 0:
+        return result
+    result["upstream"] = upstream.stdout.strip()
+
+    result["local"] = _git("rev-parse", "HEAD").stdout.strip()
+    result["remote"] = _git("rev-parse", result["upstream"]).stdout.strip()
+    if result["local"] and result["remote"]:
+        behind = _git("rev-list", "--count", f"{result['local']}..{result['remote']}")
+        result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
+    result["dirty"] = bool(_git("status", "--porcelain").stdout.strip())
+    return result
+
+
 def cmd_setup(args):
     root = pc.get_repo_root()
     ok, todo = [], []
@@ -511,6 +549,17 @@ def cmd_doctor(args):
     if not any("cursors.json" in t for t in todo):
         ok.append("cursors.json looks sane")
 
+    # pkb-cli version, checked against whatever was last fetched -- no network call
+    # here (that's `kb update`'s job), so this can go stale but never blocks/slows
+    # down a doctor run or touches the network on its own.
+    update = update_status(fetch=False)
+    if update["is_git"] and update["upstream"]:
+        if update["behind"]:
+            todo.append(f"pkb-cli is {update['behind']} commit(s) behind {update['upstream']} as of the last "
+                        f"fetch -- run `kb update` to check for real and pull")
+        else:
+            ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
+
     print("kb doctor\n")
     for line in ok:
         print(f"  [ok]   {line}")
@@ -521,12 +570,54 @@ def cmd_doctor(args):
     return 1 if todo else 0
 
 
+def cmd_update(args):
+    """Fetch + check this pkb-cli checkout against its upstream; pull if behind
+    and clean. The only kb command besides `kb sync` that touches the network."""
+    if not os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
+        print(f"error: {TOOL_ROOT} isn't a git checkout -- can't check for updates", file=sys.stderr)
+        return 1
+
+    fetch = _git("fetch", "--quiet", "origin")
+    if fetch.returncode != 0:
+        print(f"error: git fetch failed: {fetch.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    status = update_status(fetch=False)  # already fetched above, no need to do it twice
+    if not status["upstream"]:
+        print(f"error: no upstream branch configured for {TOOL_ROOT}", file=sys.stderr)
+        return 1
+
+    if not status["behind"]:
+        print(f"kb is up to date with {status['upstream']} ({status['local'][:8]})")
+        return 0
+
+    print(f"kb is {status['behind']} commit(s) behind {status['upstream']} "
+          f"({status['local'][:8]} -> {status['remote'][:8]})")
+
+    if args.check:
+        print("run `kb update` (without --check) to pull")
+        return 1
+
+    if status["dirty"]:
+        print(f"error: {TOOL_ROOT} has local changes -- commit or stash them before updating", file=sys.stderr)
+        return 1
+
+    pull = _git("pull", "--ff-only")
+    if pull.returncode != 0:
+        print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
+        return 1
+    print(pull.stdout.strip())
+    print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
+    return 0
+
+
 EPILOG = """\
 examples:
   kb new how-to "Tailscale sidecar config for Synology"
   kb search tailscale --type how-to
   kb sync all && kb triage
   kb setup --install
+  kb update
 
 kb operates on a data repo found by walking up from the current directory to a
 .pkb/ directory. Run 'kb <command> -h' for details on a specific command.
@@ -590,6 +681,10 @@ def main():
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("update", help="check for and pull kb tool updates")
+    p.add_argument("--check", action="store_true", help="only check, don't pull even if behind")
+    p.set_defaults(func=cmd_update)
 
     args = parser.parse_args()
     sys.exit(args.func(args) or 0)
