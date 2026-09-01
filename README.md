@@ -48,7 +48,14 @@ kb validate                     # frontmatter/id/link checks (also runs pre-comm
 kb index                        # incremental reindex after edits
 kb sync all                     # pull in usememos / GitLab / beads
 kb setup [--install [DIR]]      # onboarding: hook, index, bd store, and (with --install) PATH
+kb doctor                       # diagnose issues -- read-only, never writes anything
 ```
+
+`kb doctor` and `kb setup` share the same detection logic (hook state, index freshness,
+tool presence) — `setup` acts on it, `doctor` only reports, plus a few deeper checks
+`setup` doesn't do: a hook pointing at a pkb-cli install that no longer exists, a
+search index whose row count has drifted from the files on disk, and cursors.json
+sanity.
 
 Search also works with zero setup via `rg`/`fzf` directly on a data repo's file
 tree — see [docs/search.md](docs/search.md).
