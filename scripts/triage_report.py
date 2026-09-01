@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Scan inbox/ and flag files older than the configured threshold as overdue."""
+import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -48,8 +50,17 @@ def scan_inbox(root):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    args = parser.parse_args()
+
     root = pc.get_repo_root()
     rows, threshold_days = scan_inbox(root)
+
+    if args.json:
+        print(json.dumps({"threshold_days": threshold_days, "items": rows}))
+        return 1 if any(r["overdue"] for r in rows) else 0
+
     if not rows:
         print("triage: inbox is empty")
         return 0

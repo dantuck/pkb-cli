@@ -376,6 +376,10 @@ def _journal_interactive(root):
 def cmd_inbox(args):
     root = pc.get_repo_root()
     inbox_dir = os.path.join(root, "inbox")
+
+    if args.id is not None:
+        return _inbox_act(root, inbox_dir, args)
+
     now = datetime.now().astimezone()
     files = sorted(
         f for f in os.listdir(inbox_dir) if f.endswith(".md")
@@ -409,6 +413,104 @@ def cmd_inbox(args):
     return 0
 
 
+def _inbox_act(root, inbox_dir, args):
+    """Non-interactive triage: `kb inbox <id> promote|redirect|discard`. The
+    only way to resolve an inbox item when fzf/a real terminal aren't
+    available -- e.g. scripted use or an AI agent driving kb, neither of which
+    ever gets the interactive picker."""
+    if args.action is None:
+        print(f"error: `kb inbox {args.id}` needs an action: promote <type> | redirect | discard",
+              file=sys.stderr)
+        return 1
+    found = _inbox_find(inbox_dir, args.id)
+    if found is None:
+        print(f"error: no inbox item with id '{args.id}'", file=sys.stderr)
+        return 1
+    path, fm, body = found
+
+    if args.action == "promote":
+        if not args.type:
+            print(f"error: `kb inbox {args.id} promote` needs a Diataxis type: {', '.join(pc.CORE_TYPES)}",
+                  file=sys.stderr)
+            return 1
+        return _inbox_promote(root, path, fm, body, args.type)
+    elif args.action == "redirect":
+        return _inbox_redirect(root, path, fm, body)
+    else:
+        return _inbox_discard(root, path)
+
+
+def _inbox_promote(root, path, fm, body, target_type):
+    """Move an inbox item into core content as `target_type`, clearing
+    `extension`. Shared by the interactive picker and non-interactive
+    `kb inbox <id> promote <type>`."""
+    title = fm.get("title") or os.path.basename(path)
+    fm["type"] = target_type
+    fm["extension"] = None
+    fm["updated"] = pc.now_iso()
+    new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{fm['id']}-{pc.slugify(title)}.md")
+    pc.write_entry(new_path, fm, body)
+    os.remove(path)
+    print(f"promoted -> {os.path.relpath(new_path, root)}")
+    run_script("index_fts.py")
+    return 0
+
+
+def _inbox_redirect(root, path, fm, body):
+    """Append an inbox item into its created-date's journal entry (creating
+    that entry first if needed) and remove it from inbox/. Shared by the
+    interactive picker and non-interactive `kb inbox <id> redirect`."""
+    title = fm.get("title") or os.path.basename(path)
+    created_dt = pc.parse_iso(fm.get("created")) or datetime.now().astimezone()
+    journal_dir = os.path.join(root, "journal", f"{created_dt.year:04d}", f"{created_dt.month:02d}")
+    journal_path = os.path.join(journal_dir, f"{created_dt.date().isoformat()}.md")
+    if not os.path.exists(journal_path):
+        all_ids = pc.collect_existing_ids(root)
+        jid = pc.gen_id(all_ids, dt=created_dt)
+        now_s = pc.now_iso()
+        jfm = {
+            "id": jid, "created": now_s, "updated": now_s,
+            "type": "journal", "extension": "journal", "source": "manual",
+            "source_id": None, "tags": [], "links": [],
+            "title": created_dt.date().isoformat(),
+        }
+        pc.write_entry(journal_path, jfm, f"# {created_dt.date().isoformat()}\n\n")
+    with open(journal_path, "r", encoding="utf-8") as f:
+        existing = f.read()
+    with open(journal_path, "w", encoding="utf-8") as f:
+        f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
+    os.remove(path)
+    print(f"redirected -> {os.path.relpath(journal_path, root)}")
+    run_script("index_fts.py")
+    return 0
+
+
+def _inbox_discard(root, path):
+    name = os.path.basename(path)
+    os.remove(path)
+    print(f"discarded {name}")
+    run_script("index_fts.py")
+    return 0
+
+
+def _inbox_find(inbox_dir, item_id):
+    """(path, fm, body) for the inbox item with this id, or None. Inbox items
+    are addressed by id here, same as kb tag/kb link, not by filename."""
+    if not os.path.isdir(inbox_dir):
+        return None
+    for name in os.listdir(inbox_dir):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(inbox_dir, name)
+        try:
+            fm, body = pc.read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("id") == item_id:
+            return path, fm, body
+    return None
+
+
 def _inbox_interactive(root, items):
     """fzf-based triage: select an item (live content preview), then promote
     (choose a Diataxis type, moved there with extension cleared), redirect
@@ -439,46 +541,16 @@ def _inbox_interactive(root, items):
         target_type = _fzf_select(pc.CORE_TYPES, "type> ", "promote to which Diataxis type?")
         if target_type is None:
             return 0
-        fm["type"] = target_type
-        fm["extension"] = None
-        fm["updated"] = pc.now_iso()
-        new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{fm['id']}-{pc.slugify(title)}.md")
-        pc.write_entry(new_path, fm, body)
-        os.remove(chosen_path)
-        print(f"promoted -> {os.path.relpath(new_path, root)}")
-
+        return _inbox_promote(root, chosen_path, fm, body, target_type)
     elif choice == "redirect":
-        created_dt = pc.parse_iso(fm.get("created")) or datetime.now().astimezone()
-        journal_dir = os.path.join(root, "journal", f"{created_dt.year:04d}", f"{created_dt.month:02d}")
-        journal_path = os.path.join(journal_dir, f"{created_dt.date().isoformat()}.md")
-        if not os.path.exists(journal_path):
-            all_ids = pc.collect_existing_ids(root)
-            jid = pc.gen_id(all_ids, dt=created_dt)
-            now_s = pc.now_iso()
-            jfm = {
-                "id": jid, "created": now_s, "updated": now_s,
-                "type": "journal", "extension": "journal", "source": "manual",
-                "source_id": None, "tags": [], "links": [],
-                "title": created_dt.date().isoformat(),
-            }
-            pc.write_entry(journal_path, jfm, f"# {created_dt.date().isoformat()}\n\n")
-        with open(journal_path, "r", encoding="utf-8") as f:
-            existing = f.read()
-        with open(journal_path, "w", encoding="utf-8") as f:
-            f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
-        os.remove(chosen_path)
-        print(f"redirected -> {os.path.relpath(journal_path, root)}")
-
+        return _inbox_redirect(root, chosen_path, fm, body)
     elif choice == "discard":
-        os.remove(chosen_path)
-        print(f"discarded {chosen_name}")
-
-    run_script("index_fts.py")
+        return _inbox_discard(root, chosen_path)
     return 0
 
 
 def cmd_triage(args):
-    return run_script("triage_report.py")
+    return run_script("triage_report.py", ["--json"] if args.json else [])
 
 
 def cmd_sync(args):
@@ -1224,19 +1296,29 @@ def main():
         "inbox", help="list inbox contents with age",
         description="List inbox contents with age.",
         epilog=(
-            "if fzf is installed and you're in a real terminal, this opens an "
-            "interactive picker by default: select an item (with a live preview), "
-            "then promote (to a Diataxis type), redirect (into that day's journal "
-            "entry), or discard -- resolving it, not just reporting on it. "
-            "--plain always skips it."
+            "with no arguments, and if fzf is installed and you're in a real terminal, "
+            "this opens an interactive picker by default: select an item (with a live "
+            "preview), then promote (to a Diataxis type), redirect (into that day's "
+            "journal entry), or discard -- resolving it, not just reporting on it. "
+            "--plain always skips it, falling back to a plain list.\n\n"
+            "for scripted/non-interactive use (no picker available), resolve one item "
+            "directly by id instead:\n"
+            "  kb inbox <id> promote how-to     move into core content as that type\n"
+            "  kb inbox <id> redirect           append into that day's journal entry\n"
+            "  kb inbox <id> discard            delete it outright"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("id", nargs="?", default=None, help="inbox item id -- with an action, resolve it non-interactively")
+    p.add_argument("action", nargs="?", choices=["promote", "redirect", "discard"], default=None)
+    p.add_argument("type", nargs="?", choices=pc.CORE_TYPES, default=None,
+                    help="Diataxis type, required for `promote`")
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("triage", help="flag inbox items overdue for triage")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_triage)
 
     p = sub.add_parser("sync", help="pull in usememos / GitLab / beads")
