@@ -328,7 +328,12 @@ def update_status(fetch=False):
 
 
 def cmd_setup(args):
-    root = pc.get_repo_root()
+    # root is optional: --install (and the tool/sync checks below) don't need a data
+    # repo at all -- only the hook/index/bd/secrets steps do.
+    try:
+        root = pc.get_repo_root()
+    except SystemExit:
+        root = None
     ok, todo = [], []
 
     # 0. install kb itself onto PATH (opt-in via --install [DIR])
@@ -353,64 +358,69 @@ def cmd_setup(args):
                 ok.append(f"installed kb -> {target} (not yet on PATH)")
                 todo.append(f'add this to your shell profile: export PATH="{install_dir}:$PATH"')
 
-    # 1. pre-commit hook -- generated directly (not a symlinked template) since it
-    # must hardcode this machine's path to the tool install, which lives in a
-    # separate repo from the data repo the hook runs in.
-    git_dir = os.path.join(root, ".git")
-    if not os.path.isdir(git_dir):
-        todo.append("not a git repo (or .git not found here) -- pre-commit hook skipped")
-    else:
-        hook_content, _validate_path = hook_expected_content()
-        hook_path, existing = read_hook(root)
-        if existing == hook_content:
-            ok.append("pre-commit hook already installed")
-        elif existing is not None and HOOK_MARKER not in existing:
-            todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
-        else:
-            os.makedirs(os.path.dirname(hook_path), exist_ok=True)
-            if os.path.lexists(hook_path):  # e.g. a stale/broken symlink from an older kb setup
-                os.remove(hook_path)
-            with open(hook_path, "w", encoding="utf-8") as f:
-                f.write(hook_content)
-            os.chmod(hook_path, 0o755)
-            ok.append("installed pre-commit hook" if existing is None else "refreshed pre-commit hook path")
-
-    # 2. FTS index
-    db_path = index_status(root)
-    full = not os.path.exists(db_path)
-    rc = run_script("index_fts.py", ["--full"] if full else [])
-    ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
-
-    # 3. local bd store
     tools = tool_status()
-    if tools["bd"]:
-        store_exists, _git_excluded = bd_store_status(root)
-        if store_exists:
-            ok.append("local bd (beads) store already initialized")
-        else:
-            result = subprocess.run(
-                ["bd", "init", "--stealth", "--non-interactive"],
-                cwd=root, capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                ok.append("initialized a local bd store (--stealth: excluded from git)")
-            else:
-                todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
-    else:
-        todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
 
-    # 4. secrets (sops), informational only -- never touch/create real secrets ourselves
-    sops_configured, secrets_exists = secrets_status(root)
-    if sops_configured:
-        if secrets_exists:
-            ok.append(".pkb/secrets.enc.env already set up")
-        elif tools["sops"]:
-            example_path = os.path.join(SCRIPT_DIR, "..", "templates", "secrets.env.example")
-            todo.append("run `sops .pkb/secrets.enc.env` to create encrypted memos/gitlab credentials "
-                        f"(see {os.path.normpath(example_path)})")
+    if root is None:
+        todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to also set up the "
+                     "pre-commit hook, search index, and local bd store")
+    else:
+        # 1. pre-commit hook -- generated directly (not a symlinked template) since it
+        # must hardcode this machine's path to the tool install, which lives in a
+        # separate repo from the data repo the hook runs in.
+        git_dir = os.path.join(root, ".git")
+        if not os.path.isdir(git_dir):
+            todo.append("not a git repo (or .git not found here) -- pre-commit hook skipped")
         else:
-            todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
-                        "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
+            hook_content, _validate_path = hook_expected_content()
+            hook_path, existing = read_hook(root)
+            if existing == hook_content:
+                ok.append("pre-commit hook already installed")
+            elif existing is not None and HOOK_MARKER not in existing:
+                todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
+            else:
+                os.makedirs(os.path.dirname(hook_path), exist_ok=True)
+                if os.path.lexists(hook_path):  # e.g. a stale/broken symlink from an older kb setup
+                    os.remove(hook_path)
+                with open(hook_path, "w", encoding="utf-8") as f:
+                    f.write(hook_content)
+                os.chmod(hook_path, 0o755)
+                ok.append("installed pre-commit hook" if existing is None else "refreshed pre-commit hook path")
+
+        # 2. FTS index
+        db_path = index_status(root)
+        full = not os.path.exists(db_path)
+        rc = run_script("index_fts.py", ["--full"] if full else [])
+        ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
+
+        # 3. local bd store
+        if tools["bd"]:
+            store_exists, _git_excluded = bd_store_status(root)
+            if store_exists:
+                ok.append("local bd (beads) store already initialized")
+            else:
+                result = subprocess.run(
+                    ["bd", "init", "--stealth", "--non-interactive"],
+                    cwd=root, capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    ok.append("initialized a local bd store (--stealth: excluded from git)")
+                else:
+                    todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
+        else:
+            todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
+
+        # 4. secrets (sops), informational only -- never touch/create real secrets ourselves
+        sops_configured, secrets_exists = secrets_status(root)
+        if sops_configured:
+            if secrets_exists:
+                ok.append(".pkb/secrets.enc.env already set up")
+            elif tools["sops"]:
+                example_path = os.path.join(SCRIPT_DIR, "..", "templates", "secrets.env.example")
+                todo.append("run `sops .pkb/secrets.enc.env` to create encrypted memos/gitlab credentials "
+                            f"(see {os.path.normpath(example_path)})")
+            else:
+                todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
+                            "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
 
     # 5. glab (required for GitLab sync)
     if tools["glab"]:
@@ -450,82 +460,92 @@ def cmd_setup(args):
 def cmd_doctor(args):
     """Read-only health check -- reuses the same detection helpers as `kb setup`
     but never writes anything, and adds a few deeper checks setup doesn't do."""
-    root = pc.get_repo_root()
+    # root is optional: tool-level checks (glab/rg/fzf, pkb-cli's own update status)
+    # don't need a data repo -- only frontmatter/hook/index/bd/secrets/cursors do.
+    try:
+        root = pc.get_repo_root()
+    except SystemExit:
+        root = None
     ok, todo = [], []
 
-    # frontmatter integrity (reuses validate_frontmatter.py itself)
-    result = subprocess.run(
-        [sys.executable, os.path.join(SCRIPT_DIR, "validate_frontmatter.py")],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        ok.append("frontmatter validates cleanly")
+    if root is None:
+        todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to check "
+                     "frontmatter, the pre-commit hook, the search index, and cursors.json")
     else:
-        todo.append("frontmatter validation is failing -- run `kb validate` for details")
-
-    # pre-commit hook: installed, ours, matches what we'd generate now, and points
-    # at a file that still exists (setup doesn't check that last part)
-    hook_content, _validate_path = hook_expected_content()
-    hook_path, existing = read_hook(root)
-    if existing is None:
-        todo.append("no pre-commit hook installed -- run `kb setup`")
-    elif HOOK_MARKER not in existing:
-        todo.append(f"{os.path.relpath(hook_path, root)} exists but isn't kb-managed")
-    else:
-        hooked_path = hook_managed_validate_path(existing)
-        if hooked_path and not os.path.exists(hooked_path):
-            todo.append(f"pre-commit hook points at a missing file ({hooked_path}) -- "
-                        f"the pkb-cli checkout that wrote it may have moved; run `kb setup`")
-        elif existing != hook_content:
-            todo.append("pre-commit hook is stale (points at a different pkb-cli install/interpreter "
-                        "than this one) -- run `kb setup`")
+        # frontmatter integrity (reuses validate_frontmatter.py itself)
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "validate_frontmatter.py")],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok.append("frontmatter validates cleanly")
         else:
-            ok.append("pre-commit hook is current")
+            todo.append("frontmatter validation is failing -- run `kb validate` for details")
 
-    # FTS index: present, and its row count matches the number of files on disk
-    # (a mismatch means something changed without a reindex)
-    db_path = index_status(root)
-    if not os.path.exists(db_path):
-        todo.append("no search index -- run `kb index --full`")
-    else:
-        import sqlite3
-        file_count = sum(1 for _ in pc.iter_markdown_files(root))
-        conn = sqlite3.connect(db_path)
-        try:
-            indexed_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        except sqlite3.OperationalError:
-            indexed_count = None
-        conn.close()
-        if indexed_count is None:
-            todo.append(f"{os.path.relpath(db_path, root)} exists but doesn't look like a kb index -- "
-                        f"run `kb index --full`")
-        elif indexed_count != file_count:
-            todo.append(f"search index is stale ({indexed_count} indexed vs {file_count} files on disk) "
-                        f"-- run `kb index`")
+        # pre-commit hook: installed, ours, matches what we'd generate now, and points
+        # at a file that still exists (setup doesn't check that last part)
+        hook_content, _validate_path = hook_expected_content()
+        hook_path, existing = read_hook(root)
+        if existing is None:
+            todo.append("no pre-commit hook installed -- run `kb setup`")
+        elif HOOK_MARKER not in existing:
+            todo.append(f"{os.path.relpath(hook_path, root)} exists but isn't kb-managed")
         else:
-            ok.append(f"search index is current ({indexed_count} files)")
+            hooked_path = hook_managed_validate_path(existing)
+            if hooked_path and not os.path.exists(hooked_path):
+                todo.append(f"pre-commit hook points at a missing file ({hooked_path}) -- "
+                            f"the pkb-cli checkout that wrote it may have moved; run `kb setup`")
+            elif existing != hook_content:
+                todo.append("pre-commit hook is stale (points at a different pkb-cli install/interpreter "
+                            "than this one) -- run `kb setup`")
+            else:
+                ok.append("pre-commit hook is current")
+
+        # FTS index: present, and its row count matches the number of files on disk
+        # (a mismatch means something changed without a reindex)
+        db_path = index_status(root)
+        if not os.path.exists(db_path):
+            todo.append("no search index -- run `kb index --full`")
+        else:
+            import sqlite3
+            file_count = sum(1 for _ in pc.iter_markdown_files(root))
+            conn = sqlite3.connect(db_path)
+            try:
+                indexed_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            except sqlite3.OperationalError:
+                indexed_count = None
+            conn.close()
+            if indexed_count is None:
+                todo.append(f"{os.path.relpath(db_path, root)} exists but doesn't look like a kb index -- "
+                            f"run `kb index --full`")
+            elif indexed_count != file_count:
+                todo.append(f"search index is stale ({indexed_count} indexed vs {file_count} files on disk) "
+                            f"-- run `kb index`")
+            else:
+                ok.append(f"search index is current ({indexed_count} files)")
 
     # local bd store: present and actually git-excluded
     tools = tool_status()
-    if tools["bd"]:
-        store_exists, git_excluded = bd_store_status(root)
-        if not store_exists:
-            todo.append("no local bd store -- run `kb setup`")
-        elif not git_excluded:
-            todo.append(".beads/ exists but isn't in .git/info/exclude -- it may get committed accidentally")
+    if root is not None:
+        if tools["bd"]:
+            store_exists, git_excluded = bd_store_status(root)
+            if not store_exists:
+                todo.append("no local bd store -- run `kb setup`")
+            elif not git_excluded:
+                todo.append(".beads/ exists but isn't in .git/info/exclude -- it may get committed accidentally")
+            else:
+                ok.append("local bd store is present and git-excluded")
         else:
-            ok.append("local bd store is present and git-excluded")
-    else:
-        todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking")
+            todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking")
 
-    # secrets
-    sops_configured, secrets_exists = secrets_status(root)
-    if sops_configured and not secrets_exists:
-        todo.append("no .pkb/secrets.enc.env yet -- run `sops .pkb/secrets.enc.env` if you sync memos/gitlab")
-    elif sops_configured:
-        ok.append(".pkb/secrets.enc.env is present")
+        # secrets
+        sops_configured, secrets_exists = secrets_status(root)
+        if sops_configured and not secrets_exists:
+            todo.append("no .pkb/secrets.enc.env yet -- run `sops .pkb/secrets.enc.env` if you sync memos/gitlab")
+        elif sops_configured:
+            ok.append(".pkb/secrets.enc.env is present")
 
-    # glab / rg / fzf
+    # glab / rg / fzf -- not data-repo-specific, always checked
     if tools["glab"] and not tools["glab_auth"]:
         todo.append("glab is installed but not authenticated -- run `glab auth login`")
     elif not tools["glab"]:
@@ -535,19 +555,20 @@ def cmd_doctor(args):
         todo.append(f"{'/'.join(missing_search_tools)} not found (optional, Tier 1 search)")
 
     # cursors.json sanity
-    cursors = pc.load_cursors(root)
-    now = datetime.now().astimezone()
-    for source, fields in cursors.items():
-        for key, value in (fields or {}).items():
-            if value is None:
-                continue
-            dt = pc.parse_iso(value)
-            if dt is None:
-                todo.append(f"cursors.json: {source}.{key} = {value!r} doesn't parse as a timestamp")
-            elif dt > now:
-                todo.append(f"cursors.json: {source}.{key} = {value} is in the future")
-    if not any("cursors.json" in t for t in todo):
-        ok.append("cursors.json looks sane")
+    if root is not None:
+        cursors = pc.load_cursors(root)
+        now = datetime.now().astimezone()
+        for source, fields in cursors.items():
+            for key, value in (fields or {}).items():
+                if value is None:
+                    continue
+                dt = pc.parse_iso(value)
+                if dt is None:
+                    todo.append(f"cursors.json: {source}.{key} = {value!r} doesn't parse as a timestamp")
+                elif dt > now:
+                    todo.append(f"cursors.json: {source}.{key} = {value} is in the future")
+        if not any("cursors.json" in t for t in todo):
+            ok.append("cursors.json looks sane")
 
     # pkb-cli version, checked against whatever was last fetched -- no network call
     # here (that's `kb update`'s job), so this can go stale but never blocks/slows
