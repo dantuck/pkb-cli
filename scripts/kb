@@ -277,6 +277,8 @@ def cmd_setup(args):
             todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
         else:
             os.makedirs(os.path.dirname(hook_path), exist_ok=True)
+            if os.path.lexists(hook_path):  # e.g. a stale/broken symlink from an older kb setup
+                os.remove(hook_path)
             with open(hook_path, "w", encoding="utf-8") as f:
                 f.write(hook_content)
             os.chmod(hook_path, 0o755)
@@ -311,8 +313,9 @@ def cmd_setup(args):
         if os.path.exists(secrets_path):
             ok.append(".pkb/secrets.enc.env already set up")
         elif shutil.which("sops"):
+            example_path = os.path.join(SCRIPT_DIR, "..", "templates", "secrets.env.example")
             todo.append("run `sops .pkb/secrets.enc.env` to create encrypted memos/gitlab credentials "
-                        "(see .pkb/secrets.env.example)")
+                        f"(see {os.path.normpath(example_path)})")
         else:
             todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
                         "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
