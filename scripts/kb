@@ -852,6 +852,25 @@ def cmd_setup(args):
                 ok.append(f"installed kb -> {target} (not yet on PATH)")
                 todo.append(f'add this to your shell profile: export PATH="{install_dir}:$PATH"')
 
+    # 0b. install the bundled Claude Code skill (opt-in via --install-skill [DIR]).
+    # A symlink, not a copy -- Claude Code follows a skill-directory symlink and
+    # reads SKILL.md from the target, so this repo stays the single source of
+    # truth and a `kb update` picks up any skill changes automatically, the same
+    # reasoning as symlinking the kb binary itself above.
+    if args.install_skill is not None:
+        skill_src = os.path.abspath(os.path.join(TOOL_ROOT, "skills", "kb"))
+        skill_dir = os.path.expanduser(args.install_skill) if args.install_skill else os.path.expanduser("~/.claude/skills")
+        target = os.path.join(skill_dir, "kb")
+        if os.path.islink(target) and os.readlink(target) == skill_src:
+            ok.append(f"kb skill already installed at {target}")
+        elif os.path.lexists(target):
+            todo.append(f"--install-skill: {target} already exists and isn't this repo's skill -- remove it "
+                        f"or pass a different --install-skill <dir>")
+        else:
+            os.makedirs(skill_dir, exist_ok=True)
+            os.symlink(skill_src, target)
+            ok.append(f"installed kb skill -> {target}")
+
     tools = tool_status()
 
     if root is None:
@@ -1281,6 +1300,9 @@ def main():
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
                     help="also symlink kb onto PATH (auto-detects ~/.local/bin, /opt/homebrew/bin, "
                          "/usr/local/bin, or pass a specific DIR)")
+    p.add_argument("--install-skill", nargs="?", const="", default=None, metavar="DIR",
+                    help="also symlink the bundled Claude Code skill into ~/.claude/skills "
+                         "(or a specific DIR)")
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")

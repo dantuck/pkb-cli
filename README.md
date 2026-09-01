@@ -18,6 +18,19 @@ curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | b
 Clones this repo to `~/pkb-cli` (override with `$PKB_CLI_HOME`) and symlinks `kb`
 onto your PATH. Safe to re-run — pulls latest and re-runs setup idempotently.
 
+### Claude Code skill (optional)
+
+This repo bundles a [Claude Code skill](https://code.claude.com/docs/en/skills)
+at [skills/kb/](skills/kb/SKILL.md) that teaches Claude how and when to use `kb`
+on your behalf (search, journal, inbox triage, TODOs, sync). Install it with:
+
+```bash
+kb setup --install-skill
+```
+
+Symlinks `skills/kb` into `~/.claude/skills/kb` (or pass a directory to install
+elsewhere) — a symlink, not a copy, so `kb update` keeps it current automatically.
+
 No external Python packages are required — everything runs on the stdlib
 (`sqlite3` for FTS5, no `pyyaml`).
 
@@ -57,7 +70,8 @@ kb bd close kb-nux                # e.g. show/close/comment/create/update -- all
 kb validate                     # frontmatter/id/link checks (also runs pre-commit)
 kb index                        # incremental reindex after edits
 kb sync all                     # pull in usememos / GitLab / beads
-kb setup [--install [DIR]]      # onboarding: hook, index, bd store, and (with --install) PATH
+kb setup [--install [DIR]] [--install-skill [DIR]]   # onboarding: hook, index, bd store,
+                                 # PATH (--install), Claude Code skill (--install-skill)
 kb doctor                       # diagnose issues -- read-only, never writes anything
 ```
 
@@ -100,6 +114,7 @@ contract.
 ```
 pkb-cli/
   scripts/      the kb CLI and everything it dispatches to
+  skills/kb/    Claude Code skill (SKILL.md), installed via `kb setup --install-skill`
   templates/    schema.sql (loaded at runtime, never copied into a data repo)
                 and secrets.env.example (documentation only)
   docs/         spec.md, search.md
