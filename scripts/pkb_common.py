@@ -7,6 +7,8 @@ import copy
 import json
 import os
 import re
+import shlex
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -403,3 +405,118 @@ def save_cursors(cursors, root=None):
 def fail(msg):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# kb's own machine-local preferences (currently just: editor). Deliberately
+# separate from a data repo's .pkb/config.yml -- that file is committed and
+# shared across every machine/clone, but which editor to spawn is a per-machine
+# preference that has nothing to do with any particular data repo.
+# ---------------------------------------------------------------------------
+
+def kb_config_path():
+    config_dir = os.path.expanduser(os.environ.get("KB_CONFIG_DIR", "~/.config/kb"))
+    return os.path.join(config_dir, "config.json")
+
+
+def load_kb_config():
+    path = kb_config_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_kb_config(data):
+    path = kb_config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def split_editor(editor):
+    """Tokenize an editor command string into argv parts. Returns None if the
+    string is empty/whitespace, or can't be tokenized at all (e.g. unbalanced
+    quotes) -- callers should treat that the same as "no editor configured"
+    rather than letting shlex.split's ValueError (or an IndexError from
+    indexing an empty result) escape as a raw traceback."""
+    if not editor or not editor.strip():
+        return None
+    try:
+        parts = shlex.split(editor)
+    except ValueError:
+        return None
+    return parts or None
+
+
+def resolve_editor_argv(editor):
+    """argv to spawn for `editor`, or None if it can't be resolved at all.
+
+    Prefers shlex tokenization so multi-word commands work ('code -w'), but
+    falls back to treating the whole string as one literal path when the
+    tokenized first word isn't on PATH and the untouched string is itself a
+    real path on disk -- handles an editor set to a single path that contains
+    a literal space (e.g. a macOS .app bundle path), which shlex would
+    otherwise (mis)split into two tokens.
+    """
+    parts = split_editor(editor)
+    if parts is None:
+        return None
+    if shutil.which(parts[0]) is None and os.path.exists(editor):
+        return [editor]
+    return parts
+
+
+def get_editor(prompt_if_missing=True):
+    """Resolve the editor kb should spawn: $EDITOR, then the persisted
+    preference in kb_config_path(), then -- only in a real terminal -- prompt
+    for one and save it so this only has to happen once. Returns None if
+    nothing is configured and prompting isn't possible or is declined.
+    """
+    editor = os.environ.get("EDITOR")
+    if editor:
+        return editor
+
+    cfg = load_kb_config()
+    if cfg.get("editor"):
+        return cfg["editor"]
+
+    if not prompt_if_missing or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+
+    print("$EDITOR isn't set. Enter an editor command for kb to use (e.g. vim, nano, 'code -w'),")
+    print("or leave blank to skip for now:")
+    try:
+        editor = input("editor> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not editor:
+        return None
+    if split_editor(editor) is None:
+        print(f"'{editor}' doesn't look like a valid editor command -- not saved.")
+        return None
+
+    cfg["editor"] = editor
+    save_kb_config(cfg)
+    print(f"saved to {kb_config_path()} -- change it any time with `kb config editor <cmd>`.")
+    warn_if_editor_missing(editor)
+    return editor
+
+
+def warn_if_editor_missing(editor):
+    """Best-effort PATH check for a just-saved/set editor command. Only a warning,
+    never blocks saving -- the shell that later runs kb may have a different PATH
+    than this one (e.g. a GUI editor wrapper only present in an interactive shell)."""
+    argv = resolve_editor_argv(editor)
+    if argv is None:
+        return  # unparsable/empty -- cmd_config already rejects this before saving
+    exe = argv[0]
+    if not shutil.which(exe) and not os.path.exists(exe):
+        print(f"note: '{exe}' isn't on PATH right now -- kb will fail to open it until that's fixed.")

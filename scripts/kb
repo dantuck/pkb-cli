@@ -110,11 +110,17 @@ def _search_interactive(root, rows):
     if choice == "view":
         subprocess.run(["cat", chosen_path])
     elif choice == "edit":
-        editor = os.environ.get("EDITOR")
-        if editor:
-            subprocess.run([editor, chosen_path])
+        editor = pc.get_editor()
+        parts = pc.resolve_editor_argv(editor) if editor else None
+        if not parts:
+            print(f"no editor available -- set $EDITOR or run `kb config editor <cmd>` -- {chosen_path}",
+                  file=sys.stderr)
         else:
-            print(f"$EDITOR not set -- {chosen_path}")
+            try:
+                subprocess.run(parts + [chosen_path])
+            except FileNotFoundError:
+                print(f"error: editor '{parts[0]}' not found on PATH -- fix it with `kb config editor <cmd>`",
+                      file=sys.stderr)
     elif choice == "links":
         show_links(root, chosen_id)
     return 0
@@ -495,7 +501,35 @@ def cmd_secrets(args):
     # from (the whole point of resolving `root` in the first place). Re-editing an
     # existing file also needs the *private* key (sops_key_env), not just the
     # public recipient in .sops.yaml -- only first-time creation gets away without it.
-    os.execvpe("sops", ["sops", "--config", sops_config, secrets_path], sops_key_env())
+    env = sops_key_env()
+    if "EDITOR" not in env:
+        editor = pc.get_editor()
+        if editor:
+            env["EDITOR"] = editor
+    os.execvpe("sops", ["sops", "--config", sops_config, secrets_path], env)
+
+
+def cmd_config(args):
+    if args.value is None:
+        env_editor = os.environ.get("EDITOR")
+        if env_editor:
+            print(f"editor: {env_editor}  (from $EDITOR)")
+        else:
+            saved = pc.load_kb_config().get("editor")
+            print(f"editor: {saved}  (saved in {pc.kb_config_path()})" if saved else "editor: not set")
+        return 0
+
+    if pc.split_editor(args.value) is None:
+        print(f"error: '{args.value}' doesn't look like a usable editor command "
+              f"(empty, or can't be parsed -- check quoting)", file=sys.stderr)
+        return 1
+
+    cfg = pc.load_kb_config()
+    cfg["editor"] = args.value
+    pc.save_kb_config(cfg)
+    print(f"saved -- kb will use '{args.value}' whenever $EDITOR isn't set")
+    pc.warn_if_editor_missing(args.value)
+    return 0
 
 
 def find_install_dir():
@@ -1046,6 +1080,16 @@ def main():
 
     p = sub.add_parser("secrets", help="edit encrypted memos/gitlab credentials via sops")
     p.set_defaults(func=cmd_secrets)
+
+    p = sub.add_parser(
+        "config", help="view or set kb's own machine-local preferences (currently: editor)",
+        description="View or set kb's own machine-local preferences (currently just: editor). "
+                     "Separate from a data repo's .pkb/config.yml, which is committed and shared.",
+    )
+    p.add_argument("key", choices=["editor"], help="which preference")
+    p.add_argument("value", nargs="?", default=None, metavar="VALUE",
+                    help="new value to save (omit to show the current one and its source)")
+    p.set_defaults(func=cmd_config)
 
     p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
     p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
