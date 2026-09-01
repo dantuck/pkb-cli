@@ -182,6 +182,7 @@ def cmd_new(args):
     path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{pc.slugify(args.title)}.md")
     body = f"# {args.title}\n\n{args.body.strip()}\n" if args.body else f"# {args.title}\n\n"
     pc.write_entry(path, fm, body)
+    run_script("index_fts.py")
     print(path)
     return 0
 
