@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
@@ -154,16 +155,23 @@ def cmd_new(args):
     return 0
 
 
-def cmd_journal(args):
-    root = pc.get_repo_root()
-    if args.date in (None, "today"):
-        target = datetime.now().date()
-    else:
-        target = datetime.strptime(args.date, "%Y-%m-%d").date()
+def _looks_like_date(text):
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
 
+
+def _journal_path(root, target):
     dir_path = os.path.join(root, "journal", f"{target.year:04d}", f"{target.month:02d}")
-    file_path = os.path.join(dir_path, f"{target.isoformat()}.md")
+    return os.path.join(dir_path, f"{target.isoformat()}.md")
 
+
+def _ensure_journal_entry(root, target):
+    """Create target's journal file (with frontmatter) if it doesn't exist yet.
+    Returns its path either way."""
+    file_path = _journal_path(root, target)
     if not os.path.exists(file_path):
         all_ids = pc.collect_existing_ids(root)
         now = pc.now_iso()
@@ -181,12 +189,180 @@ def cmd_journal(args):
             "title": target.isoformat(),
         }
         pc.write_entry(file_path, fm, f"# {target.isoformat()}\n\n")
+    return file_path
 
-    editor = os.environ.get("EDITOR")
-    if editor:
-        os.execvp(editor, [editor, file_path])
-    else:
-        print(file_path)
+
+def _open_in_editor(file_path):
+    editor = pc.get_editor()
+    parts = pc.resolve_editor_argv(editor) if editor else None
+    if not parts:
+        print(f"no editor available -- set $EDITOR or run `kb config editor <cmd>` -- {file_path}",
+              file=sys.stderr)
+        return
+    sys.stdout.flush()  # os.execvp below replaces this process without flushing buffered stdout
+    try:
+        os.execvp(parts[0], parts + [file_path])  # replaces this process; nothing after this runs
+    except FileNotFoundError:
+        print(f"error: editor '{parts[0]}' not found on PATH -- fix it with `kb config editor <cmd>` "
+              f"-- {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+
+def list_journal_entries(root, limit=None):
+    """(date_str, path) for journal files, newest first.
+
+    Walks journal/YYYY/MM/ in descending order and stops as soon as `limit`
+    entries are collected, instead of always listing every entry ever written
+    just to keep the most recent few -- callers like cmd_journal's "recent
+    entries" hint only ever want a handful.
+    """
+    journal_dir = os.path.join(root, "journal")
+    if not os.path.isdir(journal_dir):
+        return []
+
+    def _subdirs_desc(path):
+        return sorted((d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))), reverse=True)
+
+    entries = []
+    for year in _subdirs_desc(journal_dir):
+        year_dir = os.path.join(journal_dir, year)
+        for month in _subdirs_desc(year_dir):
+            month_dir = os.path.join(year_dir, month)
+            names = sorted((n for n in os.listdir(month_dir) if n.endswith(".md")), reverse=True)
+            for name in names:
+                entries.append((name[:-3], os.path.join(month_dir, name)))
+                if limit and len(entries) >= limit:
+                    return entries
+    return entries
+
+
+def _journal_add(root, target, text):
+    """Append text to target's journal entry, creating it (with frontmatter)
+    first if needed. No editor involved -- for jotting something down without
+    leaving the shell. A single line becomes a timestamped bullet; multiple
+    lines (e.g. from _journal_add_editor) become a timestamped heading block,
+    same shape `kb inbox`'s redirect action already uses."""
+    text = text.strip("\n")
+    if not text:
+        print("empty -- nothing added")
+        return 0
+
+    file_path = _ensure_journal_entry(root, target)
+    fm, body = pc.read_entry(file_path)
+    stamp = datetime.now().strftime("%H:%M")
+    block = f"## {stamp}\n\n{text}\n" if "\n" in text else f"- {stamp}  {text}\n"
+    body = body.rstrip("\n") + f"\n\n{block}"
+    fm["updated"] = pc.now_iso()
+    pc.write_entry(file_path, fm, body)
+    print(f"added -> {os.path.relpath(file_path, root)}")
+    return 0
+
+
+def _journal_add_editor(root, target):
+    """Open a blank scratch buffer in $EDITOR for multiline input, then append
+    whatever was written to target's journal entry -- like `git commit` with no
+    -m, but scoped to a throwaway temp file so the entry's frontmatter (and any
+    earlier entries in the file) never has to be touched or scrolled past."""
+    editor = pc.get_editor()
+    parts = pc.resolve_editor_argv(editor) if editor else None
+    if not parts:
+        print("no editor available -- set $EDITOR or run `kb config editor <cmd>`", file=sys.stderr)
+        return 1
+
+    fd, tmp_path = tempfile.mkstemp(prefix="kb-journal-", suffix=".md")
+    os.close(fd)
+    try:
+        try:
+            subprocess.run(parts + [tmp_path], check=True)
+        except FileNotFoundError:
+            print(f"error: editor '{parts[0]}' not found on PATH -- fix it with `kb config editor <cmd>`",
+                  file=sys.stderr)
+            return 1
+        except subprocess.CalledProcessError:
+            print("editor exited with an error -- nothing added", file=sys.stderr)
+            return 1
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    finally:
+        os.remove(tmp_path)
+
+    return _journal_add(root, target, text)
+
+
+def cmd_journal(args):
+    root = pc.get_repo_root()
+    explicit_date = args.date not in (None, "today")
+    target = (datetime.now().date() if args.date in (None, "today")
+              else datetime.strptime(args.date, "%Y-%m-%d").date())
+
+    if args.add is not None:
+        if args.add == "":  # -m/--add with no TEXT: open a scratch buffer instead
+            return _journal_add_editor(root, target)
+        if args.date is None and _looks_like_date(args.add):
+            # `-m` typed before DATE: argparse's nargs='?' greedily consumes the
+            # date token as -m's own TEXT instead of leaving it for the `date`
+            # positional. Silently writing to today under those circumstances
+            # would put the note on the wrong day with no indication anything
+            # went wrong -- refuse instead, and say what order actually works.
+            print(f"error: `-m {args.add}` was parsed as the note text, not a date -- "
+                  f"put the date first: `kb journal {args.add} -m ...`", file=sys.stderr)
+            return 1
+        return _journal_add(root, target, args.add)
+
+    if not explicit_date:
+        # only the default "today" invocation gets the interactive picker -- an
+        # explicit date means the user already knows exactly what they want open.
+        interactive = not args.plain and shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+        if interactive:
+            return _journal_interactive(root)
+
+    file_path = _ensure_journal_entry(root, target)
+
+    if not explicit_date:
+        # no fzf/terminal for a full picker -- still surface nearby entries for
+        # context instead of silently jumping straight into today's.
+        recent = [(d, p) for d, p in list_journal_entries(root, limit=6) if d != target.isoformat()][:5]
+        if recent:
+            print("recent entries:")
+            for date_str, path in recent:
+                print(f"  {date_str}  {os.path.relpath(path, root)}")
+            print()
+
+    _open_in_editor(file_path)
+    return 0
+
+
+def _journal_interactive(root):
+    """fzf-based picker over journal entries: pick one (with a live content
+    preview) to open in $EDITOR. Today is included even if it doesn't exist yet
+    (tagged "new"), so this always offers a way to start today's entry too --
+    same two-stage-friendly shape as the other pickers, minus the action step,
+    since there's only one thing to do with a journal entry: open it."""
+    today = datetime.now().date()
+    today_iso = today.isoformat()
+    entries = list_journal_entries(root)
+    if today_iso not in {d for d, _ in entries}:
+        entries = [(today_iso, _journal_path(root, today))] + entries
+
+    lines = []
+    for date_str, path in entries:
+        tag = "new" if not os.path.exists(path) else ""
+        lines.append(f"{date_str}\t{tag}\t{path}")
+
+    preview_cmd = "cat {3} 2>/dev/null || echo '(no entry yet)'"
+    picker = subprocess.run(
+        ["fzf", "--delimiter", "\t", "--with-nth", "1,2",
+         "--preview", preview_cmd, "--preview-window", "right:60%",
+         "--prompt", "journal> ", "--header", "enter: open this entry (created if new)"],
+        input="\n".join(lines), text=True, stdout=subprocess.PIPE,
+    )
+    if picker.returncode != 0 or not picker.stdout.strip():
+        return 0  # cancelled
+
+    date_str = picker.stdout.split("\t", 1)[0].strip()
+    target = datetime.strptime(date_str, "%Y-%m-%d").date()
+    file_path = _ensure_journal_entry(root, target)
+    _open_in_editor(file_path)
     return 0
 
 
@@ -1010,9 +1186,33 @@ def main():
     p.add_argument("title", help="entry title")
     p.set_defaults(func=cmd_new)
 
-    p = sub.add_parser("journal", help="open or create a journal entry")
+    p = sub.add_parser(
+        "journal", help="open or create a journal entry",
+        description="Open or create a journal entry.",
+        epilog=(
+            "with no DATE (the default), and if fzf is installed and you're in a "
+            "real terminal, this opens an interactive picker over past entries "
+            "(today included, created on selection if it doesn't exist yet). "
+            "--plain always skips it and opens/creates today's entry directly, "
+            "printing a few nearby entries for context.\n\n"
+            "-m/--add TEXT appends a timestamped line instead of opening the entry "
+            "-- no frontmatter to deal with, works whether it exists yet or not:\n"
+            "  kb journal -m \"fixed the flaky test\"\n"
+            "  kb journal 2026-08-30 -m \"forgot to log this\"\n\n"
+            "-m/--add with no TEXT opens a blank scratch buffer in $EDITOR instead "
+            "-- for multiline input -- and appends whatever you save as one "
+            "timestamped block, again without touching the entry's frontmatter:\n"
+            "  kb journal -m"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("date", nargs="?", default=None, metavar="DATE",
                     help="YYYY-MM-DD, or 'today' (default)")
+    p.add_argument("-m", "--add", nargs="?", const="", default=None, metavar="TEXT",
+                    help="append TEXT as a timestamped line; with no TEXT, open a scratch "
+                         "buffer in $EDITOR for multiline input instead")
+    p.add_argument("--plain", action="store_true",
+                    help="force opening/creating today's entry directly, skipping the interactive picker")
     p.set_defaults(func=cmd_journal)
 
     p = sub.add_parser(
