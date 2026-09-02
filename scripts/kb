@@ -314,6 +314,7 @@ def _journal_add(root, target, text):
     body = body.rstrip("\n") + f"\n\n{block}"
     fm["updated"] = pc.now_iso()
     pc.write_entry(file_path, fm, body)
+    run_script("index_fts.py")
     print(f"added -> {os.path.relpath(file_path, root)}")
     return 0
 
