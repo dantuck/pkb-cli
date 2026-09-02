@@ -52,6 +52,24 @@ def run_script(name, args=None):
     return result.returncode
 
 
+_FTS_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
+
+
+def _fts_autoprefix(query):
+    """Append FTS5 prefix syntax (*) to bare word tokens, so `kb search dar`
+    matches "Darren" the way a user typing a partial word expects. Leaves
+    quoted phrases, boolean operators, column filters (title:...), and
+    tokens that already use FTS5 syntax (*, parens, ^) untouched."""
+    tokens = re.findall(r'"[^"]*"|\S+', query)
+    out = []
+    for tok in tokens:
+        if tok.startswith('"') or tok.upper() in _FTS_OPERATORS or any(c in tok for c in '*():^'):
+            out.append(tok)
+        else:
+            out.append(tok + "*")
+    return " ".join(out)
+
+
 def cmd_search(args):
     root = pc.get_repo_root()
     db_path = os.path.join(root, ".pkb", "fts.db")
@@ -65,7 +83,7 @@ def cmd_search(args):
     cur = conn.cursor()
 
     where = ["fts MATCH ?"]
-    params = [args.query]
+    params = [_fts_autoprefix(args.query)]
     if not args.all:
         placeholders = ",".join("?" for _ in pc.CORE_TYPES)
         where.append(f"fts.type IN ({placeholders})")
@@ -1779,7 +1797,7 @@ def main():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("query", help="search terms (FTS5 match syntax)")
+    p.add_argument("query", help="search terms (bare words match as prefixes; FTS5 match syntax also works)")
     p.add_argument("--type", choices=pc.CORE_TYPES, help="restrict to one Diataxis type")
     p.add_argument("--tag", help="restrict to entries with this tag")
     p.add_argument("--all", action="store_true", help="include journal/inbox/sources (default: core content only)")
