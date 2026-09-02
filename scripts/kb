@@ -3,6 +3,7 @@
 one-shot per invocation. Operates on a data repo (found by walking up from cwd to a
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
+import calendar
 import difflib
 import os
 import re
@@ -11,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 TOOL_ROOT = os.path.dirname(SCRIPT_DIR)  # the pkb-cli checkout itself, not the data repo
@@ -117,12 +118,17 @@ def cmd_search(args):
 
 
 def _fzf_select(lines, prompt, header, delimiter=None, with_nth=None,
-                 preview_cmd=None, preview_window="right:60%"):
+                 preview_cmd=None, preview_window="right:60%", multi=False):
     """Run fzf over `lines`, returning the raw selected line, or None if
     cancelled (esc/ctrl-c) or nothing was selected. Shared by every
     interactive picker in this file -- search/inbox/todo/journal each used to
-    hand-roll this same subprocess.run + cancel-check."""
+    hand-roll this same subprocess.run + cancel-check.
+
+    With multi=True (tab to toggle multiple matches in fzf), returns a list of
+    selected lines instead of a single string, or None if nothing was picked."""
     cmd = ["fzf", "--prompt", prompt, "--header", header]
+    if multi:
+        cmd.append("--multi")
     if delimiter is not None:
         cmd += ["--delimiter", delimiter]
     if with_nth is not None:
@@ -132,7 +138,8 @@ def _fzf_select(lines, prompt, header, delimiter=None, with_nth=None,
     result = subprocess.run(cmd, input="\n".join(lines), text=True, stdout=subprocess.PIPE)
     if result.returncode != 0 or not result.stdout.strip():
         return None
-    return result.stdout.rstrip("\n")
+    out = result.stdout.rstrip("\n")
+    return out.split("\n") if multi else out
 
 
 def _search_interactive(root, rows):
@@ -296,6 +303,43 @@ def list_journal_entries(root, limit=None):
     return entries
 
 
+def _shift_months(date, delta):
+    """date, shifted by `delta` months, clamped to the shifted month's length
+    (e.g. Aug 31 - 1 month -> Jul 31, not an overflow into August)."""
+    month_index = date.month - 1 + delta
+    year = date.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(date.day, calendar.monthrange(year, month)[1])
+    return date.replace(year=year, month=month, day=day)
+
+
+def _on_this_day(root, target):
+    """(label, date_str, path) for past journal entries at the offsets a
+    "look back" feature cares about -- a week ago, a month ago, and this same
+    month/day in each earlier year -- restricted to offsets that actually have
+    an entry, so this never pads the list with empty prompts to fill in the
+    past."""
+    candidates = [("1 week ago", target - timedelta(days=7)),
+                  ("1 month ago", _shift_months(target, -1))]
+    for years in range(1, 11):
+        try:
+            d = target.replace(year=target.year - years)
+        except ValueError:  # target is Feb 29 and this year isn't a leap year
+            d = target.replace(year=target.year - years, day=28)
+        label = "1 year ago" if years == 1 else f"{years} years ago"
+        candidates.append((label, d))
+
+    seen, results = set(), []
+    for label, d in candidates:
+        if d >= target or d in seen:
+            continue
+        seen.add(d)
+        path = _journal_path(root, d)
+        if os.path.exists(path):
+            results.append((label, d.isoformat(), path))
+    return results
+
+
 def _journal_add(root, target, text):
     """Append text to target's journal entry, creating it (with frontmatter)
     first if needed. No editor involved -- for jotting something down without
@@ -352,6 +396,12 @@ def _journal_add_editor(root, target):
 
 def cmd_journal(args):
     root = pc.get_repo_root()
+
+    if args.date == "rollup":
+        return _journal_rollup(root, args.month)
+    if args.tag:
+        return _journal_by_tag(root, args.tag)
+
     explicit_date = args.date not in (None, "today")
     target = (datetime.now().date() if args.date in (None, "today")
               else datetime.strptime(args.date, "%Y-%m-%d").date())
@@ -380,8 +430,16 @@ def cmd_journal(args):
     file_path = _ensure_journal_entry(root, target)
 
     if not explicit_date:
-        # no fzf/terminal for a full picker -- still surface nearby entries for
-        # context instead of silently jumping straight into today's.
+        # no fzf/terminal for a full picker -- still surface nearby entries and
+        # this-day-in-the-past ones for context instead of silently jumping
+        # straight into today's.
+        on_this_day = _on_this_day(root, target)
+        if on_this_day:
+            print("on this day:")
+            for label, date_str, path in on_this_day:
+                print(f"  {label:12} {date_str}  {os.path.relpath(path, root)}")
+            print()
+
         recent = [(d, p) for d, p in list_journal_entries(root, limit=6) if d != target.isoformat()][:5]
         if recent:
             print("recent entries:")
@@ -405,7 +463,8 @@ def _journal_interactive(root):
     if today_iso not in {d for d, _ in entries}:
         entries = [(today_iso, _journal_path(root, today))] + entries
 
-    lines = []
+    on_this_day = _on_this_day(root, today)
+    lines = [f"{date_str}\t{label}\t{path}" for label, date_str, path in on_this_day]
     for date_str, path in entries:
         tag = "new" if not os.path.exists(path) else ""
         lines.append(f"{date_str}\t{tag}\t{path}")
@@ -420,6 +479,117 @@ def _journal_interactive(root):
     target = datetime.strptime(date_str, "%Y-%m-%d").date()
     file_path = _ensure_journal_entry(root, target)
     _open_in_editor(file_path)
+    return 0
+
+
+def _journal_by_tag(root, tag):
+    """List journal entries carrying `tag`, newest first -- browsing a theme
+    across time (e.g. everything tagged "homelab") rather than kb search's
+    relevance ranking, which scatters same-theme entries by match strength
+    instead of keeping them in chronological order."""
+    matches = []
+    for date_str, path in list_journal_entries(root):
+        fm, _ = pc.read_entry(path)
+        if tag in (fm.get("tags") or []):
+            matches.append((date_str, path))
+
+    if not matches:
+        print(f"no journal entries tagged '{tag}'")
+        return 0
+    for date_str, path in matches:
+        print(f"{date_str}  {os.path.relpath(path, root)}")
+    return 0
+
+
+def _rollup_month(month_arg):
+    """(year, month) for `month_arg` (YYYY-MM), or the previous calendar month
+    if not given -- the current month is usually still in progress, so it's a
+    poor default for "summarize what happened"."""
+    if month_arg:
+        try:
+            dt = datetime.strptime(month_arg, "%Y-%m")
+        except ValueError:
+            return None
+        return dt.year, dt.month
+    today = datetime.now().date()
+    year, month = today.year, today.month - 1
+    if month == 0:
+        year, month = year - 1, 12
+    return year, month
+
+
+def _journal_rollup(root, month_arg):
+    """Generate/refresh reference/journal-summaries/YYYY-MM.md: every day's
+    entry in the month concatenated under a heading, plus a tag-frequency line,
+    so a month of daily files can be browsed as one page instead of opened one
+    by one. Deliberately not AI summarization -- just the raw entries assembled
+    in one place; the point is browsability, not compression."""
+    parsed = _rollup_month(month_arg)
+    if parsed is None:
+        print(f"error: invalid month '{month_arg}' -- expected YYYY-MM", file=sys.stderr)
+        return 1
+    year, month = parsed
+    month_label = f"{year:04d}-{month:02d}"
+
+    month_dir = os.path.join(root, "journal", f"{year:04d}", f"{month:02d}")
+    if not os.path.isdir(month_dir):
+        print(f"no journal entries found for {month_label}")
+        return 1
+
+    days = []
+    for name in sorted(os.listdir(month_dir)):
+        if not name.endswith(".md"):
+            continue
+        fm, body = pc.read_entry(os.path.join(month_dir, name))
+        days.append((name[:-3], fm, body))
+    if not days:
+        print(f"no journal entries found for {month_label}")
+        return 1
+
+    tag_counts, day_ids, sections = {}, [], []
+    for date_str, fm, body in days:
+        if fm.get("id"):
+            day_ids.append(fm["id"])
+        for t in fm.get("tags") or []:
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        text = body.strip("\n")
+        heading = f"# {date_str}"
+        if text.startswith(heading):
+            text = text[len(heading):].lstrip("\n")
+        sections.append(f"## {date_str}\n\n{text.strip() or '(no content)'}\n")
+
+    out_path = os.path.join(root, "reference", "journal-summaries", f"{month_label}.md")
+    now = pc.now_iso()
+    existing_fm = pc.read_entry(out_path)[0] if os.path.exists(out_path) else None
+    if existing_fm and existing_fm.get("id"):
+        entry_id, created = existing_fm["id"], existing_fm.get("created", now)
+    else:
+        entry_id = pc.gen_id(pc.collect_existing_ids(root), dt=datetime(year, month, 1))
+        created = now
+
+    fm = {
+        "id": entry_id,
+        "created": created,
+        "updated": now,
+        "type": "reference",
+        "extension": None,
+        "source": "manual",
+        "source_id": None,
+        "tags": ["journal-summary"],
+        "links": day_ids,
+        "title": f"Journal summary: {month_label}",
+    }
+
+    body = f"# Journal summary: {month_label}\n\n{len(days)} entries.\n"
+    if tag_counts:
+        top = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        body += "tags: " + ", ".join(f"{t} ({n})" for t, n in top) + "\n"
+    body += "\n---\n\n" + "\n".join(sections)
+
+    pc.write_entry(out_path, fm, body)
+    run_script("index_fts.py")
+    print(out_path)
     return 0
 
 
@@ -654,14 +824,108 @@ def _find_entry(root, entry_id):
     return None
 
 
+def _iter_all_entries(root):
+    """[{id, title, type, path}] for every entry in the repo (core + journal/
+    inbox/sources) -- shared by the tag/link pickers below, which need to offer
+    any entry as a target, not just core Diataxis content."""
+    entries = []
+    for path in pc.iter_markdown_files(root):
+        try:
+            fm, _ = pc.read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("id"):
+            entries.append({"id": fm["id"], "title": fm.get("title") or "",
+                             "type": fm.get("type") or "", "path": path})
+    entries.sort(key=lambda e: e["id"], reverse=True)
+    return entries
+
+
+def _all_tags(root):
+    """Sorted set of every tag currently used anywhere in the repo -- offered as
+    the pick list when adding a tag interactively, alongside the option to type
+    a new one."""
+    tags = set()
+    for path in pc.iter_markdown_files(root):
+        try:
+            fm, _ = pc.read_entry(path)
+        except ValueError:
+            continue
+        tags.update(fm.get("tags") or [])
+    return sorted(tags)
+
+
+def _entry_fzf_lines(entries):
+    return [f"{e['id']}\t{e['type']}\t{e['title']}\t{e['path']}" for e in entries]
+
+
+def _pick_entry(root, prompt, header, exclude_ids=()):
+    """fzf picker over every entry in the repo, returning the chosen id (or None
+    if cancelled/unavailable) -- used when `kb tag`/`kb link` are invoked with no
+    id, so the id doesn't have to be hunted down by hand first."""
+    entries = [e for e in _iter_all_entries(root) if e["id"] not in exclude_ids]
+    if not entries:
+        return None
+    selected = _fzf_select(_entry_fzf_lines(entries), prompt, header, delimiter="\t",
+                            with_nth="1,2,3", preview_cmd="cat {4}")
+    return selected.split("\t")[0] if selected else None
+
+
+def _pick_entries_multi(root, prompt, header, candidate_ids):
+    """fzf multi-select picker restricted to `candidate_ids`, returning the
+    chosen ids or None. Used for `kb link add` (candidates = every id not
+    already linked, minus self)."""
+    entries = [e for e in _iter_all_entries(root) if e["id"] in candidate_ids]
+    if not entries:
+        return None
+    picked = _fzf_select(_entry_fzf_lines(entries), prompt, header, delimiter="\t",
+                          with_nth="1,2,3", preview_cmd="cat {4}", multi=True)
+    return [line.split("\t")[0] for line in picked] if picked else None
+
+
+def _pick_tags_to_add(root, prompt, header):
+    """fzf picker for `kb tag add` with no tags given: tab to multi-select from
+    every tag already used in the repo, or type one or more new comma-separated
+    tags and press enter with nothing selected to create them. Returns a list
+    of tags, or None if cancelled."""
+    cmd = ["fzf", "--multi", "--print-query", "--prompt", prompt, "--header", header]
+    result = subprocess.run(cmd, input="\n".join(_all_tags(root)), text=True, stdout=subprocess.PIPE)
+    if result.returncode == 130:
+        return None  # esc / ctrl-c
+    lines = result.stdout.split("\n")
+    query, selected = lines[0], [l for l in lines[1:] if l.strip()]
+    if selected:
+        return selected
+    if query.strip():
+        return [t.strip() for t in query.split(",") if t.strip()]
+    return None
+
+
 def cmd_tag(args):
     """Add/remove tags on an entry -- the only sanctioned way to change `tags`,
     since hand-editing frontmatter is off limits. With no action, just list the
-    entry's current tags."""
+    entry's current tags.
+
+    Anything left unspecified on the command line -- the id, or the tags to
+    add/remove -- is filled in with an fzf picker when one is available
+    (installed + both ends real terminals), same rule as every other
+    interactive picker in this file."""
     root = pc.get_repo_root()
-    found = _find_entry(root, args.id)
+    interactive = shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+
+    entry_id = args.id
+    if entry_id is None:
+        if not interactive:
+            print("error: `kb tag` needs an entry id (install fzf and run from a "
+                  "terminal for a picker)", file=sys.stderr)
+            return 1
+        entry_id = _pick_entry(root, "tag> ", "select an entry to tag")
+        if entry_id is None:
+            return 0  # cancelled, or nothing to pick from
+
+    found = _find_entry(root, entry_id)
     if found is None:
-        print(f"error: no entry with id '{args.id}'", file=sys.stderr)
+        print(f"error: no entry with id '{entry_id}'", file=sys.stderr)
         return 1
     path, fm, body = found
     tags = list(fm.get("tags") or [])
@@ -669,70 +933,116 @@ def cmd_tag(args):
     if args.action is None:
         print(", ".join(tags) if tags else "(no tags)")
         return 0
-    if not args.values:
-        print(f"error: `kb tag {args.id} {args.action}` needs at least one tag", file=sys.stderr)
-        return 1
+
+    values = args.values
+    if not values:
+        if not interactive:
+            print(f"error: `kb tag {entry_id} {args.action}` needs at least one tag",
+                  file=sys.stderr)
+            return 1
+        if args.action == "add":
+            values = _pick_tags_to_add(
+                root, "add tag> ",
+                "tab: multi-select existing tags -- or type new ones (comma-separated) and enter")
+        else:
+            if not tags:
+                print(f"no tags to remove on {entry_id}")
+                return 0
+            values = _fzf_select(tags, "rm tag> ", "tab: multi-select tags to remove", multi=True)
+        if not values:
+            return 0  # cancelled
 
     if args.action == "add":
-        changed = [t for t in args.values if t not in tags]
+        changed = [t for t in values if t not in tags]
         tags.extend(changed)
     else:
         before = len(tags)
-        tags = [t for t in tags if t not in args.values]
+        tags = [t for t in tags if t not in values]
         changed = before != len(tags)
 
     if not changed:
-        print(f"no change -- tags for {args.id}: {', '.join(tags) if tags else '(none)'}")
+        print(f"no change -- tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
         return 0
 
     fm["tags"] = tags
     fm["updated"] = pc.now_iso()
     pc.write_entry(path, fm, body)
     run_script("index_fts.py")
-    print(f"tags for {args.id}: {', '.join(tags) if tags else '(none)'}")
+    print(f"tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
     return 0
 
 
 def cmd_link(args):
     """Add/remove forward links on an entry -- the only sanctioned way to change
     `links`, since hand-editing frontmatter is off limits. With no action, show
-    forward links + backlinks (same as kb links)."""
-    root = pc.get_repo_root()
-    if args.action is None:
-        return show_links(root, args.id, json_out=args.json)
-    if not args.values:
-        print(f"error: `kb link {args.id} {args.action}` needs at least one target id", file=sys.stderr)
-        return 1
+    forward links + backlinks (same as kb links).
 
-    found = _find_entry(root, args.id)
+    Anything left unspecified on the command line -- the id, or the target
+    ids to add/remove -- is filled in with an fzf picker when one is
+    available, same rule as kb tag."""
+    root = pc.get_repo_root()
+    interactive = shutil.which("fzf") and sys.stdout.isatty() and sys.stdin.isatty()
+
+    entry_id = args.id
+    if entry_id is None:
+        if not interactive:
+            print("error: `kb link` needs an entry id (install fzf and run from a "
+                  "terminal for a picker)", file=sys.stderr)
+            return 1
+        entry_id = _pick_entry(root, "link> ", "select an entry to link")
+        if entry_id is None:
+            return 0
+
+    if args.action is None:
+        return show_links(root, entry_id, json_out=args.json)
+
+    found = _find_entry(root, entry_id)
     if found is None:
-        print(f"error: no entry with id '{args.id}'", file=sys.stderr)
+        print(f"error: no entry with id '{entry_id}'", file=sys.stderr)
         return 1
     path, fm, body = found
     links = list(fm.get("links") or [])
 
+    values = args.values
+    if not values:
+        if not interactive:
+            print(f"error: `kb link {entry_id} {args.action}` needs at least one target id",
+                  file=sys.stderr)
+            return 1
+        if args.action == "add":
+            candidate_ids = {e["id"] for e in _iter_all_entries(root)} - {entry_id} - set(links)
+            values = _pick_entries_multi(root, "add link> ",
+                                          "tab: multi-select entries to link to", candidate_ids)
+        else:
+            if not links:
+                print(f"no links to remove on {entry_id}")
+                return 0
+            values = _fzf_select(links, "rm link> ", "tab: multi-select links to remove", multi=True)
+        if not values:
+            return 0
+
     if args.action == "add":
         all_ids = pc.collect_existing_ids(root)
-        unknown = [t for t in args.values if t not in all_ids]
+        unknown = [t for t in values if t not in all_ids]
         if unknown:
             print(f"error: unknown id(s), not found in this repo: {', '.join(unknown)}", file=sys.stderr)
             return 1
-        changed = [t for t in args.values if t not in links]
+        changed = [t for t in values if t not in links]
         links.extend(changed)
     else:
         before = len(links)
-        links = [l for l in links if l not in args.values]
+        links = [l for l in links if l not in values]
         changed = before != len(links)
 
     if not changed:
-        print(f"no change -- links for {args.id}: {', '.join(links) if links else '(none)'}")
+        print(f"no change -- links for {entry_id}: {', '.join(links) if links else '(none)'}")
         return 0
 
     fm["links"] = links
     fm["updated"] = pc.now_iso()
     pc.write_entry(path, fm, body)
     run_script("index_fts.py")
-    print(f"links for {args.id}: {', '.join(links) if links else '(none)'}")
+    print(f"links for {entry_id}: {', '.join(links) if links else '(none)'}")
     return 0
 
 
@@ -1500,9 +1810,10 @@ def main():
         epilog=(
             "with no DATE (the default), and if fzf is installed and you're in a "
             "real terminal, this opens an interactive picker over past entries "
-            "(today included, created on selection if it doesn't exist yet). "
+            "(today included, created on selection if it doesn't exist yet), with "
+            "on-this-day entries (1 week/month/year+ ago) pinned to the top. "
             "--plain always skips it and opens/creates today's entry directly, "
-            "printing a few nearby entries for context.\n\n"
+            "printing on-this-day and nearby entries for context.\n\n"
             "-m/--add TEXT appends a timestamped line instead of opening the entry "
             "-- no frontmatter to deal with, works whether it exists yet or not:\n"
             "  kb journal -m \"fixed the flaky test\"\n"
@@ -1510,15 +1821,26 @@ def main():
             "-m/--add with no TEXT opens a blank scratch buffer in $EDITOR instead "
             "-- for multiline input -- and appends whatever you save as one "
             "timestamped block, again without touching the entry's frontmatter:\n"
-            "  kb journal -m"
+            "  kb journal -m\n\n"
+            "--tag TAG lists past entries carrying TAG, newest first, for "
+            "browsing one theme across time:\n"
+            "  kb journal --tag homelab\n\n"
+            "`rollup` generates/refreshes a browsable month-at-a-glance page at "
+            "reference/journal-summaries/YYYY-MM.md (every day's entry concatenated, "
+            "plus a tag-frequency line) -- defaults to last month if MONTH is omitted:\n"
+            "  kb journal rollup\n"
+            "  kb journal rollup 2026-07"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("date", nargs="?", default=None, metavar="DATE",
-                    help="YYYY-MM-DD, or 'today' (default)")
+                    help="YYYY-MM-DD, 'today' (default), or 'rollup' to generate a monthly summary")
+    p.add_argument("month", nargs="?", default=None, metavar="MONTH",
+                    help="YYYY-MM, only used with `rollup` (default: last month)")
     p.add_argument("-m", "--add", nargs="?", const="", default=None, metavar="TEXT",
                     help="append TEXT as a timestamped line; with no TEXT, open a scratch "
                          "buffer in $EDITOR for multiline input instead")
+    p.add_argument("--tag", metavar="TAG", help="list past entries tagged TAG instead of opening one")
     p.add_argument("--plain", action="store_true",
                     help="force opening/creating today's entry directly, skipping the interactive picker")
     p.set_defaults(func=cmd_journal)
@@ -1578,34 +1900,49 @@ def main():
     p = sub.add_parser(
         "tag", help="view, add, or remove tags on an entry",
         description="View, add, or remove tags on an entry -- the sanctioned way to "
-                    "change `tags` (never hand-edit frontmatter).",
+                    "change `tags` (never hand-edit frontmatter). Anything left out "
+                    "(the id, or which tags to add/remove) opens an fzf picker instead, "
+                    "when fzf is installed and you're in a real terminal.",
         epilog=(
             "  kb tag 2026-08-31-1423                  list current tags\n"
             "  kb tag 2026-08-31-1423 add networking homelab\n"
-            "  kb tag 2026-08-31-1423 rm homelab"
+            "  kb tag 2026-08-31-1423 rm homelab\n"
+            "  kb tag                                  pick an entry, then list its tags\n"
+            "  kb tag 2026-08-31-1423 add              pick tags: multi-select existing ones,\n"
+            "                                           or type new ones (comma-separated)\n"
+            "  kb tag 2026-08-31-1423 rm                pick which current tags to remove"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("id", nargs="?", default=None,
+                    help="entry id, e.g. 2026-08-31-1423 (omit for an fzf picker)")
     p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
-    p.add_argument("values", nargs="*", metavar="TAG", help="tag(s) to add/remove")
+    p.add_argument("values", nargs="*", metavar="TAG",
+                    help="tag(s) to add/remove (omit for an fzf picker)")
     p.set_defaults(func=cmd_tag)
 
     p = sub.add_parser(
         "link", help="view, add, or remove links (forward references) on an entry",
         description="View, add, or remove links on an entry -- the sanctioned way to "
                     "change `links` (never hand-edit frontmatter). With no action, same "
-                    "as `kb links` (forward links + backlinks).",
+                    "as `kb links` (forward links + backlinks). Anything left out (the id, "
+                    "or which entries to link/unlink) opens an fzf picker instead, when "
+                    "fzf is installed and you're in a real terminal.",
         epilog=(
             "  kb link 2026-08-31-1423                        forward links + backlinks\n"
             "  kb link 2026-08-31-1423 add 2026-08-20-0900\n"
-            "  kb link 2026-08-31-1423 rm 2026-08-20-0900"
+            "  kb link 2026-08-31-1423 rm 2026-08-20-0900\n"
+            "  kb link                                        pick an entry, show its links\n"
+            "  kb link 2026-08-31-1423 add                    multi-select entries to link to\n"
+            "  kb link 2026-08-31-1423 rm                     multi-select links to remove"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("id", nargs="?", default=None,
+                    help="entry id, e.g. 2026-08-31-1423 (omit for an fzf picker)")
     p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
-    p.add_argument("values", nargs="*", metavar="TARGET_ID", help="id(s) to link/unlink")
+    p.add_argument("values", nargs="*", metavar="TARGET_ID",
+                    help="id(s) to link/unlink (omit for an fzf picker)")
     p.add_argument("--json", action="store_true", help="machine-readable output (no-action form only)")
     p.set_defaults(func=cmd_link)
 

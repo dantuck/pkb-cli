@@ -190,6 +190,8 @@ immediately after `git clone`, and is the fallback if `.pkb/*.db` doesn't exist 
 kb search <query> [--type tutorial|how-to|reference|explanation] [--tag x] [--all]
 kb new <type> "<title>"          # scaffolds a new core file with valid frontmatter
 kb journal [today|<date>]         # opens/creates the day's journal file
+kb journal --tag <tag>            # past entries carrying <tag>, chronologically
+kb journal rollup [YYYY-MM]       # generate/refresh that month's summary page
 kb inbox                          # lists current inbox contents with age
 kb triage                         # runs triage_report.py
 kb sync [memos|gitlab|beads|all]  # runs the relevant ingestion script(s)
@@ -209,9 +211,16 @@ Implementation: a thin Python (or shell) wrapper dispatching to the scripts in
 - `type: journal`, `extension: journal` frontmatter.
 - Journals reference core content via `links:`, they do not duplicate it — e.g., a
   day's entry links to a `reference/` doc rather than containing the write-up itself.
-- **Monthly rollup (deferred, low priority):** a periodic job that generates
-  `reference/journal-summaries/YYYY-MM.md` summarizing the month's entries, for browsing
-  without opening 30 daily files. Not required for v1.
+- **Monthly rollup:** `kb journal rollup [YYYY-MM]` generates/refreshes
+  `reference/journal-summaries/YYYY-MM.md` -- that month's daily entries concatenated
+  onto one page plus a tag-frequency line -- for browsing without opening 30 daily
+  files. Defaults to last month; rerunning it for the same month refreshes the same
+  file/id in place rather than minting a new one.
+- **Look-back surfacing:** opening today's entry (`kb journal`, no explicit date)
+  prints/pins an "on this day" section -- entries from 1 week ago, 1 month ago, and
+  this month/day in earlier years, whichever exist -- so the journal resurfaces past
+  entries instead of only ever being written forward. `kb journal --tag <tag>` lists
+  past entries by tag, chronologically, for following one theme over time.
 
 ---
 
@@ -229,7 +238,7 @@ Implementation: a thin Python (or shell) wrapper dispatching to the scripts in
 | 8 | `sync_gitlab.py`, `sync_beads.py` (same contract as memos) | 1, 2 |
 | 9 | `kb links` (graph/backlink queries from frontmatter) | 2 |
 | 10 | Embeddings layer (`index_embeddings.py`) — only if FTS5 relevance proves insufficient | 5 |
-| 11 | Monthly journal rollups | 8 (journal volume exists) |
+| 11 | Monthly journal rollups + on-this-day look-back | 8 (journal volume exists) — done |
 
 Phases 1–7 constitute a usable v1. Phases 8–11 extend it without any architectural change.
 

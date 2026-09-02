@@ -23,6 +23,16 @@ the data repo.
   frontmatter to touch. `kb journal <date> -m "<note>"` backfills a specific
   day. `kb journal -m` with no text opens a scratch buffer in `$EDITOR` for a
   longer, multiline note instead.
+- **Look back at the journal**: opening `kb journal` (today, no `-m`) prints
+  an "on this day" section -- entries from 1 week ago, 1 month ago, and this
+  same month/day in earlier years, whichever of those actually exist -- ahead
+  of the usual recent-entries list, and pins the same entries to the top of
+  the interactive picker. `kb journal --tag <tag>` lists every past entry
+  carrying that tag, newest first, for browsing one theme across time instead
+  of `kb search`'s relevance ranking. `kb journal rollup [YYYY-MM]` (default:
+  last month) generates/refreshes `reference/journal-summaries/YYYY-MM.md`,
+  concatenating that month's daily entries plus a tag-frequency line onto one
+  browsable page -- rerunning it just refreshes the same file/id in place.
 - **Write a new tutorial/how-to/reference/explanation entry**:
   `kb new <type> "<title>"` scaffolds it with correct frontmatter and prints
   the path -- edit that path to fill in the body, or pass `--body "..."` to
@@ -87,6 +97,8 @@ kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT]
                                   type: tutorial|how-to|reference|explanation
 kb journal [<date>] [-m [TEXT]]  today (default) or YYYY-MM-DD; -m TEXT quick-adds,
                                   bare -m opens $EDITOR for multiline input
+kb journal --tag <tag>            past entries carrying <tag>, newest first
+kb journal rollup [YYYY-MM]       generate/refresh that month's summary page (default: last month)
 kb search "<query>" [--type T] [--tag TAG] [--all] [--plain] [--json]
 kb inbox [--plain]                interactive triage: promote / redirect / discard
 kb inbox <id> promote <type>|redirect|discard   non-interactive triage (no terminal needed)

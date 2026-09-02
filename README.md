@@ -58,7 +58,9 @@ repo first.
 
 ```bash
 kb new how-to "Tailscale sidecar config for Synology" --tags networking --body "..."
-kb journal                      # today's journal file
+kb journal                      # today's journal file -- also prints "on this day" (1wk/1mo/1yr+ ago) entries
+kb journal --tag homelab        # past entries tagged homelab, chronologically
+kb journal rollup               # generate/refresh last month's browsable summary page
 kb search "tailscale" --type how-to
 kb search "tailscale" --all     # include journal/inbox/sources; interactive picker if fzf+terminal (--plain to skip)
 kb search "tailscale" --json    # machine-readable output, e.g. for a script or an agent
