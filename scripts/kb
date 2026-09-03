@@ -5,10 +5,12 @@ one-shot per invocation. Operates on a data repo (found by walking up from cwd t
 import argparse
 import calendar
 import difflib
+import json
 import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -70,41 +72,57 @@ def _fts_autoprefix(query):
     return " ".join(out)
 
 
-def cmd_search(args):
-    root = pc.get_repo_root()
+def search_entries(root, query, entry_type=None, tag=None, include_all=False, limit=50):
+    """Run an FTS5 search over the index, returning (id, title, type, path, rank)
+    rows ordered by relevance -- the core of `kb search`, factored out so both
+    the CLI and `kb web`'s /api/search can call the same query instead of
+    duplicating the SQL. Raises sqlite3.OperationalError on a bad FTS5 query
+    (e.g. unbalanced quotes) so callers can report it however fits their
+    context (stderr print vs. a JSON error response)."""
     db_path = os.path.join(root, ".pkb", "fts.db")
     if not os.path.exists(db_path):
-        print("no FTS index found. Run `kb index` first, or use ripgrep directly:")
-        print(f"  rg --heading -n {args.query!r} tutorials how-to reference explanation")
-        return 1
+        return None  # no index -- distinct from "no results" (empty list)
 
-    import sqlite3
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
     where = ["fts MATCH ?"]
-    params = [_fts_autoprefix(args.query)]
-    if not args.all:
+    params = [_fts_autoprefix(query)]
+    if not include_all:
         placeholders = ",".join("?" for _ in pc.CORE_TYPES)
         where.append(f"fts.type IN ({placeholders})")
         params.extend(pc.CORE_TYPES)
-    if args.type:
+    if entry_type:
         where.append("fts.type = ?")
-        params.append(args.type)
-    if args.tag:
+        params.append(entry_type)
+    if tag:
         where.append("fts.tags MATCH ?")
-        params.append(args.tag)
+        params.append(tag)
 
     sql = f"""
         SELECT f.id, f.title, f.type, f.path, bm25(fts) as rank
         FROM fts JOIN files f ON f.id = fts.id
         WHERE {' AND '.join(where)}
-        ORDER BY rank LIMIT 50
+        ORDER BY rank LIMIT ?
     """
     try:
-        rows = cur.execute(sql, params).fetchall()
+        rows = cur.execute(sql, params + [limit]).fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def cmd_search(args):
+    root = pc.get_repo_root()
+    try:
+        rows = search_entries(root, args.query, entry_type=args.type, tag=args.tag,
+                               include_all=args.all)
     except sqlite3.OperationalError as e:
         print(f"search error: {e}")
+        return 1
+    if rows is None:
+        print("no FTS index found. Run `kb index` first, or use ripgrep directly:")
+        print(f"  rg --heading -n {args.query!r} tutorials how-to reference explanation")
         return 1
 
     if not rows:
@@ -115,7 +133,6 @@ def cmd_search(args):
         return 0
 
     if args.json:
-        import json
         print(json.dumps([
             {"id": entry_id, "title": title, "type": entry_type, "path": path}
             for entry_id, title, entry_type, path, _rank in rows
@@ -358,16 +375,20 @@ def _on_this_day(root, target):
     return results
 
 
-def _journal_add(root, target, text):
-    """Append text to target's journal entry, creating it (with frontmatter)
+def journal_append(root, target, text):
+    """Append `text` to target's journal entry, creating it (with frontmatter)
     first if needed. No editor involved -- for jotting something down without
-    leaving the shell. A single line becomes a timestamped bullet; multiple
-    lines (e.g. from _journal_add_editor) become a timestamped heading block,
-    same shape `kb inbox`'s redirect action already uses."""
+    leaving the shell (or, for `kb web`'s quick-capture box, without leaving the
+    browser). A single line becomes a timestamped bullet; multiple lines (e.g.
+    from _journal_add_editor) become a timestamped heading block, same shape
+    `kb inbox`'s redirect action already uses.
+
+    Returns {"path": <relpath>, "time": "HH:MM"} on success, or None if `text`
+    was empty (nothing written). Shared by the CLI and the web capture endpoint
+    so there's exactly one place this logic lives."""
     text = text.strip("\n")
     if not text:
-        print("empty -- nothing added")
-        return 0
+        return None
 
     file_path = _ensure_journal_entry(root, target)
     fm, body = pc.read_entry(file_path)
@@ -377,7 +398,15 @@ def _journal_add(root, target, text):
     fm["updated"] = pc.now_iso()
     pc.write_entry(file_path, fm, body)
     run_script("index_fts.py")
-    print(f"added -> {os.path.relpath(file_path, root)}")
+    return {"path": os.path.relpath(file_path, root), "time": stamp}
+
+
+def _journal_add(root, target, text):
+    result = journal_append(root, target, text)
+    if result is None:
+        print("empty -- nothing added")
+        return 0
+    print(f"added -> {result['path']}")
     return 0
 
 
@@ -842,6 +871,88 @@ def _find_entry(root, entry_id):
     return None
 
 
+def _apply_tag_changes(tags, add=None, rm=None):
+    """Pure list transform: apply add/rm to a list, returning (new_list,
+    changed) -- the only place the actual add/rm set-diff logic lives. Used
+    for both tags and links (the semantics are identical: dedup on add, drop
+    on rm), via entry_set_tags/entry_set_links."""
+    new_tags = list(tags)
+    changed = False
+    if add:
+        additions = [t for t in add if t not in new_tags]
+        new_tags.extend(additions)
+        changed = changed or bool(additions)
+    if rm:
+        before = len(new_tags)
+        new_tags = [t for t in new_tags if t not in rm]
+        changed = changed or before != len(new_tags)
+    return new_tags, changed
+
+
+def entry_set_tags(root, entry_id, add=None, rm=None):
+    """Apply add/rm to an entry's tags and persist if anything changed.
+    Returns the resulting tag list, or None if no entry has this id. Shared
+    by cmd_tag (CLI) and kb web's tag-edit endpoint."""
+    found = _find_entry(root, entry_id)
+    if found is None:
+        return None
+    path, fm, body = found
+    tags, changed = _apply_tag_changes(fm.get("tags") or [], add=add, rm=rm)
+    if changed:
+        fm["tags"] = tags
+        fm["updated"] = pc.now_iso()
+        pc.write_entry(path, fm, body)
+        run_script("index_fts.py")
+    return tags
+
+
+def entry_set_links(root, entry_id, add=None, rm=None):
+    """Same as entry_set_tags but for links. Returns the resulting link list;
+    None if no entry has this id; {"error": ...} if `add` names id(s) that
+    don't exist in the repo. Shared by cmd_link (CLI) and kb web's link-edit
+    endpoint."""
+    found = _find_entry(root, entry_id)
+    if found is None:
+        return None
+    path, fm, body = found
+    links = list(fm.get("links") or [])
+    if add:
+        all_ids = pc.collect_existing_ids(root)
+        unknown = [t for t in add if t not in all_ids]
+        if unknown:
+            return {"error": f"unknown id(s), not found in this repo: {', '.join(unknown)}"}
+    links, changed = _apply_tag_changes(links, add=add, rm=rm)
+    if changed:
+        fm["links"] = links
+        fm["updated"] = pc.now_iso()
+        pc.write_entry(path, fm, body)
+        run_script("index_fts.py")
+    return links
+
+
+def inbox_list(root):
+    """[{"id", "name", "title", "age_days", "created"}, ...] for everything in
+    inbox/, sorted by filename -- the data behind `kb inbox`'s plain listing.
+    Kept separate from cmd_inbox's own listing loop (which feeds items as bare
+    tuples into the fzf interactive picker) so this can return a clean,
+    JSON-friendly shape for kb web's /api/inbox without disturbing that path."""
+    inbox_dir = os.path.join(root, "inbox")
+    now = datetime.now().astimezone()
+    files = sorted(f for f in os.listdir(inbox_dir) if f.endswith(".md")) if os.path.isdir(inbox_dir) else []
+    items = []
+    for name in files:
+        path = os.path.join(inbox_dir, name)
+        try:
+            fm, _ = pc.read_entry(path)
+            created, title, entry_id = fm.get("created"), fm.get("title") or name, fm.get("id")
+        except ValueError:
+            created, title, entry_id = None, name, None
+        created_dt = pc.parse_iso(created)
+        age_days = (now - created_dt).days if created_dt else None
+        items.append({"id": entry_id, "name": name, "title": title, "age_days": age_days, "created": created})
+    return items
+
+
 def _iter_all_entries(root):
     """[{id, title, type, path}] for every entry in the repo (core + journal/
     inbox/sources) -- shared by the tag/link pickers below, which need to offer
@@ -970,23 +1081,11 @@ def cmd_tag(args):
         if not values:
             return 0  # cancelled
 
-    if args.action == "add":
-        changed = [t for t in values if t not in tags]
-        tags.extend(changed)
-    else:
-        before = len(tags)
-        tags = [t for t in tags if t not in values]
-        changed = before != len(tags)
-
-    if not changed:
-        print(f"no change -- tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
-        return 0
-
-    fm["tags"] = tags
-    fm["updated"] = pc.now_iso()
-    pc.write_entry(path, fm, body)
-    run_script("index_fts.py")
-    print(f"tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
+    tags = entry_set_tags(root, entry_id, add=values if args.action == "add" else None,
+                           rm=values if args.action == "rm" else None)
+    changed = tags != (fm.get("tags") or [])
+    prefix = "" if changed else "no change -- "
+    print(f"{prefix}tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
     return 0
 
 
@@ -1039,28 +1138,14 @@ def cmd_link(args):
         if not values:
             return 0
 
-    if args.action == "add":
-        all_ids = pc.collect_existing_ids(root)
-        unknown = [t for t in values if t not in all_ids]
-        if unknown:
-            print(f"error: unknown id(s), not found in this repo: {', '.join(unknown)}", file=sys.stderr)
-            return 1
-        changed = [t for t in values if t not in links]
-        links.extend(changed)
-    else:
-        before = len(links)
-        links = [l for l in links if l not in values]
-        changed = before != len(links)
-
-    if not changed:
-        print(f"no change -- links for {entry_id}: {', '.join(links) if links else '(none)'}")
-        return 0
-
-    fm["links"] = links
-    fm["updated"] = pc.now_iso()
-    pc.write_entry(path, fm, body)
-    run_script("index_fts.py")
-    print(f"links for {entry_id}: {', '.join(links) if links else '(none)'}")
+    result = entry_set_links(root, entry_id, add=values if args.action == "add" else None,
+                              rm=values if args.action == "rm" else None)
+    if isinstance(result, dict):  # {"error": "unknown id(s) ..."}
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    changed = result != links
+    prefix = "" if changed else "no change -- "
+    print(f"{prefix}links for {entry_id}: {', '.join(result) if result else '(none)'}")
     return 0
 
 
@@ -1136,6 +1221,53 @@ def cmd_show(args):
     return 0
 
 
+def bd_available():
+    return shutil.which("bd") is not None
+
+
+def bd_list(root, include_all=False):
+    """Open (or all, with include_all) bd issues as parsed JSON, sorted by
+    priority. Raises RuntimeError(stderr) if bd itself errors. Shared by
+    cmd_todo's non-add path and kb web's GET /api/todo."""
+    bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
+    if include_all:
+        bd_args.append("--all")
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return json.loads(result.stdout)
+
+
+def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None):
+    """Create a bd issue, returning bd's own confirmation text. Raises
+    RuntimeError(stderr) on failure. Shared by _todo_add (kb todo -a TITLE)
+    and kb web's POST /api/todo."""
+    bd_args = ["bd", "-C", root, "create", "--title", title, "--type", issue_type, "--priority", priority]
+    if description:
+        bd_args += ["--description", description]
+    if labels:
+        bd_args += ["--labels", labels]
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+
+def bd_action(root, action, issue_id, comment_text=None):
+    """Run `bd show|close|comment` for one issue, returning bd's own stdout.
+    Raises RuntimeError(stderr) on failure. Used by kb web's todo action
+    endpoint -- the CLI's interactive picker (_todo_interactive) calls bd
+    directly via subprocess instead, since it streams straight to the
+    terminal rather than needing a return value."""
+    bd_args = ["bd", "-C", root, action, issue_id]
+    if action == "comment":
+        bd_args.append(comment_text or "")
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+
 def cmd_todo(args):
     if not shutil.which("bd"):
         print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
@@ -1147,18 +1279,14 @@ def cmd_todo(args):
     if args.add is not None:
         return _todo_add(root, args)
 
-    bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
-    if args.all:
-        bd_args.append("--all")
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"error: bd list failed: {result.stderr.strip()}", file=sys.stderr)
+    try:
+        issues = bd_list(root, include_all=args.all)
+    except RuntimeError as e:
+        print(f"error: bd list failed: {e}", file=sys.stderr)
         return 1
 
-    import json
-    issues = json.loads(result.stdout)
-
     if args.json:
+        import json
         print(json.dumps(issues))
         return 0
 
@@ -1194,18 +1322,13 @@ def _todo_add(root, args):
     if not args.add:
         os.execvp("bd", ["bd", "-C", root, "create-form"])  # replaces this process
 
-    bd_args = ["bd", "-C", root, "create", "--title", args.add, "--type", args.type,
-               "--priority", args.priority]
-    if args.description:
-        bd_args += ["--description", args.description]
-    if args.labels:
-        bd_args += ["--labels", args.labels]
-
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"error: bd create failed: {result.stderr.strip()}", file=sys.stderr)
+    try:
+        output = bd_create(root, args.add, description=args.description,
+                            priority=args.priority, issue_type=args.type, labels=args.labels)
+    except RuntimeError as e:
+        print(f"error: bd create failed: {e}", file=sys.stderr)
         return 1
-    print(result.stdout.strip())
+    print(output)
     return 0
 
 
@@ -1585,6 +1708,12 @@ def cmd_setup(args):
     return 1 if any("failed" in t for t in todo) else 0
 
 
+def cmd_web(args):
+    root = pc.get_repo_root()
+    import kb_web
+    return kb_web.serve(root, args.port)
+
+
 def cmd_doctor(args):
     """Read-only health check -- reuses the same detection helpers as `kb setup`
     but never writes anything, and adds a few deeper checks setup doesn't do."""
@@ -1776,7 +1905,7 @@ kb operates on a data repo found by walking up from the current directory to a
 def main():
     commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
                 "links", "show", "tag", "link", "todo", "bd", "secrets", "config", "setup",
-                "doctor", "update", "help"]
+                "web", "doctor", "update", "help"]
     parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
@@ -2026,6 +2155,16 @@ def main():
                     help="also symlink the bundled Claude Code skill into ~/.claude/skills "
                          "(or a specific DIR)")
     p.set_defaults(func=cmd_setup)
+
+    p = sub.add_parser(
+        "web", help="run the local web UI (feed + quick capture)",
+        description="Run the local web UI: a browser-based feed + quick-capture "
+                     "view over the same data repo the CLI operates on. Binds "
+                     "127.0.0.1 only. Runs in the foreground until Ctrl-C.",
+    )
+    p.add_argument("--port", type=int, default=4173, metavar="PORT",
+                    help="port to bind (default: 4173)")
+    p.set_defaults(func=cmd_web)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
     p.set_defaults(func=cmd_doctor)

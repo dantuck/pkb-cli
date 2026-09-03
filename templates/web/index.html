@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kb</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.1rem; margin-bottom: 0.25rem; }
+  #status { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  #status.ok { color: #2a2; }
+  #status.err { color: #c33; }
+
+  #capture { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
+  #capture textarea {
+    font: inherit; padding: 0.6rem; border: 1px solid #8884; border-radius: 8px;
+    resize: vertical; min-height: 3.5rem; background: transparent; color: inherit;
+  }
+  #capture button {
+    align-self: flex-end; font: inherit; padding: 0.4rem 1rem; border-radius: 6px;
+    border: 1px solid #8884; background: #8881; cursor: pointer;
+  }
+  #capture button:disabled { opacity: 0.5; cursor: default; }
+  #capture-msg { font-size: 0.85rem; color: #888; min-height: 1.2em; }
+
+  .btn {
+    font: inherit; padding: 0.3rem 0.7rem; border-radius: 6px;
+    border: 1px solid #8884; background: #8881; cursor: pointer; color: inherit;
+  }
+  .btn:hover { background: #8883; }
+  .link-btn {
+    font: inherit; background: none; border: none; color: inherit;
+    text-decoration: underline; cursor: pointer; padding: 0;
+  }
+  select { font: inherit; background: transparent; color: inherit; border: 1px solid #8884; border-radius: 6px; }
+  input[type=text], input[type=search] {
+    font: inherit; padding: 0.4rem 0.6rem; border: 1px solid #8884;
+    border-radius: 6px; background: transparent; color: inherit;
+  }
+
+  #inbox-section { margin-bottom: 1.5rem; border: 1px solid #8883; border-radius: 8px; }
+  #inbox-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
+  }
+  #inbox-list, #todo-list { list-style: none; margin: 0; padding: 0 0.8rem 0.6rem; }
+  #inbox-list li, #todo-list li { padding: 0.5rem 0; border-top: 1px solid #8882; }
+  #inbox-list .row1, #todo-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+  .row-badge { font-size: 0.75rem; color: #888; white-space: nowrap; }
+  #inbox-list .actions, #todo-list .actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem; flex-wrap: wrap; }
+  #inbox-empty { padding: 0.6rem 0.8rem; color: #888; font-size: 0.85rem; }
+
+  #search-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+  #search-input { flex: 1; }
+
+  #filter-bar {
+    display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;
+    font-size: 0.8rem; color: #888;
+  }
+
+  #feed { list-style: none; margin: 0; padding: 0; }
+  #feed li { padding: 0.75rem 0; border-bottom: 1px solid #8882; }
+  #feed li .meta { font-size: 0.78rem; color: #888; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  #feed li .title { margin-top: 0.15rem; }
+
+  .tag {
+    display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; padding: 0.1rem 0.5rem;
+    border-radius: 999px; border: 1px solid #8884; background: #8881;
+    cursor: pointer; color: inherit;
+  }
+  .tag:hover { background: #8883; }
+  .tag .x { opacity: 0.6; }
+  .tag .x:hover { opacity: 1; }
+
+  .edit-panel {
+    margin-top: 0.5rem; padding: 0.6rem; border: 1px dashed #8884; border-radius: 6px;
+    font-size: 0.82rem; display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .edit-panel .row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .edit-panel .label { color: #888; min-width: 3.2rem; }
+  .edit-panel input[type=text] { flex: 1; min-width: 8rem; padding: 0.2rem 0.5rem; }
+
+  #feed-more { display: block; margin: 1rem auto; }
+  #feed-empty { color: #888; }
+
+  #todo-section { margin-bottom: 1.5rem; border: 1px solid #8883; border-radius: 8px; }
+  #todo-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
+  }
+  #todo-list .detail { margin-top: 0.4rem; font-size: 0.8rem; color: #888; white-space: pre-wrap; }
+  #todo-list .actions input[type=text] { min-width: 8rem; }
+  #todo-empty { padding: 0.6rem 0.8rem; color: #888; font-size: 0.85rem; }
+  #todo-add-row { display: flex; gap: 0.4rem; padding: 0.6rem 0.8rem; border-top: 1px solid #8882; flex-wrap: wrap; }
+  #todo-add-row input[type=text] { flex: 1; min-width: 8rem; }
+
+  #admin-bar {
+    display: flex; align-items: center; gap: 0.5rem; margin-top: 2rem;
+    padding-top: 1rem; border-top: 1px solid #8882; font-size: 0.82rem; flex-wrap: wrap;
+  }
+  #admin-msg { color: #888; }
+  #admin-output {
+    white-space: pre-wrap; font-size: 0.78rem; color: #888; margin-top: 0.5rem;
+  }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>kb</h1>
+<p id="status">checking server...</p>
+
+<div id="capture">
+  <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."></textarea>
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <span id="capture-msg"></span>
+    <button id="capture-btn" class="btn">Add</button>
+  </div>
+</div>
+
+<div id="inbox-section">
+  <div id="inbox-header">
+    <span><strong>Inbox</strong> <span id="inbox-count">(0)</span></span>
+    <span id="inbox-toggle">show</span>
+  </div>
+  <ul id="inbox-list" hidden></ul>
+  <p id="inbox-empty" hidden>Inbox is empty.</p>
+</div>
+
+<div id="todo-section">
+  <div id="todo-header">
+    <span><strong>Todos</strong> <span id="todo-count">(0)</span></span>
+    <span id="todo-toggle">show</span>
+  </div>
+  <ul id="todo-list" hidden></ul>
+  <p id="todo-empty" hidden>No open todos.</p>
+  <div id="todo-add-row" hidden>
+    <input id="todo-add-title" type="text" placeholder="new todo title...">
+    <select id="todo-add-priority">
+      <option value="0">P0</option><option value="1">P1</option>
+      <option value="2" selected>P2</option><option value="3">P3</option><option value="4">P4</option>
+    </select>
+    <select id="todo-add-type">
+      <option value="task" selected>task</option><option value="bug">bug</option>
+      <option value="feature">feature</option><option value="chore">chore</option>
+      <option value="epic">epic</option><option value="decision">decision</option>
+    </select>
+    <button id="todo-add-btn" class="btn">Add</button>
+  </div>
+</div>
+
+<div id="search-row">
+  <input id="search-input" type="search" placeholder="Search everything...">
+</div>
+<div id="filter-bar" hidden>
+  filtered by <span id="filter-tag" class="tag"></span>
+  <button id="filter-clear" class="link-btn">clear</button>
+</div>
+
+<ul id="feed"></ul>
+<button id="feed-more" class="btn" hidden>Load more</button>
+<p id="feed-empty" hidden>Nothing here yet.</p>
+
+<div id="admin-bar">
+  <button id="admin-reindex" class="btn">Reindex</button>
+  <button id="admin-validate" class="btn">Validate</button>
+  <button id="admin-doctor" class="btn">Doctor</button>
+  <select id="admin-sync-source">
+    <option value="all">all</option><option value="memos">memos</option>
+    <option value="gitlab">gitlab</option><option value="beads">beads</option>
+  </select>
+  <button id="admin-sync" class="btn">Sync</button>
+  <span id="admin-msg"></span>
+</div>
+<pre id="admin-output" hidden></pre>
+
+<script>
+  const CORE_TYPES = ["tutorial", "how-to", "reference", "explanation"];
+
+  // ---------- feed / search / capture ----------
+
+  const feedEl = document.getElementById("feed");
+  const moreBtn = document.getElementById("feed-more");
+  const emptyEl = document.getElementById("feed-empty");
+  const searchEl = document.getElementById("search-input");
+  const filterBar = document.getElementById("filter-bar");
+  const filterTagEl = document.getElementById("filter-tag");
+  const filterClearBtn = document.getElementById("filter-clear");
+
+  let cursor = null;
+  let activeTag = null;
+  let searchDebounce = null;
+
+  function tagChip(tag, onRemove) {
+    const span = document.createElement("span");
+    span.className = "tag";
+    const label = document.createElement("span");
+    label.textContent = tag;
+    label.addEventListener("click", () => setTagFilter(tag));
+    span.appendChild(label);
+    if (onRemove) {
+      const x = document.createElement("span");
+      x.className = "x";
+      x.textContent = "×";
+      x.addEventListener("click", (e) => { e.stopPropagation(); onRemove(); });
+      span.appendChild(x);
+    }
+    return span;
+  }
+
+  function renderItem(item) {
+    const li = document.createElement("li");
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const stamp = document.createElement("span");
+    stamp.textContent = `${item.created || ""} · ${item.type}`;
+    meta.appendChild(stamp);
+
+    const tagsHolder = document.createElement("span");
+    tagsHolder.className = "row";
+    for (const tag of item.tags || []) tagsHolder.appendChild(tagChip(tag));
+    meta.appendChild(tagsHolder);
+
+    let panel = null;
+    if (item.id) {
+      const editLink = document.createElement("button");
+      editLink.className = "link-btn";
+      editLink.textContent = "edit";
+      meta.appendChild(editLink);
+
+      panel = document.createElement("div");
+      panel.className = "edit-panel";
+      panel.hidden = true;
+      editLink.addEventListener("click", () => {
+        panel.hidden = !panel.hidden;
+        editLink.textContent = panel.hidden ? "edit" : "close";
+        if (!panel.hidden && !panel.dataset.loaded) loadEditPanel(item.id, panel, tagsHolder);
+      });
+    }
+
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = item.title || item.id;
+    li.appendChild(meta);
+    li.appendChild(title);
+    if (panel) li.appendChild(panel);
+    return li;
+  }
+
+  async function loadEditPanel(entryId, panel, tagsHolder) {
+    panel.textContent = "loading...";
+    let tags = [];
+    let links = [];
+    try {
+      const res = await fetch(`/api/entries/${encodeURIComponent(entryId)}`);
+      if (!res.ok) throw new Error();
+      const fm = (await res.json()).frontmatter;
+      tags = fm.tags || [];
+      links = fm.links || [];
+    } catch {
+      panel.textContent = "couldn't load";
+      return;
+    }
+    panel.dataset.loaded = "1";
+    panel.textContent = "";
+
+    const tagsRow = document.createElement("div");
+    tagsRow.className = "row";
+    const tagsLabel = document.createElement("span");
+    tagsLabel.className = "label";
+    tagsLabel.textContent = "tags";
+    tagsRow.appendChild(tagsLabel);
+    const tagsChips = document.createElement("span");
+    tagsRow.appendChild(tagsChips);
+    const tagInput = document.createElement("input");
+    tagInput.type = "text";
+    tagInput.placeholder = "add tag, enter";
+    tagsRow.appendChild(tagInput);
+
+    function renderTags() {
+      tagsChips.innerHTML = "";
+      for (const t of tags) {
+        tagsChips.appendChild(tagChip(t, async () => {
+          const r = await patchEntry(entryId, "tags", { rm: [t] });
+          if (r && r.tags) { tags = r.tags; renderTags(); syncFeedTags(tagsHolder, tags); }
+        }));
+      }
+    }
+    renderTags();
+    tagInput.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter" || !tagInput.value.trim()) return;
+      const val = tagInput.value.trim();
+      tagInput.value = "";
+      const r = await patchEntry(entryId, "tags", { add: [val] });
+      if (r && r.tags) { tags = r.tags; renderTags(); syncFeedTags(tagsHolder, tags); }
+    });
+
+    const linksRow = document.createElement("div");
+    linksRow.className = "row";
+    const linksLabel = document.createElement("span");
+    linksLabel.className = "label";
+    linksLabel.textContent = "links";
+    linksRow.appendChild(linksLabel);
+    const linksChips = document.createElement("span");
+    linksRow.appendChild(linksChips);
+    const linkInput = document.createElement("input");
+    linkInput.type = "text";
+    linkInput.placeholder = "target id, enter";
+    linksRow.appendChild(linkInput);
+    const linkMsg = document.createElement("span");
+    linkMsg.style.color = "#c33";
+
+    function renderLinks() {
+      linksChips.innerHTML = "";
+      for (const l of links) {
+        linksChips.appendChild(tagChip(l, async () => {
+          const r = await patchEntry(entryId, "links", { rm: [l] });
+          if (r && r.links) { links = r.links; renderLinks(); }
+        }));
+      }
+    }
+    renderLinks();
+    linkInput.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter" || !linkInput.value.trim()) return;
+      const val = linkInput.value.trim();
+      linkMsg.textContent = "";
+      const r = await patchEntry(entryId, "links", { add: [val] });
+      if (r && r.links) { linkInput.value = ""; links = r.links; renderLinks(); }
+      else if (r && r.error) { linkMsg.textContent = r.error; }
+    });
+
+    panel.appendChild(tagsRow);
+    panel.appendChild(linksRow);
+    panel.appendChild(linkMsg);
+  }
+
+  function syncFeedTags(tagsHolder, tags) {
+    tagsHolder.innerHTML = "";
+    for (const t of tags) tagsHolder.appendChild(tagChip(t));
+  }
+
+  // Generic JSON fetch wrapper -- every mutating call in this file (tag/link
+  // edits, capture, inbox actions, todo actions, admin actions) is a fetch
+  // with an optional JSON body and a JSON (or empty) response, so they all
+  // go through this one helper instead of each hand-rolling the same
+  // method/headers/body/parse boilerplate.
+  async function apiFetch(url, method, body) {
+    const opts = { method };
+    if (body !== undefined) {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    let data = null;
+    try { data = await res.json(); } catch {}
+    return { ok: res.ok, data };
+  }
+
+  async function patchEntry(entryId, field, body) {
+    const { data } = await apiFetch(`/api/entries/${encodeURIComponent(entryId)}/${field}`, "PATCH", body);
+    return data;
+  }
+
+  function renderList(items, append) {
+    if (!append) feedEl.innerHTML = "";
+    for (const item of items) feedEl.appendChild(renderItem(item));
+    emptyEl.hidden = feedEl.children.length > 0;
+  }
+
+  async function loadFeed(append) {
+    const url = new URL("/api/feed", location.origin);
+    if (append && cursor) url.searchParams.set("before", cursor);
+    if (activeTag) url.searchParams.set("tag", activeTag);
+    const res = await fetch(url);
+    if (!res.ok) {
+      emptyEl.hidden = false;
+      emptyEl.textContent = "couldn't load feed";
+      return;
+    }
+    const data = await res.json();
+    renderList(data.items, append);
+    cursor = data.next;
+    moreBtn.hidden = !cursor;
+  }
+
+  async function runSearch(query) {
+    const url = new URL("/api/search", location.origin);
+    url.searchParams.set("q", query);
+    url.searchParams.set("all", "1");
+    const res = await fetch(url);
+    moreBtn.hidden = true;
+    if (!res.ok) {
+      renderList([], false);
+      emptyEl.hidden = false;
+      emptyEl.textContent = "search failed";
+      return;
+    }
+    const data = await res.json();
+    renderList(data.items, false);
+    if (!data.items.length) {
+      emptyEl.hidden = false;
+      emptyEl.textContent = "no results";
+    }
+  }
+
+  function setTagFilter(tag) {
+    activeTag = tag;
+    filterTagEl.textContent = tag;
+    filterBar.hidden = false;
+    searchEl.value = "";
+    cursor = null;
+    loadFeed(false);
+  }
+
+  function clearTagFilter() {
+    clearTagFilterQuiet();
+    cursor = null;
+    loadFeed(false);
+  }
+
+  function clearTagFilterQuiet() {
+    activeTag = null;
+    filterBar.hidden = true;
+  }
+
+  filterClearBtn.addEventListener("click", clearTagFilter);
+  moreBtn.addEventListener("click", () => loadFeed(true));
+
+  searchEl.addEventListener("input", () => {
+    clearTimeout(searchDebounce);
+    const query = searchEl.value.trim();
+    searchDebounce = setTimeout(() => {
+      if (!query) {
+        loadFeed(false);
+      } else {
+        clearTagFilterQuiet();
+        runSearch(query);
+      }
+    }, 250);
+  });
+
+  const textEl = document.getElementById("capture-text");
+  const btnEl = document.getElementById("capture-btn");
+  const msgEl = document.getElementById("capture-msg");
+
+  async function capture() {
+    const text = textEl.value.trim();
+    if (!text) return;
+    btnEl.disabled = true;
+    msgEl.textContent = "adding...";
+    try {
+      const { ok, data } = await apiFetch("/api/capture", "POST", { text });
+      if (!ok) throw new Error();
+      textEl.value = "";
+      msgEl.textContent = `added -> ${data.path}`;
+      if (!searchEl.value.trim() && !activeTag) {
+        feedEl.insertBefore(renderItem({
+          id: null, title: text.split("\n")[0], type: "journal",
+          created: new Date().toISOString(), tags: [],
+        }), feedEl.firstChild);
+        emptyEl.hidden = true;
+      }
+    } catch {
+      msgEl.textContent = "failed to add -- try again";
+    } finally {
+      btnEl.disabled = false;
+    }
+  }
+
+  btnEl.addEventListener("click", capture);
+  textEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) capture();
+  });
+
+  // ---------- shared list-panel helpers (inbox + todos) ----------
+
+  // Both the Inbox and Todos panels are the same shape: a header that
+  // toggles a list open/closed, a count badge, an empty-state message, and
+  // rows built from a title + a small right-aligned badge + an actions row.
+  // One shared skeleton for the row, and one shared toggle wiring, instead
+  // of two hand-rolled copies.
+
+  function listRow(titleText, badgeText) {
+    const li = document.createElement("li");
+    const row1 = document.createElement("div");
+    row1.className = "row1";
+    const title = document.createElement("span");
+    title.textContent = titleText;
+    const badge = document.createElement("span");
+    badge.className = "row-badge";
+    badge.textContent = badgeText;
+    row1.appendChild(title);
+    row1.appendChild(badge);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    li.appendChild(row1);
+    li.appendChild(actions);
+    return { li, actions };
+  }
+
+  function wireCollapsible(headerEl, toggleEl, listEl, emptyEl, extraEl) {
+    let expanded = false;
+    headerEl.addEventListener("click", () => {
+      expanded = !expanded;
+      toggleEl.textContent = expanded ? "hide" : "show";
+      listEl.hidden = !expanded;
+      if (extraEl) extraEl.hidden = !expanded;
+      emptyEl.hidden = !expanded || listEl.children.length > 0;
+    });
+  }
+
+  // ---------- inbox ----------
+
+  const inboxHeader = document.getElementById("inbox-header");
+  const inboxToggle = document.getElementById("inbox-toggle");
+  const inboxCount = document.getElementById("inbox-count");
+  const inboxList = document.getElementById("inbox-list");
+  const inboxEmpty = document.getElementById("inbox-empty");
+
+  function renderInboxItem(item) {
+    const badge = item.age_days === null ? "" : `${item.age_days}d`;
+    const { li, actions } = listRow(item.title, badge);
+
+    const typeSelect = document.createElement("select");
+    for (const t of CORE_TYPES) {
+      const opt = document.createElement("option");
+      opt.value = t; opt.textContent = t;
+      typeSelect.appendChild(opt);
+    }
+    const promoteBtn = document.createElement("button");
+    promoteBtn.className = "btn";
+    promoteBtn.textContent = "Promote";
+    promoteBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "promote", typeSelect.value));
+
+    const redirectBtn = document.createElement("button");
+    redirectBtn.className = "btn";
+    redirectBtn.textContent = "Redirect";
+    redirectBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "redirect"));
+
+    const discardBtn = document.createElement("button");
+    discardBtn.className = "btn";
+    discardBtn.textContent = "Discard";
+    discardBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "discard"));
+
+    actions.appendChild(typeSelect);
+    actions.appendChild(promoteBtn);
+    actions.appendChild(redirectBtn);
+    actions.appendChild(discardBtn);
+    return li;
+  }
+
+  async function resolveInboxItem(id, li, action, type) {
+    const urls = {
+      promote: [`/api/inbox/${encodeURIComponent(id)}/promote`, "POST", { type }],
+      redirect: [`/api/inbox/${encodeURIComponent(id)}/redirect`, "POST", undefined],
+      discard: [`/api/inbox/${encodeURIComponent(id)}`, "DELETE", undefined],
+    };
+    const { ok } = await apiFetch(...urls[action]);
+    if (ok) {
+      li.remove();
+      inboxCount.textContent = `(${inboxList.children.length})`;
+      inboxEmpty.hidden = inboxList.children.length > 0;
+      if (!activeTag && !searchEl.value.trim()) loadFeed(false);
+    }
+  }
+
+  async function loadInbox() {
+    const { ok, data } = await apiFetch("/api/inbox", "GET");
+    if (!ok) return;
+    inboxCount.textContent = `(${data.items.length})`;
+    inboxList.innerHTML = "";
+    for (const item of data.items) inboxList.appendChild(renderInboxItem(item));
+    inboxEmpty.hidden = data.items.length > 0;
+  }
+
+  wireCollapsible(inboxHeader, inboxToggle, inboxList, inboxEmpty);
+
+  // ---------- todos ----------
+
+  const todoHeader = document.getElementById("todo-header");
+  const todoToggle = document.getElementById("todo-toggle");
+  const todoCount = document.getElementById("todo-count");
+  const todoList = document.getElementById("todo-list");
+  const todoEmpty = document.getElementById("todo-empty");
+  const todoAddRow = document.getElementById("todo-add-row");
+  const todoAddTitle = document.getElementById("todo-add-title");
+  const todoAddPriority = document.getElementById("todo-add-priority");
+  const todoAddType = document.getElementById("todo-add-type");
+  const todoAddBtn = document.getElementById("todo-add-btn");
+  async function todoAction(id, action, body) {
+    const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}/${action}`, "POST", body);
+    return ok ? data : null;
+  }
+
+  function renderTodoItem(item) {
+    const { li, actions } = listRow(item.title, `P${item.priority}`);
+
+    const detail = document.createElement("div");
+    detail.className = "detail";
+    detail.hidden = true;
+
+    const showBtn = document.createElement("button");
+    showBtn.className = "btn";
+    showBtn.textContent = "Show";
+    showBtn.addEventListener("click", async () => {
+      if (detail.hidden && !detail.dataset.loaded) {
+        const r = await todoAction(item.id, "show");
+        if (r) { detail.textContent = r.message; detail.dataset.loaded = "1"; }
+      }
+      detail.hidden = !detail.hidden;
+    });
+
+    const commentInput = document.createElement("input");
+    commentInput.type = "text";
+    commentInput.placeholder = "comment, enter";
+    commentInput.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter" || !commentInput.value.trim()) return;
+      const text = commentInput.value.trim();
+      commentInput.value = "";
+      await todoAction(item.id, "comment", { text });
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "btn";
+    closeBtn.textContent = "Close";
+    closeBtn.addEventListener("click", async () => {
+      const r = await todoAction(item.id, "close");
+      if (r) {
+        li.remove();
+        todoCount.textContent = `(${todoList.children.length})`;
+        todoEmpty.hidden = todoList.children.length > 0;
+      }
+    });
+
+    actions.appendChild(showBtn);
+    actions.appendChild(commentInput);
+    actions.appendChild(closeBtn);
+    li.appendChild(detail);
+    return li;
+  }
+
+  async function loadTodos() {
+    const { ok, data } = await apiFetch("/api/todo", "GET");
+    if (!ok) return;
+    todoCount.textContent = `(${data.items.length})`;
+    todoList.innerHTML = "";
+    for (const item of data.items) todoList.appendChild(renderTodoItem(item));
+    todoEmpty.hidden = data.items.length > 0;
+  }
+
+  wireCollapsible(todoHeader, todoToggle, todoList, todoEmpty, todoAddRow);
+
+  async function addTodo() {
+    const title = todoAddTitle.value.trim();
+    if (!title) return;
+    const { ok } = await apiFetch("/api/todo", "POST",
+      { title, priority: todoAddPriority.value, type: todoAddType.value });
+    if (ok) {
+      todoAddTitle.value = "";
+      loadTodos();
+    }
+  }
+  todoAddBtn.addEventListener("click", addTodo);
+  todoAddTitle.addEventListener("keydown", (e) => { if (e.key === "Enter") addTodo(); });
+
+  // ---------- admin ----------
+
+  const adminMsg = document.getElementById("admin-msg");
+  const adminOutput = document.getElementById("admin-output");
+
+  async function adminRun(label, fn) {
+    adminMsg.textContent = `${label}...`;
+    adminOutput.hidden = true;
+    try {
+      const data = await fn();
+      adminMsg.textContent = data.ok === false ? `${label}: issues found` : `${label}: done`;
+      if (data.output) {
+        adminOutput.textContent = data.output;
+        adminOutput.hidden = false;
+      } else if (data.note) {
+        adminMsg.textContent += ` -- ${data.note}`;
+      } else if (data.error) {
+        adminMsg.textContent = `${label}: ${data.error}`;
+      }
+    } catch {
+      adminMsg.textContent = `${label} failed`;
+    }
+  }
+
+  document.getElementById("admin-reindex").addEventListener("click", () =>
+    adminRun("reindex", () => apiFetch("/api/index", "POST", { full: false }).then(r => r.data)));
+
+  document.getElementById("admin-validate").addEventListener("click", () =>
+    adminRun("validate", () => apiFetch("/api/validate", "POST").then(r => r.data)));
+
+  document.getElementById("admin-doctor").addEventListener("click", () =>
+    adminRun("doctor", () => apiFetch("/api/doctor", "GET").then(r => r.data)));
+
+  document.getElementById("admin-sync").addEventListener("click", () => {
+    const source = document.getElementById("admin-sync-source").value;
+    adminRun("sync", () => apiFetch("/api/sync", "POST", { source }).then(r => r.data));
+  });
+
+  // ---------- boot ----------
+
+  fetch("/api/health")
+    .then(r => r.json())
+    .then(data => {
+      const el = document.getElementById("status");
+      el.textContent = "server up -- data repo: " + data.root;
+      el.className = "ok";
+    })
+    .catch(() => {
+      const el = document.getElementById("status");
+      el.textContent = "couldn't reach /api/health";
+      el.className = "err";
+    });
+
+  loadFeed(false);
+  loadInbox();
+  loadTodos();
+</script>
+</body>
+</html>
