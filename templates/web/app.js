@@ -129,6 +129,31 @@ const CORE_TYPES = ["tutorial", "how-to", "reference", "explanation"];
 const ALL_TYPES = ["tutorial", "how-to", "reference", "explanation", "journal", "inbox", "source"];
 const THEME_KEY = "kb-theme";
 
+// One source of truth for the new-entry form's blank state, used both for
+// the initial Alpine state and to reset the form each time it reopens --
+// so the two can't drift out of sync with each other.
+function newEntryDefaults() {
+  return {
+    newEntryType: CORE_TYPES[0],
+    newEntryTitle: "",
+    newEntryBody: "",
+    newEntryTags: [],
+    newEntryLinks: [],
+    newEntryTagInput: "",
+    newEntryLinkInput: "",
+    newEntryPreview: false,
+    newEntrySaving: false,
+    newEntrySaveMsg: "",
+    newEntrySaveErr: false,
+    newEntryTagHighlight: -1,
+    newEntryLinkHighlight: -1,
+    newEntryTagInputFocused: false,
+    newEntryLinkInputFocused: false,
+    newEntryTagSuggestUp: false,
+    newEntryLinkSuggestUp: false,
+  };
+}
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("kbApp", () => ({
     CORE_TYPES,
@@ -376,20 +401,29 @@ document.addEventListener("alpine:init", () => {
       this[`${which}SuggestUp`] = spaceBelow < 220;
     },
 
-    get modalTagSuggestions() {
-      const q = this.modalTagInput.trim().toLowerCase();
+    // Shared by every tag/link editor (the entry-view modal's and the
+    // new-entry form's alike) so there's one filter implementation to get
+    // right instead of one copy per editor.
+    _tagSuggestionsFor(inputVal, currentTags) {
+      const q = inputVal.trim().toLowerCase();
       if (!q) return [];
       return this.allTags
-        .filter((t) => t.toLowerCase().includes(q) && !this.modalTags.includes(t))
+        .filter((t) => t.toLowerCase().includes(q) && !currentTags.includes(t))
         .slice(0, 8);
     },
-    get modalLinkSuggestions() {
-      const q = this.modalLinkInput.trim().toLowerCase();
+    _linkSuggestionsFor(inputVal, currentLinks, excludeId) {
+      const q = inputVal.trim().toLowerCase();
       if (!q) return [];
       return this.allEntries
-        .filter((e) => e.id !== this.modalEntryId && !this.modalLinks.includes(e.id)
+        .filter((e) => e.id !== excludeId && !currentLinks.includes(e.id)
           && (e.id.toLowerCase().includes(q) || (e.title || "").toLowerCase().includes(q)))
         .slice(0, 8);
+    },
+    get modalTagSuggestions() {
+      return this._tagSuggestionsFor(this.modalTagInput, this.modalTags);
+    },
+    get modalLinkSuggestions() {
+      return this._linkSuggestionsFor(this.modalLinkInput, this.modalLinks, this.modalEntryId);
     },
 
     // Shared by the tag and link inputs: arrow keys move a highlighted
@@ -551,6 +585,96 @@ document.addEventListener("alpine:init", () => {
       if (r && r.links) this.modalLinks = r.links;
     },
 
+    // ---------- new entry ----------
+    // A separate modal from the entry-view/edit one above -- it never has an
+    // entry id to load against, just a blank form that POSTs to
+    // /api/entries and then behaves like any other freshly-created card.
+    newEntryOpen: false,
+    ...newEntryDefaults(),
+
+    openNewEntryModal() {
+      Object.assign(this, newEntryDefaults());
+      this.newEntryOpen = true;
+      this.$nextTick(() => this.$refs.newEntryTitleInput && this.$refs.newEntryTitleInput.focus());
+    },
+    closeNewEntryModal() {
+      this.newEntryOpen = false;
+    },
+    // Shared by both chip editors below -- trim, skip empty/duplicate, push,
+    // clear the input. (Unlike the entry-view modal's addModalTag/addModalLink,
+    // there's no entry yet to PATCH, so this only ever touches local state.)
+    _addLocalChip(inputProp, arrayProp) {
+      const val = this[inputProp].trim();
+      this[inputProp] = "";
+      if (val && !this[arrayProp].includes(val)) this[arrayProp] = [...this[arrayProp], val];
+    },
+    addNewEntryTag() {
+      this._addLocalChip("newEntryTagInput", "newEntryTags");
+    },
+    addNewEntryLink() {
+      this._addLocalChip("newEntryLinkInput", "newEntryLinks");
+    },
+    get newEntryTagSuggestions() {
+      return this._tagSuggestionsFor(this.newEntryTagInput, this.newEntryTags);
+    },
+    get newEntryLinkSuggestions() {
+      return this._linkSuggestionsFor(this.newEntryLinkInput, this.newEntryLinks, null);
+    },
+    newEntryTagInputKeydown(e) {
+      this._suggestKeydown(e, this.newEntryTagSuggestions, "newEntryTagHighlight",
+        (t) => this.selectNewEntryTagSuggestion(t), () => this.addNewEntryTag());
+    },
+    newEntryLinkInputKeydown(e) {
+      this._suggestKeydown(e, this.newEntryLinkSuggestions, "newEntryLinkHighlight",
+        (entry) => this.selectNewEntryLinkSuggestion(entry), () => this.addNewEntryLink());
+    },
+    selectNewEntryTagSuggestion(tag) {
+      this.newEntryTagInput = tag;
+      this.newEntryTagHighlight = -1;
+      this.addNewEntryTag();
+    },
+    selectNewEntryLinkSuggestion(entry) {
+      this.newEntryLinkInput = entry.id;
+      this.newEntryLinkHighlight = -1;
+      this.addNewEntryLink();
+    },
+    async createNewEntry() {
+      const title = this.newEntryTitle.trim();
+      if (!title) {
+        this.newEntrySaveErr = true;
+        this.newEntrySaveMsg = "title is required";
+        return;
+      }
+      this.newEntrySaving = true;
+      this.newEntrySaveErr = false;
+      this.newEntrySaveMsg = "creating…";
+      const { ok, data } = await apiFetch("/api/entries", "POST", {
+        type: this.newEntryType, title, body: this.newEntryBody,
+        tags: this.newEntryTags, links: this.newEntryLinks,
+      });
+      this.newEntrySaving = false;
+      if (ok) {
+        this.newEntryOpen = false;
+        // The response already tells us everything loadEntryIndex()/
+        // loadTagIndex() would otherwise re-fetch from scratch (a full
+        // rescan of every entry in the repo) -- just fold the one new
+        // row/tags into the already-loaded indexes instead.
+        const newTags = this.newEntryTags.filter((t) => !this.allTags.includes(t));
+        if (newTags.length) this.allTags = [...this.allTags, ...newTags].sort();
+        if (!this.allEntries.some((e) => e.id === data.id)) {
+          this.allEntries = [...this.allEntries, { id: data.id, title, type: this.newEntryType }];
+        }
+        // Only worth a feed reload if the new entry would actually show up
+        // in the view the user is currently looking at.
+        const matchesView = (!this.activeTag || this.newEntryTags.includes(this.activeTag))
+          && (!this.activeType || this.activeType === this.newEntryType) && !this.searchQuery.trim();
+        if (matchesView) this.loadFeed(false);
+      } else {
+        this.newEntrySaveErr = true;
+        this.newEntrySaveMsg = (data && data.error) || "create failed";
+      }
+    },
+
     // ---------- admin ----------
     adminOpen: false,
     adminMsg: "",
@@ -593,6 +717,7 @@ document.addEventListener("alpine:init", () => {
       if (e.key !== "Escape") return;
       if (this.adminOpen) this.adminOpen = false;
       if (this.modalOpen) this.closeEntryModal();
+      if (this.newEntryOpen) this.closeNewEntryModal();
     },
 
     // ---------- boot ----------
@@ -601,11 +726,15 @@ document.addEventListener("alpine:init", () => {
       this.applyThemeAttr(this.theme);
       this.$watch("theme", (mode) => this.applyThemeAttr(mode));
 
-      // Lock the page's own scroll behind the modal so dragging the feed
-      // underneath doesn't fight with scrolling the modal's content.
-      this.$watch("modalOpen", (open) => {
-        document.body.style.overflow = open ? "hidden" : "";
-      });
+      // Lock the page's own scroll behind whichever modal is open so
+      // dragging the feed underneath doesn't fight with scrolling the
+      // modal's content. Both flags need their own $watch (Alpine has no
+      // "watch this computed value" form), but they share one body.
+      const updateBodyScrollLock = () => {
+        document.body.style.overflow = (this.modalOpen || this.newEntryOpen) ? "hidden" : "";
+      };
+      this.$watch("modalOpen", updateBodyScrollLock);
+      this.$watch("newEntryOpen", updateBodyScrollLock);
 
       fetch("/api/health")
         .then((r) => r.json())

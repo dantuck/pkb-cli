@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kb</title>
+<title>kb — Second Brain</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23ff8c00'/%3E%3Cpath d='M7 5h7a3 3 0 0 1 3 3v11H10a3 3 0 0 1-3-3z' fill='none' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3Cpath d='M7 16a3 3 0 0 1 3-3h7' fill='none' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body x-data="kbApp()" x-init="init()" x-on:keydown.window="onKeydown($event)">
@@ -11,6 +12,10 @@
 <div id="header-row">
   <h1>kb</h1>
   <span>
+    <button class="pill-btn" title="New entry" @click="openNewEntryModal()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      New
+    </button>
     <button class="pill-btn" title="Admin" @click="adminOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Admin
@@ -46,9 +51,9 @@
   <pre id="admin-output" x-show="adminOutput" x-text="adminOutput"></pre>
 </div>
 
-<div id="entry-backdrop" :class="{ open: modalOpen }" @click="closeEntryModal()"></div>
-<div id="entry-modal" role="dialog" aria-modal="true" :class="{ open: modalOpen }" :aria-hidden="!modalOpen" :inert="!modalOpen">
-  <div id="entry-modal-header">
+<div class="modal-backdrop" :class="{ open: modalOpen }" @click="closeEntryModal()"></div>
+<div class="modal-panel" role="dialog" aria-modal="true" :class="{ open: modalOpen }" :aria-hidden="!modalOpen" :inert="!modalOpen">
+  <div class="modal-panel-header">
     <span class="stamp" x-text="modalStamp"></span>
     <span id="entry-modal-actions">
       <button class="link-btn" x-show="!modalLoadError" x-text="modalEditing ? 'done' : 'edit'"
@@ -58,7 +63,7 @@
       </button>
     </span>
   </div>
-  <div id="entry-modal-body">
+  <div class="modal-panel-body">
     <template x-if="modalLoading">
       <span>loading…</span>
     </template>
@@ -127,6 +132,87 @@
           </div>
         </div>
         <span style="color:var(--danger-text)" x-text="modalLinkError"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" :class="{ open: newEntryOpen }" @click="closeNewEntryModal()"></div>
+<div class="modal-panel" role="dialog" aria-modal="true" :class="{ open: newEntryOpen }" :aria-hidden="!newEntryOpen" :inert="!newEntryOpen">
+  <div class="modal-panel-header">
+    <strong>New entry</strong>
+    <button class="icon-btn" title="Close" @click="closeNewEntryModal()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="modal-panel-body">
+    <div class="edit-panel editing">
+      <div class="edit-form">
+        <div class="row">
+          <span class="label">type</span>
+          <select x-model="newEntryType">
+            <template x-for="t in CORE_TYPES" :key="t">
+              <option :value="t" x-text="t"></option>
+            </template>
+          </select>
+        </div>
+        <input type="text" class="edit-title" placeholder="title" x-model="newEntryTitle" x-ref="newEntryTitleInput">
+        <textarea class="edit-body" rows="10" placeholder="body (markdown)..." x-model="newEntryBody" x-show="!newEntryPreview"></textarea>
+        <div class="md-view" x-show="newEntryPreview" x-html="renderMarkdown(newEntryBody)"></div>
+
+        <div class="row">
+          <button class="btn btn-primary" @click="createNewEntry()" :disabled="newEntrySaving">create</button>
+          <button class="link-btn" @click="closeNewEntryModal()">cancel</button>
+          <button class="link-btn" @click="newEntryPreview = !newEntryPreview" x-text="newEntryPreview ? 'back to source' : 'preview'"></button>
+          <span class="edit-msg" :style="newEntrySaveErr ? 'color:var(--danger-text)' : ''" x-text="newEntrySaveMsg"></span>
+        </div>
+
+        <div class="row">
+          <span class="label">tags</span>
+          <span>
+            <template x-for="t in newEntryTags" :key="t">
+              <span class="tag">
+                <span x-text="t"></span>
+                <span class="x" @click.stop="newEntryTags = newEntryTags.filter((x) => x !== t)">×</span>
+              </span>
+            </template>
+          </span>
+          <div class="suggest-wrap" x-ref="newEntryTagSuggestWrap">
+            <input type="text" placeholder="add tag, enter" x-model="newEntryTagInput"
+                   @focus="newEntryTagInputFocused = true; positionSuggest('newEntryTag')" @blur="setTimeout(() => newEntryTagInputFocused = false, 150)"
+                   @input="newEntryTagHighlight = -1" @keydown="newEntryTagInputKeydown($event)">
+            <ul class="suggest-list" :class="{ 'drop-up': newEntryTagSuggestUp }" x-show="newEntryTagInputFocused && newEntryTagSuggestions.length">
+              <template x-for="(t, i) in newEntryTagSuggestions" :key="t">
+                <li :class="{ active: i === newEntryTagHighlight }" @mousedown.prevent="selectNewEntryTagSuggestion(t)" x-text="t"></li>
+              </template>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <span class="label">links</span>
+          <span>
+            <template x-for="l in newEntryLinks" :key="l">
+              <span class="tag">
+                <span x-text="l"></span>
+                <span class="x" @click.stop="newEntryLinks = newEntryLinks.filter((x) => x !== l)">×</span>
+              </span>
+            </template>
+          </span>
+          <div class="suggest-wrap" x-ref="newEntryLinkSuggestWrap">
+            <input type="text" placeholder="target id, enter" x-model="newEntryLinkInput"
+                   @focus="newEntryLinkInputFocused = true; positionSuggest('newEntryLink')" @blur="setTimeout(() => newEntryLinkInputFocused = false, 150)"
+                   @input="newEntryLinkHighlight = -1" @keydown="newEntryLinkInputKeydown($event)">
+            <ul class="suggest-list" :class="{ 'drop-up': newEntryLinkSuggestUp }" x-show="newEntryLinkInputFocused && newEntryLinkSuggestions.length">
+              <template x-for="(e, i) in newEntryLinkSuggestions" :key="e.id">
+                <li :class="{ active: i === newEntryLinkHighlight }" @mousedown.prevent="selectNewEntryLinkSuggestion(e)">
+                  <span x-text="e.title || e.id"></span>
+                  <span class="suggest-meta" x-text="e.type"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </div>
       </div>
     </div>
   </div>

@@ -308,13 +308,13 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #todo-add-row { display: flex; gap: 0.4rem; padding: 0.7rem 1rem; border-top: 1px solid var(--divider); flex-wrap: wrap; }
 #todo-add-row input[type=text] { flex: 1; min-width: 8rem; }
 
-#admin-backdrop, #entry-backdrop {
+#admin-backdrop, .modal-backdrop {
   position: fixed; inset: 0; background: rgba(10, 10, 16, 0.4); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
 }
 #admin-backdrop { z-index: 40; }
-#entry-backdrop { z-index: 50; background: rgba(10, 10, 16, 0.5); }
-#admin-backdrop.open, #entry-backdrop.open { opacity: 1; pointer-events: auto; }
+.modal-backdrop { z-index: 50; background: rgba(10, 10, 16, 0.5); }
+#admin-backdrop.open, .modal-backdrop.open { opacity: 1; pointer-events: auto; }
 
 #admin-drawer {
   position: fixed; top: 0; right: 0; height: 100%; width: min(320px, 85vw);
@@ -339,7 +339,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.7rem;
 }
 
-#entry-modal {
+.modal-panel {
   position: fixed; top: 5vh; left: 50%; width: min(660px, 92vw); min-height: 320px; max-height: 90vh;
   background: var(--surface); color: var(--text); border: 1px solid var(--border);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
@@ -347,13 +347,13 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   transition: opacity 0.18s ease, transform 0.18s cubic-bezier(.2,.8,.2,1);
   z-index: 51; display: flex; flex-direction: column; overflow: hidden;
 }
-#entry-modal.open { transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto; }
-#entry-modal-header {
+.modal-panel.open { transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto; }
+.modal-panel-header {
   display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
   padding: 0.9rem 1.15rem; border-bottom: 1px solid var(--divider); flex-shrink: 0;
 }
-#entry-modal-header .stamp { font-size: 0.85rem; font-weight: 600; color: var(--heading); }
+.modal-panel-header .stamp, .modal-panel-header strong { font-size: 0.85rem; font-weight: 600; color: var(--heading); }
 #entry-modal-actions { display: flex; align-items: center; gap: 0.3rem; }
-#entry-modal-body { padding: 1.15rem; overflow-y: auto; }
+.modal-panel-body { padding: 1.15rem; overflow-y: auto; }
 
 [hidden] { display: none !important; }
