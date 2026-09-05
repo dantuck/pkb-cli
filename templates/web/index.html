@@ -4,1219 +4,245 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kb</title>
-<style>
-  :root {
-    color-scheme: light dark;
-    --muted: #656565;
-    --fill: rgba(128, 128, 128, 0.16);
-    --fill-strong: rgba(128, 128, 128, 0.26);
-    --divider: rgba(128, 128, 128, 0.24);
-    --border: rgba(128, 128, 128, 0.45);
-    --border-strong: rgba(128, 128, 128, 0.6);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --muted: #aaaaaa; }
-  }
-  :root[data-theme="dark"] { color-scheme: dark; --muted: #aaaaaa; }
-  :root[data-theme="light"] { color-scheme: light; --muted: #656565; }
-  body { font: 15px/1.6 -apple-system, system-ui, sans-serif; max-width: 660px; margin: 2rem auto; padding: 0 1rem; }
-  #header-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.25rem; }
-  #header-row > span { display: flex; align-items: baseline; gap: 0.8rem; }
-  h1 { font-size: 1.1rem; margin: 0; }
-  #theme-toggle { color: var(--muted); font-size: 0.8rem; }
-  #status { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
-  #status.ok { color: #2a2; }
-  #status.err { color: #c33; }
-
-  #capture { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
-  #capture textarea {
-    font: inherit; padding: 0.6rem; border: 1px solid var(--border); border-radius: 8px;
-    resize: vertical; min-height: 3.5rem; background: transparent; color: inherit;
-  }
-  #capture button {
-    align-self: flex-end; font: inherit; padding: 0.4rem 1rem; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--fill); cursor: pointer;
-  }
-  #capture button:disabled { opacity: 0.5; cursor: default; }
-  #capture-msg { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
-
-  .btn {
-    font: inherit; padding: 0.3rem 0.7rem; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--fill); cursor: pointer; color: inherit;
-  }
-  .btn:hover { background: var(--fill-strong); }
-  .link-btn {
-    font: inherit; background: none; border: none; color: inherit;
-    text-decoration: underline; cursor: pointer; padding: 0;
-  }
-  select { font: inherit; background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 6px; }
-  input[type=text], input[type=search] {
-    font: inherit; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
-    border-radius: 6px; background: transparent; color: inherit;
-  }
-
-  #inbox-section { margin-bottom: 1.5rem; border: 1px solid var(--fill-strong); border-radius: 8px; }
-  #inbox-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
-  }
-  #inbox-list, #todo-list { list-style: none; margin: 0; padding: 0 0.8rem 0.6rem; }
-  #inbox-list li, #todo-list li { padding: 0.5rem 0; border-top: 1px solid var(--divider); }
-  #inbox-list .row1, #todo-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
-  .row-badge { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
-  #inbox-list .actions, #todo-list .actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem; flex-wrap: wrap; }
-  #inbox-empty { padding: 0.6rem 0.8rem; color: var(--muted); font-size: 0.85rem; }
-
-  #search-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
-  #search-input { flex: 1; }
-
-  #filter-bar {
-    display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;
-    font-size: 0.8rem; color: var(--muted);
-  }
-
-  #feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-  /* ">" here matters: without it, this also matches <li> markdown bullets
-     rendered *inside* a card's .md-view content, turning every list item in
-     a journal entry into its own mini card. */
-  #feed > li {
-    padding: 0.9rem 1rem; border-radius: 10px; background: var(--fill);
-    transition: background 0.12s ease;
-  }
-  #feed > li:hover { background: var(--fill-strong); }
-  #feed > li { cursor: pointer; }
-  #feed > li .meta { font-size: 0.76rem; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
-  #feed > li .meta .stamp { white-space: nowrap; }
-  #feed > li .title { margin-top: 0.2rem; font-weight: 600; font-size: 1rem; }
-  #feed > li .tags-row { margin-top: 0.5rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
-  #feed > li .tags-row:empty { display: none; }
-
-  .tag {
-    display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; padding: 0.1rem 0.5rem;
-    border-radius: 999px; background: var(--fill);
-    cursor: pointer; color: var(--muted);
-  }
-  .tag:hover { background: var(--fill-strong); color: inherit; }
-  .tag .x { opacity: 0.6; }
-  .tag .x:hover { opacity: 1; }
-
-  .edit-panel {
-    margin-top: 0.5rem; font-size: 0.82rem;
-    display: flex; flex-direction: column; gap: 0.4rem;
-  }
-  .edit-panel.editing {
-    padding-left: 0.6rem; border-left: 2px solid var(--border-strong);
-  }
-  .edit-panel .more-btn { align-self: flex-start; }
-  .edit-panel .row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .edit-panel .label { color: var(--muted); min-width: 3.2rem; }
-  .edit-panel input[type=text] { flex: 1; min-width: 8rem; padding: 0.2rem 0.5rem; }
-  .edit-panel .edit-title {
-    display: block; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem;
-    font: inherit; font-weight: 600; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
-    border-radius: 6px; background: transparent; color: inherit;
-  }
-  .edit-panel .edit-body {
-    display: block; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem;
-    font: inherit; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px;
-    background: transparent; color: inherit; resize: vertical;
-  }
-  .edit-panel .edit-msg { color: var(--muted); }
-  .edit-panel .edit-form .row { margin-top: 0.2rem; }
-  .edit-panel .edit-form .row + .row { padding-top: 0.4rem; border-top: 1px solid var(--divider); }
-
-  .md-view { line-height: 1.5; }
-  .md-view.clamped {
-    max-height: 12rem; overflow: hidden; position: relative;
-    -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
-  }
-  .edit-panel .edit-body + .md-view {
-    margin-bottom: 0.5rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px;
-  }
-  .md-view .md-title { font-weight: 700; font-size: 1rem; margin-bottom: 0.4rem; }
-  .md-view h1, .md-view h2, .md-view h3, .md-view h4, .md-view h5, .md-view h6 {
-    margin: 0.7rem 0 0.3rem; line-height: 1.3;
-  }
-  .md-view h1 { font-size: 1.15rem; }
-  .md-view h2 { font-size: 1.05rem; }
-  .md-view h3, .md-view h4, .md-view h5, .md-view h6 { font-size: 1rem; }
-  .md-view p { margin: 0.5rem 0; }
-  .md-view ul, .md-view ol { margin: 0.4rem 0; padding-left: 1.4rem; }
-  .md-view li { margin: 0.15rem 0; }
-  .md-view code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em;
-    background: var(--divider); border-radius: 4px; padding: 0.1em 0.35em;
-  }
-  .md-view pre {
-    background: var(--fill); border: 1px solid var(--fill-strong); border-radius: 6px; padding: 0.6rem;
-    overflow-x: auto; margin: 0.5rem 0;
-  }
-  .md-view pre code { background: none; padding: 0; }
-  .md-view blockquote {
-    margin: 0.5rem 0; padding-left: 0.7rem; border-left: 3px solid var(--border); color: var(--muted);
-  }
-  .md-view a { color: inherit; }
-
-  #feed-more { display: block; margin: 1rem auto; }
-  #feed-empty { color: var(--muted); }
-
-  #todo-section { margin-bottom: 1.5rem; border: 1px solid var(--fill-strong); border-radius: 8px; }
-  #todo-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
-  }
-  #todo-list .detail { margin-top: 0.4rem; font-size: 0.8rem; color: var(--muted); white-space: pre-wrap; }
-  #todo-list .actions input[type=text] { min-width: 8rem; }
-  #todo-empty { padding: 0.6rem 0.8rem; color: var(--muted); font-size: 0.85rem; }
-  #todo-add-row { display: flex; gap: 0.4rem; padding: 0.6rem 0.8rem; border-top: 1px solid var(--divider); flex-wrap: wrap; }
-  #todo-add-row input[type=text] { flex: 1; min-width: 8rem; }
-
-  #admin-open { color: var(--muted); }
-
-  #admin-backdrop {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35);
-    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 40;
-  }
-  #admin-backdrop.open { opacity: 1; pointer-events: auto; }
-
-  #admin-drawer {
-    position: fixed; top: 0; right: 0; height: 100%; width: min(300px, 85vw);
-    background: Canvas; color: CanvasText;
-    border-left: 1px solid var(--border);
-    box-shadow: -12px 0 28px rgba(0, 0, 0, 0.25);
-    transform: translateX(100%);
-    transition: transform 0.22s ease;
-    z-index: 41; display: flex; flex-direction: column;
-    padding: 1rem; box-sizing: border-box; overflow-y: auto;
-  }
-  #admin-drawer.open { transform: translateX(0); }
-  #admin-drawer-header {
-    display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;
-  }
-  #admin-drawer-header strong { font-size: 1rem; }
-  #admin-close { font-size: 1.1rem; line-height: 1; color: var(--muted); }
-  #admin-bar { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; }
-  #admin-bar .btn, #admin-bar select { width: 100%; box-sizing: border-box; }
-  #admin-msg { color: var(--muted); font-size: 0.82rem; }
-  #admin-output {
-    white-space: pre-wrap; font-size: 0.78rem; color: var(--muted); margin-top: 0.75rem;
-  }
-
-  #entry-backdrop {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
-    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 50;
-  }
-  #entry-backdrop.open { opacity: 1; pointer-events: auto; }
-
-  #entry-modal {
-    position: fixed; top: 4vh; left: 50%; width: min(640px, 92vw); max-height: 92vh;
-    background: Canvas; color: CanvasText; border: 1px solid var(--border);
-    border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
-    transform: translate(-50%, -6px); opacity: 0; pointer-events: none;
-    transition: opacity 0.16s ease, transform 0.16s ease;
-    z-index: 51; display: flex; flex-direction: column; overflow: hidden;
-  }
-  #entry-modal.open { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
-  #entry-modal-header {
-    display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
-    padding: 0.8rem 1rem; border-bottom: 1px solid var(--divider); flex-shrink: 0;
-  }
-  #entry-modal-header .stamp { font-size: 0.78rem; color: var(--muted); }
-  #entry-modal-actions { display: flex; align-items: center; gap: 0.6rem; }
-  #entry-modal-close { font-size: 1.1rem; line-height: 1; color: var(--muted); }
-  #entry-modal-body { padding: 1rem; overflow-y: auto; }
-
-  [hidden] { display: none !important; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body x-data="kbApp()" x-init="init()" x-on:keydown.window="onKeydown($event)">
+
 <div id="header-row">
   <h1>kb</h1>
   <span>
-    <button id="admin-open" class="link-btn" title="Admin">Admin</button>
-    <button id="theme-toggle" class="link-btn" title="Toggle color theme"></button>
+    <button class="pill-btn" title="Admin" @click="adminOpen = true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Admin
+    </button>
+    <button class="icon-btn" :title="themeLabel" @click="toggleTheme()">
+      <svg x-show="theme === 'light'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <svg x-show="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg x-show="theme === 'system'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/></svg>
+    </button>
   </span>
 </div>
-<p id="status">checking server...</p>
+<p id="status" :class="statusClass" x-text="statusText"></p>
 
-<div id="admin-backdrop"></div>
-<div id="admin-drawer" aria-hidden="true" inert>
+<div id="admin-backdrop" :class="{ open: adminOpen }" @click="adminOpen = false"></div>
+<div id="admin-drawer" :class="{ open: adminOpen }" :aria-hidden="!adminOpen" :inert="!adminOpen">
   <div id="admin-drawer-header">
     <strong>Admin</strong>
-    <button id="admin-close" class="link-btn" title="Close">✕</button>
+    <button class="icon-btn" title="Close" @click="adminOpen = false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
   </div>
   <div id="admin-bar">
-    <button id="admin-reindex" class="btn">Reindex</button>
-    <button id="admin-validate" class="btn">Validate</button>
-    <button id="admin-doctor" class="btn">Doctor</button>
-    <select id="admin-sync-source">
+    <button class="btn" @click="adminReindex()">Reindex</button>
+    <button class="btn" @click="adminValidate()">Validate</button>
+    <button class="btn" @click="adminDoctor()">Doctor</button>
+    <select x-model="adminSyncSource">
       <option value="all">all</option><option value="memos">memos</option>
       <option value="gitlab">gitlab</option><option value="beads">beads</option>
     </select>
-    <button id="admin-sync" class="btn">Sync</button>
-    <span id="admin-msg"></span>
+    <button class="btn btn-primary" @click="adminSync()">Sync</button>
+    <span id="admin-msg" x-text="adminMsg"></span>
   </div>
-  <pre id="admin-output" hidden></pre>
+  <pre id="admin-output" x-show="adminOutput" x-text="adminOutput"></pre>
 </div>
 
-<div id="entry-backdrop"></div>
-<div id="entry-modal" role="dialog" aria-modal="true" aria-hidden="true" inert>
+<div id="entry-backdrop" :class="{ open: modalOpen }" @click="closeEntryModal()"></div>
+<div id="entry-modal" role="dialog" aria-modal="true" :class="{ open: modalOpen }" :aria-hidden="!modalOpen" :inert="!modalOpen">
   <div id="entry-modal-header">
-    <span class="stamp" id="entry-modal-stamp"></span>
+    <span class="stamp" x-text="modalStamp"></span>
     <span id="entry-modal-actions">
-      <button id="entry-modal-edit" class="link-btn">edit</button>
-      <button id="entry-modal-close" class="link-btn" title="Close">✕</button>
+      <button class="link-btn" x-show="!modalLoadError" x-text="modalEditing ? 'done' : 'edit'"
+              @click="modalEditing ? showModalView() : showModalEdit()"></button>
+      <button class="icon-btn" title="Close" @click="closeEntryModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
     </span>
   </div>
-  <div id="entry-modal-body"></div>
+  <div id="entry-modal-body">
+    <template x-if="modalLoading">
+      <span>loading…</span>
+    </template>
+    <template x-if="!modalLoading && modalLoadError">
+      <span x-text="modalLoadError"></span>
+    </template>
+    <div class="edit-panel" :class="{ editing: modalEditing }" x-show="!modalLoading && !modalLoadError">
+      <div class="md-view" x-show="!modalEditing" x-html="modalViewHtml"></div>
+
+      <div class="edit-form" x-show="modalEditing">
+        <input type="text" class="edit-title" placeholder="title" x-model="modalTitle">
+        <textarea class="edit-body" rows="10" x-model="modalBody" x-show="!modalPreview"></textarea>
+        <div class="md-view" x-show="modalPreview" x-html="modalPreviewHtml"></div>
+
+        <div class="row">
+          <button class="btn btn-primary" @click="saveModalEntry()" :disabled="modalSaving">save</button>
+          <button class="link-btn" @click="showModalView()">cancel</button>
+          <button class="link-btn" @click="modalPreview = !modalPreview" x-text="modalPreview ? 'back to source' : 'preview'"></button>
+          <span class="edit-msg" :style="modalSaveErr ? 'color:var(--danger-text)' : ''" x-text="modalSaveMsg"></span>
+        </div>
+
+        <div class="row">
+          <span class="label">tags</span>
+          <span>
+            <template x-for="t in modalTags" :key="t">
+              <span class="tag" @click.stop="setTagFilter(t)">
+                <span x-text="t"></span>
+                <span class="x" @click.stop="removeModalTag(t)">×</span>
+              </span>
+            </template>
+          </span>
+          <div class="suggest-wrap" x-ref="tagSuggestWrap">
+            <input type="text" placeholder="add tag, enter" x-model="modalTagInput"
+                   @focus="tagInputFocused = true; positionSuggest('tag')" @blur="setTimeout(() => tagInputFocused = false, 150)"
+                   @input="modalTagHighlight = -1" @keydown="tagInputKeydown($event)">
+            <ul class="suggest-list" :class="{ 'drop-up': tagSuggestUp }" x-show="tagInputFocused && modalTagSuggestions.length">
+              <template x-for="(t, i) in modalTagSuggestions" :key="t">
+                <li :class="{ active: i === modalTagHighlight }" @mousedown.prevent="selectTagSuggestion(t)" x-text="t"></li>
+              </template>
+            </ul>
+          </div>
+        </div>
+
+        <div class="row">
+          <span class="label">links</span>
+          <span>
+            <template x-for="l in modalLinks" :key="l">
+              <span class="tag" @click.stop="setTagFilter(l)">
+                <span x-text="l"></span>
+                <span class="x" @click.stop="removeModalLink(l)">×</span>
+              </span>
+            </template>
+          </span>
+          <div class="suggest-wrap" x-ref="linkSuggestWrap">
+            <input type="text" placeholder="target id, enter" x-model="modalLinkInput"
+                   @focus="linkInputFocused = true; positionSuggest('link')" @blur="setTimeout(() => linkInputFocused = false, 150)"
+                   @input="modalLinkHighlight = -1" @keydown="linkInputKeydown($event)">
+            <ul class="suggest-list" :class="{ 'drop-up': linkSuggestUp }" x-show="linkInputFocused && modalLinkSuggestions.length">
+              <template x-for="(e, i) in modalLinkSuggestions" :key="e.id">
+                <li :class="{ active: i === modalLinkHighlight }" @mousedown.prevent="selectLinkSuggestion(e)">
+                  <span x-text="e.title || e.id"></span>
+                  <span class="suggest-meta" x-text="e.type"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </div>
+        <span style="color:var(--danger-text)" x-text="modalLinkError"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="capture">
-  <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."></textarea>
+  <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."
+            x-model="captureText" @keydown="captureKeydown($event)"></textarea>
   <div style="display:flex; justify-content:space-between; align-items:center;">
-    <span id="capture-msg"></span>
-    <button id="capture-btn" class="btn">Add</button>
+    <span id="capture-msg" x-text="captureMsg"></span>
+    <button class="btn btn-primary" @click="capture()" :disabled="captureBusy">Add</button>
   </div>
 </div>
 
 <div id="inbox-section">
-  <div id="inbox-header">
-    <span><strong>Inbox</strong> <span id="inbox-count">(0)</span></span>
-    <span id="inbox-toggle">show</span>
+  <div id="inbox-header" @click="inboxOpen = !inboxOpen">
+    <span><strong>Inbox</strong> <span x-text="`(${inboxItems.length})`"></span></span>
+    <span x-text="inboxOpen ? 'hide' : 'show'"></span>
   </div>
-  <ul id="inbox-list" hidden></ul>
-  <p id="inbox-empty" hidden>Inbox is empty.</p>
+  <ul id="inbox-list" x-show="inboxOpen">
+    <template x-for="item in inboxItems" :key="item.id">
+      <li>
+        <div class="row1">
+          <span x-text="item.title"></span>
+          <span class="row-badge" x-text="item.age_days === null ? '' : `${item.age_days}d`"></span>
+        </div>
+        <div class="actions">
+          <select x-model="item.promoteType">
+            <template x-for="t in CORE_TYPES" :key="t">
+              <option :value="t" x-text="t"></option>
+            </template>
+          </select>
+          <button class="btn btn-primary" @click="resolveInboxItem(item, 'promote')">Promote</button>
+          <button class="btn" @click="resolveInboxItem(item, 'redirect')">Redirect</button>
+          <button class="btn btn-danger" @click="resolveInboxItem(item, 'discard')">Discard</button>
+        </div>
+      </li>
+    </template>
+  </ul>
+  <p id="inbox-empty" x-show="inboxOpen && inboxItems.length === 0">Inbox is empty.</p>
 </div>
 
 <div id="todo-section">
-  <div id="todo-header">
-    <span><strong>Todos</strong> <span id="todo-count">(0)</span></span>
-    <span id="todo-toggle">show</span>
+  <div id="todo-header" @click="todosOpen = !todosOpen">
+    <span><strong>Todos</strong> <span x-text="`(${todoItems.length})`"></span></span>
+    <span x-text="todosOpen ? 'hide' : 'show'"></span>
   </div>
-  <ul id="todo-list" hidden></ul>
-  <p id="todo-empty" hidden>No open todos.</p>
-  <div id="todo-add-row" hidden>
-    <input id="todo-add-title" type="text" placeholder="new todo title...">
-    <select id="todo-add-priority">
+  <ul id="todo-list" x-show="todosOpen">
+    <template x-for="item in todoItems" :key="item.id">
+      <li>
+        <div class="row1">
+          <span x-text="item.title"></span>
+          <span class="row-badge" x-text="`P${item.priority}`"></span>
+        </div>
+        <div class="actions">
+          <button class="btn" @click="toggleTodoDetail(item)">Show</button>
+          <input type="text" placeholder="comment, enter" x-model="item.comment" @keydown.enter="submitTodoComment(item)">
+          <button class="btn btn-danger" @click="closeTodo(item)">Close</button>
+        </div>
+        <div class="detail" x-show="item.detailOpen" x-text="item.detailText"></div>
+      </li>
+    </template>
+  </ul>
+  <p id="todo-empty" x-show="todosOpen && todoItems.length === 0">No open todos.</p>
+  <div id="todo-add-row" x-show="todosOpen">
+    <input id="todo-add-title" type="text" placeholder="new todo title..." x-model="todoAdd.title" @keydown.enter="addTodo()">
+    <select x-model="todoAdd.priority">
       <option value="0">P0</option><option value="1">P1</option>
-      <option value="2" selected>P2</option><option value="3">P3</option><option value="4">P4</option>
+      <option value="2">P2</option><option value="3">P3</option><option value="4">P4</option>
     </select>
-    <select id="todo-add-type">
-      <option value="task" selected>task</option><option value="bug">bug</option>
+    <select x-model="todoAdd.type">
+      <option value="task">task</option><option value="bug">bug</option>
       <option value="feature">feature</option><option value="chore">chore</option>
       <option value="epic">epic</option><option value="decision">decision</option>
     </select>
-    <button id="todo-add-btn" class="btn">Add</button>
+    <button class="btn btn-primary" @click="addTodo()">Add</button>
   </div>
 </div>
 
-<div id="search-row">
-  <input id="search-input" type="search" placeholder="Search everything...">
-</div>
-<div id="filter-bar" hidden>
-  filtered by <span id="filter-tag" class="tag"></span>
-  <button id="filter-clear" class="link-btn">clear</button>
+<div class="search-wrap">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+  <input id="search-input" type="search" placeholder="Search everything..." x-model="searchQuery" @input="onSearchInput()">
 </div>
 
-<ul id="feed"></ul>
-<button id="feed-more" class="btn" hidden>Load more</button>
-<p id="feed-empty" hidden>Nothing here yet.</p>
-
-<script>
-  const CORE_TYPES = ["tutorial", "how-to", "reference", "explanation"];
-
-  // ---------- markdown rendering ----------
-  // Small hand-rolled renderer (headers, bold/italic, inline code, fenced
-  // code blocks, links, lists, blockquotes, paragraphs) -- enough for the
-  // plain notes this tool stores, without pulling in a library and breaking
-  // the single-static-file, no-build-step design.
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  function renderInline(s) {
-    s = escapeHtml(s);
-    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
-    // Only render as a link if the URL is a safe scheme -- blocks javascript:
-    // and other script-executing URIs from a synced/pasted entry body.
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) =>
-      /^(https?:|mailto:|\/|#)/i.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : m);
-    return s;
-  }
-
-  function renderMarkdown(md) {
-    const lines = String(md || "").split("\n");
-    let html = "";
-    let inCode = false;
-    let listType = null;
-    let inBlockquote = false;
-    let paragraph = [];
-
-    const flushParagraph = () => {
-      if (paragraph.length) {
-        html += `<p>${renderInline(paragraph.join(" "))}</p>`;
-        paragraph = [];
-      }
-    };
-    const closeList = () => {
-      if (listType) { html += `</${listType}>`; listType = null; }
-    };
-    const closeBlockquote = () => {
-      if (inBlockquote) { html += "</blockquote>"; inBlockquote = false; }
-    };
-
-    for (const line of lines) {
-      if (line.trim().startsWith("```")) {
-        if (!inCode) { flushParagraph(); closeList(); closeBlockquote(); html += "<pre><code>"; }
-        else { html += "</code></pre>"; }
-        inCode = !inCode;
-        continue;
-      }
-      if (inCode) { html += escapeHtml(line) + "\n"; continue; }
-
-      const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
-      if (headerMatch) {
-        flushParagraph(); closeList(); closeBlockquote();
-        const level = headerMatch[1].length;
-        html += `<h${level}>${renderInline(headerMatch[2])}</h${level}>`;
-        continue;
-      }
-
-      const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
-      const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
-      if (ulMatch || olMatch) {
-        flushParagraph(); closeBlockquote();
-        const wantType = ulMatch ? "ul" : "ol";
-        if (listType !== wantType) { closeList(); html += `<${wantType}>`; listType = wantType; }
-        html += `<li>${renderInline((ulMatch || olMatch)[1])}</li>`;
-        continue;
-      }
-      closeList();
-
-      const bqMatch = line.match(/^>\s?(.*)$/);
-      if (bqMatch) {
-        flushParagraph();
-        if (!inBlockquote) { html += "<blockquote>"; inBlockquote = true; }
-        html += `<p>${renderInline(bqMatch[1])}</p>`;
-        continue;
-      }
-      closeBlockquote();
-
-      if (!line.trim()) { flushParagraph(); continue; }
-      paragraph.push(line.trim());
-    }
-    flushParagraph();
-    closeList();
-    closeBlockquote();
-    if (inCode) html += "</code></pre>";
-    return html;
-  }
-
-  // ---------- feed / search / capture ----------
-
-  const feedEl = document.getElementById("feed");
-  const moreBtn = document.getElementById("feed-more");
-  const emptyEl = document.getElementById("feed-empty");
-  const searchEl = document.getElementById("search-input");
-  const filterBar = document.getElementById("filter-bar");
-  const filterTagEl = document.getElementById("filter-tag");
-  const filterClearBtn = document.getElementById("filter-clear");
-
-  let cursor = null;
-  let activeTag = null;
-  let searchDebounce = null;
-
-  function tagChip(tag, onRemove) {
-    const span = document.createElement("span");
-    span.className = "tag";
-    const label = document.createElement("span");
-    label.textContent = tag;
-    label.addEventListener("click", (e) => { e.stopPropagation(); setTagFilter(tag); });
-    span.appendChild(label);
-    if (onRemove) {
-      const x = document.createElement("span");
-      x.className = "x";
-      x.textContent = "×";
-      x.addEventListener("click", (e) => { e.stopPropagation(); onRemove(); });
-      span.appendChild(x);
-    }
-    return span;
-  }
-
-  // A button that flips a boolean on each click, relabels itself to match,
-  // and calls `apply(state)` to update whatever it controls -- shared by the
-  // "show more"/"show less" and "preview"/"back to source" toggles below.
-  // Returns a `reset()` you can call to force it back to the initial state
-  // (e.g. when the content it toggles gets re-rendered from scratch).
-  function wireToggleButton(btn, labels, apply) {
-    let state = false;
-    function set(next) {
-      state = next;
-      btn.textContent = state ? labels[1] : labels[0];
-      apply(state);
-    }
-    btn.addEventListener("click", () => set(!state));
-    return { reset: () => set(false) };
-  }
-
-  // Toggles a shared open/closed state across a set of [element, className]
-  // pairs -- shared by the edit-panel's editing/not-editing state and the
-  // admin drawer's open/closed state, which both boil down to "flip a class
-  // on a couple of related elements together."
-  function setOpenState(open, ...pairs) {
-    for (const [el, cls] of pairs) el.classList.toggle(cls, open);
-  }
-
-  // "3h ago" / "2d ago" for recent items, falling back to a plain date once
-  // it's far enough back that relative phrasing stops being useful.
-  function formatRelative(iso) {
-    if (!iso) return "";
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return iso;
-    const mins = Math.round((Date.now() - then) / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.round(hours / 24);
-    if (days < 14) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-  }
-
-  function renderItem(item) {
-    const li = document.createElement("li");
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const stamp = document.createElement("span");
-    stamp.className = "stamp";
-    stamp.title = item.created || "";
-    stamp.textContent = `${formatRelative(item.created)} · ${item.type}`;
-    meta.appendChild(stamp);
-
-    const tagsRow = document.createElement("span");
-    tagsRow.className = "tags-row";
-    for (const tag of item.tags || []) tagsRow.appendChild(tagChip(tag));
-
-    const titleEl = document.createElement("div");
-    titleEl.className = "title";
-    titleEl.textContent = item.title || item.id;
-    li.appendChild(meta);
-    li.appendChild(titleEl);
-    li.appendChild(tagsRow);
-
-    if (item.id) {
-      li.addEventListener("click", () => openEntryModal(item.id, titleEl, tagsRow));
-    }
-    return li;
-  }
-
-  // Fetches an entry's full content/tags/links and builds its read/edit UI
-  // inside `panel`. Used by the standalone entry modal (see openEntryModal
-  // below) -- `titleEl`/`tagsHolder` are the corresponding feed card's
-  // elements, kept in sync as edits are saved so the modal and the card
-  // never show stale data side by side.
-  async function loadEditPanel(entryId, panel, tagsHolder, titleEl, onModeChange) {
-    panel.textContent = "loading…";
-    let tags = [];
-    let links = [];
-    let title = "";
-    let body = "";
-    try {
-      const res = await fetch(`/api/entries/${encodeURIComponent(entryId)}`);
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      tags = data.frontmatter.tags || [];
-      links = data.frontmatter.links || [];
-      title = data.frontmatter.title || "";
-      body = data.body || "";
-    } catch {
-      panel.textContent = "couldn't load";
-      return { showEdit() {}, showView() {} };
-    }
-    panel.textContent = "";
-
-    // View mode: rendered markdown, read-only, shown in full -- the modal
-    // already gives it its own scrollable area, so no clamping here.
-    const contentView = document.createElement("div");
-    contentView.className = "md-view";
-
-    function renderView() {
-      // Entries conventionally open with a "# Heading" line, and the
-      // frontmatter title is already shown above every card -- so any
-      // leading H1 is redundant here regardless of its exact wording (this
-      // used to only strip it when the text matched the title verbatim,
-      // which silently stopped working the moment title and heading drifted
-      // apart; dropping any leading H1 avoids that class of bug entirely).
-      let shown = body.replace(/^\n+/, "");
-      const firstLine = shown.split("\n", 1)[0];
-      if (/^#\s+\S/.test(firstLine)) {
-        shown = shown.slice(firstLine.length).replace(/^\n+/, "");
-      }
-      contentView.innerHTML = renderMarkdown(shown);
-    }
-
-    // Edit mode: raw markdown source, with a preview toggle, plus tag/link
-    // editors -- all of it only ever shown once the user asks to edit.
-    const editForm = document.createElement("div");
-    editForm.className = "edit-form";
-    editForm.hidden = true;
-
-    const titleInput = document.createElement("input");
-    titleInput.type = "text";
-    titleInput.className = "edit-title";
-    titleInput.placeholder = "title";
-
-    const bodyArea = document.createElement("textarea");
-    bodyArea.className = "edit-body";
-    bodyArea.rows = 10;
-
-    const previewDiv = document.createElement("div");
-    previewDiv.className = "md-view";
-    previewDiv.hidden = true;
-
-    const previewBtn = document.createElement("button");
-    previewBtn.className = "link-btn";
-    previewBtn.textContent = "preview";
-    const previewToggle = wireToggleButton(previewBtn, ["preview", "back to source"], (previewing) => {
-      if (previewing) previewDiv.innerHTML = renderMarkdown(bodyArea.value);
-      bodyArea.hidden = previewing;
-      previewDiv.hidden = !previewing;
-    });
-
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "btn";
-    saveBtn.textContent = "save";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.className = "link-btn";
-    cancelBtn.textContent = "cancel";
-    const contentMsg = document.createElement("span");
-    contentMsg.className = "edit-msg";
-
-    function showView() {
-      renderView();
-      contentView.hidden = false;
-      editForm.hidden = true;
-      setOpenState(false, [panel, "editing"]);
-      if (onModeChange) onModeChange(false);
-    }
-
-    function showEdit() {
-      titleInput.value = title;
-      bodyArea.value = body;
-      previewToggle.reset();
-      contentMsg.textContent = "";
-      contentView.hidden = true;
-      editForm.hidden = false;
-      setOpenState(true, [panel, "editing"]);
-      if (onModeChange) onModeChange(true);
-      bodyArea.focus();
-    }
-
-    cancelBtn.addEventListener("click", showView);
-    editForm.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") showView();
-    });
-
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.disabled = true;
-      contentMsg.style.color = "";
-      contentMsg.textContent = "saving…";
-      const { ok, data } = await apiFetch(`/api/entries/${encodeURIComponent(entryId)}`, "PATCH", {
-        title: titleInput.value,
-        body: bodyArea.value,
-      });
-      saveBtn.disabled = false;
-      if (ok) {
-        title = data.title != null ? data.title : title;
-        body = data.body != null ? data.body : bodyArea.value;
-        if (titleEl) titleEl.textContent = title || entryId;
-        showView();
-      } else {
-        contentMsg.style.color = "#c33";
-        contentMsg.textContent = (data && data.error) || "save failed";
-      }
-    });
-
-    const tagsRow = document.createElement("div");
-    tagsRow.className = "row";
-    const tagsLabel = document.createElement("span");
-    tagsLabel.className = "label";
-    tagsLabel.textContent = "tags";
-    tagsRow.appendChild(tagsLabel);
-    const tagsChips = document.createElement("span");
-    tagsRow.appendChild(tagsChips);
-    const tagInput = document.createElement("input");
-    tagInput.type = "text";
-    tagInput.placeholder = "add tag, enter";
-    tagsRow.appendChild(tagInput);
-
-    function renderTags() {
-      tagsChips.innerHTML = "";
-      for (const t of tags) {
-        tagsChips.appendChild(tagChip(t, async () => {
-          const r = await patchEntry(entryId, "tags", { rm: [t] });
-          if (r && r.tags) { tags = r.tags; renderTags(); syncFeedTags(tagsHolder, tags); }
-        }));
-      }
-    }
-    renderTags();
-    tagInput.addEventListener("keydown", async (e) => {
-      if (e.key !== "Enter" || !tagInput.value.trim()) return;
-      const val = tagInput.value.trim();
-      tagInput.value = "";
-      const r = await patchEntry(entryId, "tags", { add: [val] });
-      if (r && r.tags) { tags = r.tags; renderTags(); syncFeedTags(tagsHolder, tags); }
-    });
-
-    const linksRow = document.createElement("div");
-    linksRow.className = "row";
-    const linksLabel = document.createElement("span");
-    linksLabel.className = "label";
-    linksLabel.textContent = "links";
-    linksRow.appendChild(linksLabel);
-    const linksChips = document.createElement("span");
-    linksRow.appendChild(linksChips);
-    const linkInput = document.createElement("input");
-    linkInput.type = "text";
-    linkInput.placeholder = "target id, enter";
-    linksRow.appendChild(linkInput);
-    const linkMsg = document.createElement("span");
-    linkMsg.style.color = "#c33";
-
-    function renderLinks() {
-      linksChips.innerHTML = "";
-      for (const l of links) {
-        linksChips.appendChild(tagChip(l, async () => {
-          const r = await patchEntry(entryId, "links", { rm: [l] });
-          if (r && r.links) { links = r.links; renderLinks(); }
-        }));
-      }
-    }
-    renderLinks();
-    linkInput.addEventListener("keydown", async (e) => {
-      if (e.key !== "Enter" || !linkInput.value.trim()) return;
-      const val = linkInput.value.trim();
-      linkMsg.textContent = "";
-      const r = await patchEntry(entryId, "links", { add: [val] });
-      if (r && r.links) { linkInput.value = ""; links = r.links; renderLinks(); }
-      else if (r && r.error) { linkMsg.textContent = r.error; }
-    });
-
-    const saveRow = document.createElement("div");
-    saveRow.className = "row";
-    saveRow.appendChild(saveBtn);
-    saveRow.appendChild(cancelBtn);
-    saveRow.appendChild(previewBtn);
-    saveRow.appendChild(contentMsg);
-
-    editForm.appendChild(titleInput);
-    editForm.appendChild(bodyArea);
-    editForm.appendChild(previewDiv);
-    editForm.appendChild(saveRow);
-    editForm.appendChild(tagsRow);
-    editForm.appendChild(linksRow);
-    editForm.appendChild(linkMsg);
-
-    panel.appendChild(contentView);
-    panel.appendChild(editForm);
-    renderView();
-
-    return { showEdit, showView };
-  }
-
-  function syncFeedTags(tagsHolder, tags) {
-    tagsHolder.innerHTML = "";
-    for (const t of tags) tagsHolder.appendChild(tagChip(t));
-  }
-
-  // ---------- entry modal ----------
-  // Clicking a card opens it here: the full entry, unclamped, with an Edit
-  // button that switches the same panel into the tag/link/body editor built
-  // by loadEditPanel above. `cardTitleEl`/`cardTagsHolder` are the feed
-  // card's own elements so a save made in the modal is reflected on the card
-  // underneath without a full feed reload.
-
-  const entryBackdrop = document.getElementById("entry-backdrop");
-  const entryModal = document.getElementById("entry-modal");
-  const entryModalStamp = document.getElementById("entry-modal-stamp");
-  const entryModalBody = document.getElementById("entry-modal-body");
-  const entryModalEditBtn = document.getElementById("entry-modal-edit");
-  const entryModalCloseBtn = document.getElementById("entry-modal-close");
-
-  let entryModalApi = null;
-
-  function openEntryModalShell() {
-    setOpenState(true, [entryModal, "open"], [entryBackdrop, "open"]);
-    entryModal.setAttribute("aria-hidden", "false");
-    entryModal.inert = false;
-    document.body.style.overflow = "hidden";
-  }
-  function closeEntryModal() {
-    setOpenState(false, [entryModal, "open"], [entryBackdrop, "open"]);
-    entryModal.setAttribute("aria-hidden", "true");
-    entryModal.inert = true;
-    entryModalApi = null;
-    document.body.style.overflow = "";
-  }
-
-  async function openEntryModal(entryId, cardTitleEl, cardTagsHolder) {
-    entryModalStamp.textContent = cardTitleEl ? cardTitleEl.textContent : entryId;
-    entryModalEditBtn.textContent = "edit";
-    entryModalEditBtn.disabled = false;
-    entryModalBody.innerHTML = "";
-    const panel = document.createElement("div");
-    panel.className = "edit-panel";
-    entryModalBody.appendChild(panel);
-    openEntryModalShell();
-
-    entryModalApi = await loadEditPanel(entryId, panel, cardTagsHolder, cardTitleEl, (editing) => {
-      entryModalEditBtn.textContent = editing ? "done" : "edit";
-    });
-  }
-
-  entryModalEditBtn.addEventListener("click", () => {
-    if (!entryModalApi) return;
-    if (entryModalEditBtn.textContent === "done") entryModalApi.showView();
-    else entryModalApi.showEdit();
-  });
-  entryModalCloseBtn.addEventListener("click", closeEntryModal);
-  entryBackdrop.addEventListener("click", closeEntryModal);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && entryModal.classList.contains("open")) closeEntryModal();
-  });
-
-  // Generic JSON fetch wrapper -- every mutating call in this file (tag/link
-  // edits, capture, inbox actions, todo actions, admin actions) is a fetch
-  // with an optional JSON body and a JSON (or empty) response, so they all
-  // go through this one helper instead of each hand-rolling the same
-  // method/headers/body/parse boilerplate.
-  async function apiFetch(url, method, body) {
-    const opts = { method };
-    if (body !== undefined) {
-      opts.headers = { "Content-Type": "application/json" };
-      opts.body = JSON.stringify(body);
-    }
-    const res = await fetch(url, opts);
-    let data = null;
-    try { data = await res.json(); } catch {}
-    return { ok: res.ok, data };
-  }
-
-  async function patchEntry(entryId, field, body) {
-    const { data } = await apiFetch(`/api/entries/${encodeURIComponent(entryId)}/${field}`, "PATCH", body);
-    return data;
-  }
-
-  function renderList(items, append) {
-    if (!append) feedEl.innerHTML = "";
-    for (const item of items) feedEl.appendChild(renderItem(item));
-    emptyEl.hidden = feedEl.children.length > 0;
-  }
-
-  async function loadFeed(append) {
-    const url = new URL("/api/feed", location.origin);
-    if (append && cursor) url.searchParams.set("before", cursor);
-    if (activeTag) url.searchParams.set("tag", activeTag);
-    const res = await fetch(url);
-    if (!res.ok) {
-      emptyEl.hidden = false;
-      emptyEl.textContent = "couldn't load feed";
-      return;
-    }
-    const data = await res.json();
-    renderList(data.items, append);
-    cursor = data.next;
-    moreBtn.hidden = !cursor;
-  }
-
-  async function runSearch(query) {
-    const url = new URL("/api/search", location.origin);
-    url.searchParams.set("q", query);
-    url.searchParams.set("all", "1");
-    const res = await fetch(url);
-    moreBtn.hidden = true;
-    if (!res.ok) {
-      renderList([], false);
-      emptyEl.hidden = false;
-      emptyEl.textContent = "search failed";
-      return;
-    }
-    const data = await res.json();
-    renderList(data.items, false);
-    if (!data.items.length) {
-      emptyEl.hidden = false;
-      emptyEl.textContent = "no results";
-    }
-  }
-
-  function setTagFilter(tag) {
-    activeTag = tag;
-    filterTagEl.textContent = tag;
-    filterBar.hidden = false;
-    searchEl.value = "";
-    cursor = null;
-    loadFeed(false);
-  }
-
-  function clearTagFilter() {
-    clearTagFilterQuiet();
-    cursor = null;
-    loadFeed(false);
-  }
-
-  function clearTagFilterQuiet() {
-    activeTag = null;
-    filterBar.hidden = true;
-  }
-
-  filterClearBtn.addEventListener("click", clearTagFilter);
-  moreBtn.addEventListener("click", () => loadFeed(true));
-
-  searchEl.addEventListener("input", () => {
-    clearTimeout(searchDebounce);
-    const query = searchEl.value.trim();
-    searchDebounce = setTimeout(() => {
-      if (!query) {
-        loadFeed(false);
-      } else {
-        clearTagFilterQuiet();
-        runSearch(query);
-      }
-    }, 250);
-  });
-
-  const textEl = document.getElementById("capture-text");
-  const btnEl = document.getElementById("capture-btn");
-  const msgEl = document.getElementById("capture-msg");
-
-  async function capture() {
-    const text = textEl.value.trim();
-    if (!text) return;
-    btnEl.disabled = true;
-    msgEl.textContent = "adding...";
-    try {
-      const { ok, data } = await apiFetch("/api/capture", "POST", { text });
-      if (!ok) throw new Error();
-      textEl.value = "";
-      msgEl.textContent = `added -> ${data.path}`;
-      // Reload rather than insert a synthetic card: today's capture lands in
-      // the same journal entry as any earlier capture from today (see
-      // journal_append in scripts/kb), so the feed needs the merged entry
-      // the server now has, not a second one-off card standing in for it.
-      if (!searchEl.value.trim() && !activeTag) loadFeed(false);
-    } catch {
-      msgEl.textContent = "failed to add -- try again";
-    } finally {
-      btnEl.disabled = false;
-    }
-  }
-
-  btnEl.addEventListener("click", capture);
-  textEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) capture();
-  });
-
-  // ---------- shared list-panel helpers (inbox + todos) ----------
-
-  // Both the Inbox and Todos panels are the same shape: a header that
-  // toggles a list open/closed, a count badge, an empty-state message, and
-  // rows built from a title + a small right-aligned badge + an actions row.
-  // One shared skeleton for the row, and one shared toggle wiring, instead
-  // of two hand-rolled copies.
-
-  function listRow(titleText, badgeText) {
-    const li = document.createElement("li");
-    const row1 = document.createElement("div");
-    row1.className = "row1";
-    const title = document.createElement("span");
-    title.textContent = titleText;
-    const badge = document.createElement("span");
-    badge.className = "row-badge";
-    badge.textContent = badgeText;
-    row1.appendChild(title);
-    row1.appendChild(badge);
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    li.appendChild(row1);
-    li.appendChild(actions);
-    return { li, actions };
-  }
-
-  function wireCollapsible(headerEl, toggleEl, listEl, emptyEl, extraEl) {
-    let expanded = false;
-    headerEl.addEventListener("click", () => {
-      expanded = !expanded;
-      toggleEl.textContent = expanded ? "hide" : "show";
-      listEl.hidden = !expanded;
-      if (extraEl) extraEl.hidden = !expanded;
-      emptyEl.hidden = !expanded || listEl.children.length > 0;
-    });
-  }
-
-  // ---------- inbox ----------
-
-  const inboxHeader = document.getElementById("inbox-header");
-  const inboxToggle = document.getElementById("inbox-toggle");
-  const inboxCount = document.getElementById("inbox-count");
-  const inboxList = document.getElementById("inbox-list");
-  const inboxEmpty = document.getElementById("inbox-empty");
-
-  function renderInboxItem(item) {
-    const badge = item.age_days === null ? "" : `${item.age_days}d`;
-    const { li, actions } = listRow(item.title, badge);
-
-    const typeSelect = document.createElement("select");
-    for (const t of CORE_TYPES) {
-      const opt = document.createElement("option");
-      opt.value = t; opt.textContent = t;
-      typeSelect.appendChild(opt);
-    }
-    const promoteBtn = document.createElement("button");
-    promoteBtn.className = "btn";
-    promoteBtn.textContent = "Promote";
-    promoteBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "promote", typeSelect.value));
-
-    const redirectBtn = document.createElement("button");
-    redirectBtn.className = "btn";
-    redirectBtn.textContent = "Redirect";
-    redirectBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "redirect"));
-
-    const discardBtn = document.createElement("button");
-    discardBtn.className = "btn";
-    discardBtn.textContent = "Discard";
-    discardBtn.addEventListener("click", () => resolveInboxItem(item.id, li, "discard"));
-
-    actions.appendChild(typeSelect);
-    actions.appendChild(promoteBtn);
-    actions.appendChild(redirectBtn);
-    actions.appendChild(discardBtn);
-    return li;
-  }
-
-  async function resolveInboxItem(id, li, action, type) {
-    const urls = {
-      promote: [`/api/inbox/${encodeURIComponent(id)}/promote`, "POST", { type }],
-      redirect: [`/api/inbox/${encodeURIComponent(id)}/redirect`, "POST", undefined],
-      discard: [`/api/inbox/${encodeURIComponent(id)}`, "DELETE", undefined],
-    };
-    const { ok } = await apiFetch(...urls[action]);
-    if (ok) {
-      li.remove();
-      inboxCount.textContent = `(${inboxList.children.length})`;
-      inboxEmpty.hidden = inboxList.children.length > 0;
-      if (!activeTag && !searchEl.value.trim()) loadFeed(false);
-    }
-  }
-
-  async function loadInbox() {
-    const { ok, data } = await apiFetch("/api/inbox", "GET");
-    if (!ok) return;
-    inboxCount.textContent = `(${data.items.length})`;
-    inboxList.innerHTML = "";
-    for (const item of data.items) inboxList.appendChild(renderInboxItem(item));
-    inboxEmpty.hidden = data.items.length > 0;
-  }
-
-  wireCollapsible(inboxHeader, inboxToggle, inboxList, inboxEmpty);
-
-  // ---------- todos ----------
-
-  const todoHeader = document.getElementById("todo-header");
-  const todoToggle = document.getElementById("todo-toggle");
-  const todoCount = document.getElementById("todo-count");
-  const todoList = document.getElementById("todo-list");
-  const todoEmpty = document.getElementById("todo-empty");
-  const todoAddRow = document.getElementById("todo-add-row");
-  const todoAddTitle = document.getElementById("todo-add-title");
-  const todoAddPriority = document.getElementById("todo-add-priority");
-  const todoAddType = document.getElementById("todo-add-type");
-  const todoAddBtn = document.getElementById("todo-add-btn");
-  async function todoAction(id, action, body) {
-    const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}/${action}`, "POST", body);
-    return ok ? data : null;
-  }
-
-  function renderTodoItem(item) {
-    const { li, actions } = listRow(item.title, `P${item.priority}`);
-
-    const detail = document.createElement("div");
-    detail.className = "detail";
-    detail.hidden = true;
-
-    const showBtn = document.createElement("button");
-    showBtn.className = "btn";
-    showBtn.textContent = "Show";
-    showBtn.addEventListener("click", async () => {
-      if (detail.hidden && !detail.dataset.loaded) {
-        const r = await todoAction(item.id, "show");
-        if (r) { detail.textContent = r.message; detail.dataset.loaded = "1"; }
-      }
-      detail.hidden = !detail.hidden;
-    });
-
-    const commentInput = document.createElement("input");
-    commentInput.type = "text";
-    commentInput.placeholder = "comment, enter";
-    commentInput.addEventListener("keydown", async (e) => {
-      if (e.key !== "Enter" || !commentInput.value.trim()) return;
-      const text = commentInput.value.trim();
-      commentInput.value = "";
-      await todoAction(item.id, "comment", { text });
-    });
-
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "btn";
-    closeBtn.textContent = "Close";
-    closeBtn.addEventListener("click", async () => {
-      const r = await todoAction(item.id, "close");
-      if (r) {
-        li.remove();
-        todoCount.textContent = `(${todoList.children.length})`;
-        todoEmpty.hidden = todoList.children.length > 0;
-      }
-    });
-
-    actions.appendChild(showBtn);
-    actions.appendChild(commentInput);
-    actions.appendChild(closeBtn);
-    li.appendChild(detail);
-    return li;
-  }
-
-  async function loadTodos() {
-    const { ok, data } = await apiFetch("/api/todo", "GET");
-    if (!ok) return;
-    todoCount.textContent = `(${data.items.length})`;
-    todoList.innerHTML = "";
-    for (const item of data.items) todoList.appendChild(renderTodoItem(item));
-    todoEmpty.hidden = data.items.length > 0;
-  }
-
-  wireCollapsible(todoHeader, todoToggle, todoList, todoEmpty, todoAddRow);
-
-  async function addTodo() {
-    const title = todoAddTitle.value.trim();
-    if (!title) return;
-    const { ok } = await apiFetch("/api/todo", "POST",
-      { title, priority: todoAddPriority.value, type: todoAddType.value });
-    if (ok) {
-      todoAddTitle.value = "";
-      loadTodos();
-    }
-  }
-  todoAddBtn.addEventListener("click", addTodo);
-  todoAddTitle.addEventListener("keydown", (e) => { if (e.key === "Enter") addTodo(); });
-
-  // ---------- admin ----------
-
-  const adminOpenBtn = document.getElementById("admin-open");
-  const adminCloseBtn = document.getElementById("admin-close");
-  const adminBackdrop = document.getElementById("admin-backdrop");
-  const adminDrawer = document.getElementById("admin-drawer");
-
-  function openAdmin() {
-    setOpenState(true, [adminDrawer, "open"], [adminBackdrop, "open"]);
-    adminDrawer.setAttribute("aria-hidden", "false");
-    adminDrawer.inert = false;
-  }
-  function closeAdmin() {
-    setOpenState(false, [adminDrawer, "open"], [adminBackdrop, "open"]);
-    adminDrawer.setAttribute("aria-hidden", "true");
-    adminDrawer.inert = true; // keeps its buttons out of tab order while off-screen
-  }
-  adminOpenBtn.addEventListener("click", openAdmin);
-  adminCloseBtn.addEventListener("click", closeAdmin);
-  adminBackdrop.addEventListener("click", closeAdmin);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && adminDrawer.classList.contains("open")) closeAdmin();
-  });
-
-  const adminMsg = document.getElementById("admin-msg");
-  const adminOutput = document.getElementById("admin-output");
-
-  async function adminRun(label, fn) {
-    adminMsg.textContent = `${label}...`;
-    adminOutput.hidden = true;
-    try {
-      const data = await fn();
-      adminMsg.textContent = data.ok === false ? `${label}: issues found` : `${label}: done`;
-      if (data.output) {
-        adminOutput.textContent = data.output;
-        adminOutput.hidden = false;
-      } else if (data.note) {
-        adminMsg.textContent += ` -- ${data.note}`;
-      } else if (data.error) {
-        adminMsg.textContent = `${label}: ${data.error}`;
-      }
-    } catch {
-      adminMsg.textContent = `${label} failed`;
-    }
-  }
-
-  document.getElementById("admin-reindex").addEventListener("click", () =>
-    adminRun("reindex", () => apiFetch("/api/index", "POST", { full: false }).then(r => r.data)));
-
-  document.getElementById("admin-validate").addEventListener("click", () =>
-    adminRun("validate", () => apiFetch("/api/validate", "POST").then(r => r.data)));
-
-  document.getElementById("admin-doctor").addEventListener("click", () =>
-    adminRun("doctor", () => apiFetch("/api/doctor", "GET").then(r => r.data)));
-
-  document.getElementById("admin-sync").addEventListener("click", () => {
-    const source = document.getElementById("admin-sync-source").value;
-    adminRun("sync", () => apiFetch("/api/sync", "POST", { source }).then(r => r.data));
-  });
-
-  // ---------- theme ----------
-
-  const THEME_KEY = "kb-theme";
-  const themeBtn = document.getElementById("theme-toggle");
-
-  function applyTheme(mode) {
-    if (mode === "light" || mode === "dark") {
-      document.documentElement.setAttribute("data-theme", mode);
-    } else {
-      document.documentElement.removeAttribute("data-theme");
-    }
-    themeBtn.textContent = mode === "light" ? "☀ light" : mode === "dark" ? "☾ dark" : "◐ system";
-  }
-
-  let theme = "system";
-  try { theme = localStorage.getItem(THEME_KEY) || "system"; } catch {}
-  applyTheme(theme);
-
-  themeBtn.addEventListener("click", () => {
-    theme = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
-    try { localStorage.setItem(THEME_KEY, theme); } catch {}
-    applyTheme(theme);
-  });
-
-  // ---------- boot ----------
-
-  fetch("/api/health")
-    .then(r => r.json())
-    .then(data => {
-      const el = document.getElementById("status");
-      el.textContent = "server up -- data repo: " + data.root;
-      el.className = "ok";
-    })
-    .catch(() => {
-      const el = document.getElementById("status");
-      el.textContent = "couldn't reach /api/health";
-      el.className = "err";
-    });
-
-  loadFeed(false);
-  loadInbox();
-  loadTodos();
-</script>
+<div id="type-row">
+  <button class="type-chip" :class="{ active: !activeType }" @click="setTypeFilter(null)">All</button>
+  <template x-for="t in ALL_TYPES" :key="t">
+    <button class="type-chip" :class="{ active: activeType === t }" @click="setTypeFilter(t)" x-text="t"></button>
+  </template>
+</div>
+
+<div id="filter-bar" x-show="activeTag">
+  filtered by <span class="tag" x-text="activeTag"></span>
+  <button class="link-btn" @click="clearTagFilter()">clear</button>
+</div>
+
+<ul id="feed">
+  <template x-for="item in feedItems" :key="item.id || item.title">
+    <li @click="item.id && openEntryModal(item)">
+      <div class="meta">
+        <span class="stamp" :title="item.created || ''" x-text="itemStamp(item)"></span>
+      </div>
+      <div class="title" x-text="item.title || item.id"></div>
+      <div class="md-view snippet" x-show="item.snippet" x-html="renderMarkdown(item.snippet)"></div>
+      <span class="tags-row">
+        <template x-for="tag in item.tags || []" :key="tag">
+          <span class="tag" @click.stop="setTagFilter(tag)" x-text="tag"></span>
+        </template>
+      </span>
+    </li>
+  </template>
+</ul>
+<button id="feed-more" class="btn" x-show="feedCursor" @click="loadFeed(true)">Load more</button>
+<p id="feed-empty" x-show="feedEmptyMsg" x-text="feedEmptyMsg"></p>
+
+<script defer src="app.js"></script>
+<script defer src="vendor/alpine.min.js"></script>
 </body>
 </html>

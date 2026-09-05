@@ -61,6 +61,25 @@ def route(method, path):
     return deco
 
 
+_SNIPPET_TITLE_RE = re.compile(r"^#{1,6}\s+\S.*(?:\n+|$)")
+
+
+def _make_snippet(body, limit=600):
+    """Markdown preview of an entry's body for feed/search cards -- like
+    usememo's timeline, most notes are short enough to show almost in full,
+    rendered with real formatting (lists, bold, code) rather than flattened
+    to a plain-text teaser. Only strips the redundant leading '# Title' line
+    (the card already shows the title) and truncates on a line/word boundary;
+    the client renders whatever markdown survives via the same renderer used
+    for the full entry, clamped visually with a fade if it overflows."""
+    text = _SNIPPET_TITLE_RE.sub("", (body or "").lstrip("\n"), count=1).lstrip("\n")
+    if len(text) <= limit:
+        return text.rstrip()
+    cut = text[:limit]
+    cut = cut.rsplit("\n", 1)[0] if "\n" in cut else cut.rsplit(" ", 1)[0]
+    return cut.rstrip() + "…"
+
+
 def _capture_stdout(fn, *a, **kw):
     """Run `fn`, capturing whatever it prints instead of letting it hit kb
     web's own stdout. Several kb internals (inbox promote/redirect/discard)
@@ -118,8 +137,25 @@ def api_search(h, root):
         h.send_json({"error": "no search index found -- run `kb index` first"}, status=503)
         return
 
+    # search_entries() already ranked+joined everything it needs from fts, but
+    # its row shape is shared with the CLI's plain-text output -- fetching
+    # bodies here instead of widening that shared query keeps this snippet
+    # concern purely a kb web thing.
+    db_path = os.path.join(root, ".pkb", "fts.db")
+    ids = [r[0] for r in rows]
+    snippets = {}
+    if ids:
+        conn = sqlite3.connect(db_path)
+        placeholders = ",".join("?" for _ in ids)
+        snippets = dict(conn.execute(
+            f"SELECT id, body FROM fts WHERE id IN ({placeholders})", ids
+        ).fetchall())
+        conn.close()
+
     h.send_json({"items": [
-        {"id": r[0], "title": r[1], "type": r[2], "path": r[3]} for r in rows
+        {"id": r[0], "title": r[1], "type": r[2], "path": r[3],
+         "snippet": _make_snippet(snippets.get(r[0]))}
+        for r in rows
     ]})
 
 
@@ -128,7 +164,8 @@ def api_feed(h, root):
     """Reverse-chronological feed over everything in the index (journal entries
     and core content alike), the same `files` table `kb search` reads from.
     Cursor-paginated on `created` (?before=<ISO created>), optionally filtered
-    by ?tag=."""
+    by ?tag= and/or ?type= -- the latter is how the feed's type chips browse
+    the repo without needing a search term."""
     db_path = os.path.join(root, ".pkb", "fts.db")
     if not os.path.exists(db_path):
         h.send_json({"error": "no search index found -- run `kb index` first"}, status=503)
@@ -137,20 +174,25 @@ def api_feed(h, root):
     limit = min(int(h.query.get("limit", ["20"])[0]), 100)
     before = h.query.get("before", [None])[0]
     tag = h.query.get("tag", [None])[0]
+    entry_type = h.query.get("type", [None])[0]
 
     where, params = [], []
     if before:
-        where.append("created < ?")
+        where.append("f.created < ?")
         params.append(before)
     if tag:
-        where.append("(' ' || tags || ' ') LIKE ?")
+        where.append("(' ' || f.tags || ' ') LIKE ?")
         params.append(f"% {tag} %")
+    if entry_type:
+        where.append("f.type = ?")
+        params.append(entry_type)
     clause = f"WHERE {' AND '.join(where)}" if where else ""
 
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
-        f"""SELECT id, title, type, path, created, updated, tags FROM files
-            {clause} ORDER BY created DESC LIMIT ?""",
+        f"""SELECT f.id, f.title, f.type, f.path, f.created, f.updated, f.tags, fts.body
+            FROM files f JOIN fts ON fts.id = f.id
+            {clause} ORDER BY f.created DESC LIMIT ?""",
         params + [limit],
     ).fetchall()
     conn.close()
@@ -160,11 +202,32 @@ def api_feed(h, root):
             "id": r[0], "title": r[1], "type": r[2], "path": r[3],
             "created": r[4], "updated": r[5],
             "tags": [t for t in (r[6] or "").split(" ") if t],
+            "snippet": _make_snippet(r[7]),
         }
         for r in rows
     ]
     next_cursor = items[-1]["created"] if len(items) == limit else None
     h.send_json({"items": items, "next": next_cursor})
+
+
+@route("GET", "/api/tags")
+def api_tags(h, root):
+    """Every tag used anywhere in the repo, for the tag editor's autocomplete
+    -- reuses the same listing `kb tag add` offers through fzf."""
+    h.send_json({"tags": _kb()._all_tags(root)})
+
+
+@route("GET", "/api/entries")
+def api_entries_list(h, root):
+    """Every entry's id/title/type, for the link editor's autocomplete -- reuses
+    the same listing `kb link add`'s fzf picker is built from. ?exclude=<id>
+    drops one id (the entry being edited, so it can't link to itself)."""
+    exclude = h.query.get("exclude", [None])[0]
+    entries = _kb()._iter_all_entries(root)
+    h.send_json({"items": [
+        {"id": e["id"], "title": e["title"], "type": e["type"]}
+        for e in entries if e["id"] != exclude
+    ]})
 
 
 @route("GET", "/api/entries/{entry_id}")
