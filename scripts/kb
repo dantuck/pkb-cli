@@ -1300,6 +1300,16 @@ def bd_available():
     return shutil.which("bd") is not None
 
 
+def _bd_run(bd_args):
+    """Run a `bd` subcommand, returning its stripped stdout. Raises
+    RuntimeError(stderr) on failure. Shared by every bd_* helper below so the
+    run/error/strip contract lives in exactly one place."""
+    result = subprocess.run(bd_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+
 def bd_list(root, include_all=False):
     """Open (or all, with include_all) bd issues as parsed JSON, sorted by
     priority. Raises RuntimeError(stderr) if bd itself errors. Shared by
@@ -1307,10 +1317,7 @@ def bd_list(root, include_all=False):
     bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
     if include_all:
         bd_args.append("--all")
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
-    return json.loads(result.stdout)
+    return json.loads(_bd_run(bd_args))
 
 
 def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None):
@@ -1322,17 +1329,70 @@ def bd_create(root, title, description=None, priority="2", issue_type="task", la
         bd_args += ["--description", description]
     if labels:
         bd_args += ["--labels", labels]
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
-    return result.stdout.strip()
+    return _bd_run(bd_args)
+
+
+def bd_update(root, issue_id, priority=None, issue_type=None, description=None,
+              assignee=None, add_label=None, remove_label=None):
+    """Update fields on an existing bd issue, returning bd's own stdout. Raises
+    RuntimeError(stderr) on failure. Used by kb web's PATCH /api/todo/{id} for
+    editing an already-created todo. add_label/remove_label touch one label at
+    a time, mirroring the tag chip add/remove UX used elsewhere in kb web."""
+    bd_args = ["bd", "-C", root, "update", issue_id]
+    if priority is not None:
+        bd_args += ["--priority", str(priority)]
+    if issue_type is not None:
+        bd_args += ["--type", issue_type]
+    if description is not None:
+        bd_args += ["--description", description]
+    if assignee is not None:
+        bd_args += ["--assignee", assignee]
+    if add_label:
+        bd_args += ["--add-label", add_label]
+    if remove_label:
+        bd_args += ["--remove-label", remove_label]
+    return _bd_run(bd_args)
+
+
+def bd_reopen(root, issue_id):
+    """Reopen a closed bd issue, returning bd's own stdout. Raises
+    RuntimeError(stderr) on failure. Used by kb web's todo action endpoint."""
+    return _bd_run(["bd", "-C", root, "reopen", issue_id])
+
+
+def bd_delete(root, issue_id):
+    """Permanently delete a bd issue, returning bd's own stdout. Raises
+    RuntimeError(stderr) on failure. Used by kb web's DELETE /api/todo/{id}.
+    --force is required since kb web already confirms the action client-side."""
+    return _bd_run(["bd", "-C", root, "delete", issue_id, "--force"])
+
+
+def bd_deps(root, issue_id, direction="down"):
+    """List an issue's dependencies (direction='down', what it's blocked by) or
+    dependents (direction='up', what it blocks) as parsed JSON. Raises
+    RuntimeError(stderr) on failure. Used by kb web's GET /api/todo/{id}/deps."""
+    bd_args = ["bd", "-C", root, "dep", "list", issue_id, "--direction", direction, "--json"]
+    stdout = _bd_run(bd_args)
+    return json.loads(stdout) if stdout else []
+
+
+def bd_dep_add(root, from_id, to_id):
+    """Record that `from_id` depends on (is blocked by) `to_id`, returning bd's
+    own stdout. Raises RuntimeError(stderr) on failure."""
+    return _bd_run(["bd", "-C", root, "dep", "add", from_id, to_id])
+
+
+def bd_dep_remove(root, from_id, to_id):
+    """Remove the dependency recorded by bd_dep_add(from_id, to_id), returning
+    bd's own stdout. Raises RuntimeError(stderr) on failure."""
+    return _bd_run(["bd", "-C", root, "dep", "remove", from_id, to_id])
 
 
 def bd_action(root, action, issue_id, comment_text=None):
-    """Run `bd show|close|comment` for one issue, returning bd's own stdout.
-    Raises RuntimeError(stderr) on failure. Used by kb web's todo action
-    endpoint -- the CLI's interactive picker (_todo_interactive) calls bd
-    directly via subprocess instead, since it streams straight to the
+    """Run `bd show|close|comment|reopen` for one issue, returning bd's own
+    stdout. Raises RuntimeError(stderr) on failure. Used by kb web's todo
+    action endpoint -- the CLI's interactive picker (_todo_interactive) calls
+    bd directly via subprocess instead, since it streams straight to the
     terminal rather than needing a return value."""
     bd_args = ["bd", "-C", root, action, issue_id]
     if action == "comment":
@@ -1425,7 +1485,10 @@ def _todo_interactive(root, issues):
     chosen_id = selected.split("\t", 1)[0].strip()
     chosen = by_id.get(chosen_id)
 
-    choice = _fzf_select(["show", "close", "comment", "cancel"], f"{chosen_id}> ",
+    is_closed = chosen and chosen["status"] != "open"
+    actions = ["show", "reopen", "comment", "delete", "cancel"] if is_closed else \
+        ["show", "close", "comment", "delete", "cancel"]
+    choice = _fzf_select(actions, f"{chosen_id}> ",
                           f"{chosen['title'] if chosen else chosen_id} -- choose an action")
     if choice is None:
         return 0
@@ -1434,10 +1497,18 @@ def _todo_interactive(root, issues):
         subprocess.run(["bd", "-C", root, "show", chosen_id])
     elif choice == "close":
         subprocess.run(["bd", "-C", root, "close", chosen_id])
+    elif choice == "reopen":
+        subprocess.run(["bd", "-C", root, "reopen", chosen_id])
     elif choice == "comment":
         text = input(f"comment on {chosen_id}: ").strip()
         if text:
             subprocess.run(["bd", "-C", root, "comment", chosen_id, text])
+    elif choice == "delete":
+        confirm = input(f"type '{chosen_id}' to confirm delete: ").strip()
+        if confirm == chosen_id:
+            subprocess.run(["bd", "-C", root, "delete", chosen_id, "--force"])
+        else:
+            print("confirmation didn't match -- delete aborted", file=sys.stderr)
     return 0
 
 

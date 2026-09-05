@@ -195,7 +195,7 @@ document.addEventListener("alpine:init", () => {
         // in the same journal entry as any earlier capture from today (see
         // journal_append in scripts/kb), so the feed needs the merged entry
         // the server now has, not a second one-off card standing in for it.
-        if (!this.searchQuery.trim() && !this.activeTag) this.loadFeed(false);
+        if (!this.activeTag) this.loadFeed(false);
       } catch {
         this.captureMsg = "failed to add -- try again";
       } finally {
@@ -206,14 +206,12 @@ document.addEventListener("alpine:init", () => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) this.capture();
     },
 
-    // ---------- feed / search ----------
+    // ---------- feed ----------
     feedItems: [],
     feedCursor: null,
     feedEmptyMsg: "",
     activeTag: null,
     activeType: null,
-    searchQuery: "",
-    _searchDebounce: null,
 
     itemStamp(item) {
       return `${formatRelative(item.created)} · ${item.type}`;
@@ -238,39 +236,8 @@ document.addEventListener("alpine:init", () => {
       this.feedEmptyMsg = this.feedItems.length ? "" : "Nothing here yet.";
     },
 
-    async runSearch(query) {
-      const url = new URL("/api/search", location.origin);
-      url.searchParams.set("q", query);
-      url.searchParams.set("all", "1");
-      if (this.activeType) url.searchParams.set("type", this.activeType);
-      this.feedCursor = null;
-      const res = await fetch(url);
-      if (!res.ok) {
-        this.feedItems = [];
-        this.feedEmptyMsg = "search failed";
-        return;
-      }
-      const data = await res.json();
-      this.feedItems = data.items;
-      this.feedEmptyMsg = data.items.length ? "" : "no results";
-    },
-
-    onSearchInput() {
-      clearTimeout(this._searchDebounce);
-      const query = this.searchQuery.trim();
-      this._searchDebounce = setTimeout(() => {
-        if (!query) {
-          this.loadFeed(false);
-        } else {
-          this.activeTag = null;
-          this.runSearch(query);
-        }
-      }, 250);
-    },
-
     setTagFilter(tag) {
       this.activeTag = tag;
-      this.searchQuery = "";
       this.feedCursor = null;
       this.loadFeed(false);
     },
@@ -282,21 +249,26 @@ document.addEventListener("alpine:init", () => {
 
     // Type chips are a browsing aid -- a quick way to see everything of one
     // kind without knowing a tag or search term for it -- so picking one
-    // clears any active search, same as clicking a tag does.
+    // clears any active tag filter, same as clicking a tag does.
     setTypeFilter(type) {
       this.activeType = this.activeType === type ? null : type;
-      this.searchQuery = "";
       this.feedCursor = null;
       this.loadFeed(false);
     },
 
     // ---------- inbox ----------
-    inboxOpen: false,
+    inboxDrawerOpen: false,
     inboxItems: [],
+    // Distinguishes "haven't heard back yet" from "heard back, zero items" --
+    // the pill badge needs both so it can stay invisible-but-space-reserving
+    // before the first load, then switch to a visible empty-state dash once
+    // it actually knows the count is zero rather than just not-yet-known.
+    inboxLoaded: false,
 
     async loadInbox() {
       const { ok, data } = await apiFetch("/api/inbox", "GET");
       if (ok) this.inboxItems = data.items.map((it) => ({ ...it, promoteType: CORE_TYPES[0] }));
+      this.inboxLoaded = true;
     },
     async resolveInboxItem(item, action) {
       const urls = {
@@ -307,48 +279,287 @@ document.addEventListener("alpine:init", () => {
       const { ok } = await apiFetch(...urls[action]);
       if (ok) {
         this.inboxItems = this.inboxItems.filter((i) => i.id !== item.id);
-        if (!this.activeTag && !this.searchQuery.trim()) this.loadFeed(false);
+        if (!this.activeTag) this.loadFeed(false);
       }
     },
 
     // ---------- todos ----------
-    todosOpen: false,
+    // Priority is the one piece of data that should read at a glance --
+    // collapse bd's 0-4 scale down to the three-tier high/mid/low language
+    // the rest of the UI already has color tokens for (danger/accent/muted),
+    // rather than inventing a fourth palette just for todos.
+    todoDrawerOpen: false,
     todoItems: [],
-    todoAdd: { title: "", priority: "2", type: "task" },
+    todoAdd: { title: "", priority: "2", type: "task", description: "", labels: "" },
+    todoAddExpanded: false,
+    todoLoaded: false,
+    todoShowClosed: false,
+    todoFilter: "",
+    todoTypeFilter: "",
+    todoLabelFilter: "",
+
+    priorityLevel(p) {
+      const n = Number(p);
+      return n <= 1 ? "high" : n === 2 ? "mid" : "low";
+    },
 
     async loadTodos() {
-      const { ok, data } = await apiFetch("/api/todo", "GET");
-      if (ok) this.todoItems = data.items.map((it) => ({ ...it, detailOpen: false, detailText: null, comment: "" }));
+      const { ok, data } = await apiFetch(`/api/todo${this.todoShowClosed ? "?all=1" : ""}`, "GET");
+      // bd's own JSON calls this field issue_type; every other bit of kb web
+      // UI code (badges, the type select, filtering) reads item.type, so
+      // normalize it once here instead of touching every read site.
+      if (ok) this.todoItems = data.items.map((i) => ({ ...i, type: i.issue_type }));
+      this.todoLoaded = true;
+    },
+    async toggleTodoShowClosed() {
+      this.todoShowClosed = !this.todoShowClosed;
+      await this.loadTodos();
+    },
+    todoAllLabels() {
+      const set = new Set();
+      for (const i of this.todoItems) for (const l of i.labels || []) set.add(l);
+      return [...set].sort();
+    },
+    setTodoTypeFilter(t) { this.todoTypeFilter = this.todoTypeFilter === t ? "" : t; },
+    setTodoLabelFilter(l) { this.todoLabelFilter = this.todoLabelFilter === l ? "" : l; },
+    filteredTodos() {
+      const q = this.todoFilter.trim().toLowerCase();
+      return this.todoItems.filter((i) => {
+        if (this.todoTypeFilter && i.type !== this.todoTypeFilter) return false;
+        if (this.todoLabelFilter && !(i.labels || []).includes(this.todoLabelFilter)) return false;
+        if (!q) return true;
+        return i.title.toLowerCase().includes(q) ||
+          i.id.toLowerCase().includes(q) ||
+          (i.labels || []).some((l) => l.toLowerCase().includes(q));
+      });
     },
     async todoAction(id, action, body) {
       const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}/${action}`, "POST", body);
       return ok ? data : null;
     },
-    async toggleTodoDetail(item) {
-      if (!item.detailOpen && item.detailText === null) {
-        const r = await this.todoAction(item.id, "show");
-        if (r) item.detailText = r.message;
-      }
-      item.detailOpen = !item.detailOpen;
-    },
-    async submitTodoComment(item) {
-      const text = item.comment.trim();
-      if (!text) return;
-      item.comment = "";
-      await this.todoAction(item.id, "comment", { text });
-    },
     async closeTodo(item) {
       const r = await this.todoAction(item.id, "close");
-      if (r) this.todoItems = this.todoItems.filter((i) => i.id !== item.id);
+      if (r) {
+        if (this.todoShowClosed) item.status = "closed";
+        else this.todoItems = this.todoItems.filter((i) => i.id !== item.id);
+      }
+    },
+    async reopenTodo(item) {
+      const r = await this.todoAction(item.id, "reopen");
+      if (r) item.status = "open";
     },
     async addTodo() {
       const title = this.todoAdd.title.trim();
       if (!title) return;
-      const { ok } = await apiFetch("/api/todo", "POST",
-        { title, priority: this.todoAdd.priority, type: this.todoAdd.type });
+      const { ok } = await apiFetch("/api/todo", "POST", {
+        title, priority: this.todoAdd.priority, type: this.todoAdd.type,
+        description: this.todoAdd.description.trim() || undefined,
+        labels: this.todoAdd.labels.trim() || undefined,
+      });
       if (ok) {
         this.todoAdd.title = "";
+        this.todoAdd.description = "";
+        this.todoAdd.labels = "";
+        this.todoAddExpanded = false;
         this.loadTodos();
+      }
+    },
+
+    // ---------- todo modal ----------
+    // Mirrors the entry modal's click-a-card-to-see-more pattern instead of
+    // an inline expando -- so a todo's full bd detail and its comment box
+    // live in the same kind of surface as everything else you open.
+    todoModalOpen: false,
+    todoModalItem: null,
+    todoModalDetail: "",
+    todoModalLoading: false,
+    todoModalComment: "",
+    todoModalPriority: "2",
+    todoModalType: "task",
+    todoModalDescription: "",
+    todoModalAssignee: "",
+    todoModalLabelInput: "",
+    todoModalUpdateMsg: "",
+    todoModalUpdateErr: false,
+    todoModalBlockedBy: [],
+    todoModalBlocks: [],
+    todoModalDepsLoading: false,
+    todoModalDepInput: "",
+    todoModalDepDirection: "blocked_by",
+    todoModalDepError: "",
+    todoModalDeleteConfirm: false,
+
+    async openTodoModal(item) {
+      this.todoModalItem = item;
+      this.todoModalComment = "";
+      this.todoModalDetail = "";
+      this.todoModalPriority = String(item.priority);
+      this.todoModalType = item.type;
+      this.todoModalDescription = item.description || "";
+      this.todoModalAssignee = item.owner || "";
+      this.todoModalLabelInput = "";
+      this.todoModalUpdateMsg = "";
+      this.todoModalUpdateErr = false;
+      this.todoModalBlockedBy = [];
+      this.todoModalBlocks = [];
+      this.todoModalDepInput = "";
+      this.todoModalDepDirection = "blocked_by";
+      this.todoModalDepError = "";
+      this.todoModalDeleteConfirm = false;
+      this.todoModalLoading = true;
+      this.todoModalOpen = true;
+      const requestedId = item.id;
+      const [r] = await Promise.all([
+        this.todoAction(item.id, "show"),
+        this.loadTodoDeps(item.id),
+      ]);
+      if (!this.todoModalItem || this.todoModalItem.id !== requestedId) return;
+      this.todoModalDetail = r ? r.message : "couldn't load";
+      this.todoModalLoading = false;
+    },
+    async loadTodoDeps(id) {
+      this.todoModalDepsLoading = true;
+      const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}/deps`, "GET");
+      if (!this.todoModalItem || this.todoModalItem.id !== id) return;
+      if (ok) {
+        this.todoModalBlockedBy = data.blocked_by;
+        this.todoModalBlocks = data.blocks;
+      } else {
+        this.todoModalDepError = (data && data.error) || "failed to load dependencies";
+      }
+      this.todoModalDepsLoading = false;
+    },
+    async addTodoDep() {
+      const targetId = this.todoModalDepInput.trim();
+      if (!targetId || !this.todoModalItem) return;
+      this.todoModalDepError = "";
+      const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(this.todoModalItem.id)}/deps`, "POST",
+        { target_id: targetId, direction: this.todoModalDepDirection });
+      if (ok) {
+        this.todoModalDepInput = "";
+        await this.loadTodoDeps(this.todoModalItem.id);
+      } else {
+        this.todoModalDepError = (data && data.error) || "failed to add dependency";
+      }
+    },
+    async removeTodoDep(targetId, direction) {
+      if (!this.todoModalItem) return;
+      const { ok, data } = await apiFetch(
+        `/api/todo/${encodeURIComponent(this.todoModalItem.id)}/deps/${encodeURIComponent(targetId)}?direction=${direction}`,
+        "DELETE");
+      if (ok) await this.loadTodoDeps(this.todoModalItem.id);
+      else this.todoModalDepError = (data && data.error) || "failed to remove dependency";
+    },
+    closeTodoModal() {
+      this.todoModalOpen = false;
+      this.todoModalItem = null;
+    },
+    async submitTodoModalComment() {
+      const text = this.todoModalComment.trim();
+      if (!text || !this.todoModalItem) return;
+      this.todoModalComment = "";
+      await this.todoAction(this.todoModalItem.id, "comment", { text });
+    },
+    async closeTodoFromModal() {
+      if (!this.todoModalItem) return;
+      await this.closeTodo(this.todoModalItem);
+      this.closeTodoModal();
+    },
+    async reopenTodoFromModal() {
+      if (!this.todoModalItem) return;
+      await this.reopenTodo(this.todoModalItem);
+    },
+    async deleteTodoFromModal() {
+      if (!this.todoModalItem) return;
+      const item = this.todoModalItem;
+      const { ok } = await apiFetch(`/api/todo/${encodeURIComponent(item.id)}`, "DELETE", { confirm: item.id });
+      if (ok) {
+        this.todoItems = this.todoItems.filter((i) => i.id !== item.id);
+        this.closeTodoModal();
+      }
+    },
+    // Priority/type live on the issue itself, not behind show/close/comment --
+    // PATCHes straight to the item object backing both the modal and its row
+    // in the drawer list, so the pri-dot/border color update the moment the
+    // edit lands instead of needing a full todo list reload.
+    async todoPatch(id, payload) {
+      const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}`, "PATCH", payload);
+      return { ok, data };
+    },
+    async updateTodoPriority() {
+      if (!this.todoModalItem) return;
+      this.todoModalUpdateMsg = "saving…";
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { priority: this.todoModalPriority });
+      if (ok) {
+        this.todoModalItem.priority = Number(this.todoModalPriority);
+        this.todoModalUpdateMsg = "saved";
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to save";
+      }
+    },
+    async updateTodoType() {
+      if (!this.todoModalItem) return;
+      this.todoModalUpdateMsg = "saving…";
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { type: this.todoModalType });
+      if (ok) {
+        this.todoModalItem.type = this.todoModalType;
+        this.todoModalUpdateMsg = "saved";
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to save";
+      }
+    },
+    async updateTodoDescription() {
+      if (!this.todoModalItem) return;
+      if (this.todoModalDescription === (this.todoModalItem.description || "")) return;
+      this.todoModalUpdateMsg = "saving…";
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { description: this.todoModalDescription });
+      if (ok) {
+        this.todoModalItem.description = this.todoModalDescription;
+        this.todoModalUpdateMsg = "saved";
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to save";
+      }
+    },
+    async updateTodoAssignee() {
+      if (!this.todoModalItem) return;
+      if (this.todoModalAssignee === (this.todoModalItem.owner || "")) return;
+      this.todoModalUpdateMsg = "saving…";
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { assignee: this.todoModalAssignee });
+      if (ok) {
+        this.todoModalItem.owner = this.todoModalAssignee;
+        this.todoModalUpdateMsg = "saved";
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to save";
+      }
+    },
+    async addTodoLabel() {
+      const label = this.todoModalLabelInput.trim();
+      if (!label || !this.todoModalItem) return;
+      this.todoModalLabelInput = "";
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { add_label: label });
+      if (ok) {
+        this.todoModalItem.labels = [...(this.todoModalItem.labels || []), label];
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to add label";
+      }
+    },
+    async removeTodoLabel(label) {
+      if (!this.todoModalItem) return;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { remove_label: label });
+      if (ok) {
+        this.todoModalItem.labels = (this.todoModalItem.labels || []).filter((l) => l !== label);
+      } else {
+        this.todoModalUpdateErr = true;
+        this.todoModalUpdateMsg = (data && data.error) || "failed to remove label";
       }
     },
 
@@ -667,12 +878,91 @@ document.addEventListener("alpine:init", () => {
         // Only worth a feed reload if the new entry would actually show up
         // in the view the user is currently looking at.
         const matchesView = (!this.activeTag || this.newEntryTags.includes(this.activeTag))
-          && (!this.activeType || this.activeType === this.newEntryType) && !this.searchQuery.trim();
+          && (!this.activeType || this.activeType === this.newEntryType);
         if (matchesView) this.loadFeed(false);
       } else {
         this.newEntrySaveErr = true;
         this.newEntrySaveMsg = (data && data.error) || "create failed";
       }
+    },
+
+    // ---------- command palette ----------
+    // Cmd/Ctrl+K opens a quick-jump search independent of the main feed's
+    // search box -- it has its own query/results/highlight state so opening
+    // it never clobbers whatever filter or search is already active in the
+    // background feed.
+    paletteOpen: false,
+    paletteQuery: "",
+    paletteResults: [],
+    paletteHighlight: -1,
+    paletteLoading: false,
+    paletteMsg: "",
+    _paletteDebounce: null,
+    _paletteSeq: 0,
+
+    openPalette() {
+      this.paletteOpen = true;
+      this.paletteQuery = "";
+      this.paletteResults = [];
+      this.paletteHighlight = -1;
+      this.paletteMsg = "";
+      this.$nextTick(() => this.$refs.paletteInput && this.$refs.paletteInput.focus());
+    },
+    closePalette() {
+      this.paletteOpen = false;
+    },
+    onPaletteInput() {
+      clearTimeout(this._paletteDebounce);
+      const query = this.paletteQuery.trim();
+      this.paletteHighlight = -1;
+      if (!query) {
+        this.paletteResults = [];
+        this.paletteLoading = false;
+        this.paletteMsg = "";
+        return;
+      }
+      this.paletteLoading = true;
+      this._paletteDebounce = setTimeout(() => this.runPaletteSearch(query), 200);
+    },
+    async runPaletteSearch(query) {
+      const seq = ++this._paletteSeq;
+      const url = new URL("/api/search", location.origin);
+      url.searchParams.set("q", query);
+      url.searchParams.set("all", "1");
+      try {
+        const res = await fetch(url);
+        if (seq !== this._paletteSeq) return; // a newer keystroke's request already landed
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        this.paletteResults = data.items.slice(0, 20);
+        this.paletteMsg = this.paletteResults.length ? "" : "no results";
+      } catch {
+        if (seq !== this._paletteSeq) return;
+        this.paletteResults = [];
+        this.paletteMsg = "search failed";
+      } finally {
+        if (seq === this._paletteSeq) this.paletteLoading = false;
+      }
+    },
+    openPaletteResult(item) {
+      this.closePalette();
+      this.openEntryModal(item);
+    },
+    paletteKeydown(e) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        this.paletteHighlight = Math.min(this.paletteHighlight + 1, this.paletteResults.length - 1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        this.paletteHighlight = Math.max(this.paletteHighlight - 1, -1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const chosen = this.paletteResults[this.paletteHighlight] || this.paletteResults[0];
+        if (chosen) this.openPaletteResult(chosen);
+      }
+      // Escape isn't handled here -- it's left to bubble up to the
+      // window-level onKeydown handler, which already closes the palette
+      // (and, in the same keypress, any other modal/drawer stacked under it).
     },
 
     // ---------- admin ----------
@@ -714,10 +1004,19 @@ document.addEventListener("alpine:init", () => {
 
     // ---------- global keydown ----------
     onKeydown(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        this.paletteOpen ? this.closePalette() : this.openPalette();
+        return;
+      }
       if (e.key !== "Escape") return;
+      if (this.paletteOpen) this.closePalette();
       if (this.adminOpen) this.adminOpen = false;
+      if (this.inboxDrawerOpen) this.inboxDrawerOpen = false;
+      if (this.todoDrawerOpen) this.todoDrawerOpen = false;
       if (this.modalOpen) this.closeEntryModal();
       if (this.newEntryOpen) this.closeNewEntryModal();
+      if (this.todoModalOpen) this.closeTodoModal();
     },
 
     // ---------- boot ----------
@@ -726,15 +1025,22 @@ document.addEventListener("alpine:init", () => {
       this.applyThemeAttr(this.theme);
       this.$watch("theme", (mode) => this.applyThemeAttr(mode));
 
-      // Lock the page's own scroll behind whichever modal is open so
-      // dragging the feed underneath doesn't fight with scrolling the
-      // modal's content. Both flags need their own $watch (Alpine has no
-      // "watch this computed value" form), but they share one body.
+      // Lock the page's own scroll behind whichever modal or drawer is open
+      // so dragging the feed underneath doesn't fight with scrolling the
+      // overlay's own content -- a drawer should only ever scroll itself.
+      // Every flag needs its own $watch (Alpine has no "watch any of these"
+      // form), but they all share one body.
       const updateBodyScrollLock = () => {
-        document.body.style.overflow = (this.modalOpen || this.newEntryOpen) ? "hidden" : "";
+        document.body.style.overflow = (this.modalOpen || this.newEntryOpen || this.todoModalOpen
+          || this.adminOpen || this.inboxDrawerOpen || this.todoDrawerOpen || this.paletteOpen) ? "hidden" : "";
       };
       this.$watch("modalOpen", updateBodyScrollLock);
       this.$watch("newEntryOpen", updateBodyScrollLock);
+      this.$watch("todoModalOpen", updateBodyScrollLock);
+      this.$watch("adminOpen", updateBodyScrollLock);
+      this.$watch("inboxDrawerOpen", updateBodyScrollLock);
+      this.$watch("todoDrawerOpen", updateBodyScrollLock);
+      this.$watch("paletteOpen", updateBodyScrollLock);
 
       fetch("/api/health")
         .then((r) => r.json())

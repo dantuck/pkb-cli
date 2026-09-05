@@ -385,9 +385,117 @@ def api_todo_create(h, root):
     h.send_json({"message": message}, status=201)
 
 
+@route("PATCH", "/api/todo/{issue_id}")
+def api_todo_update(h, root, issue_id):
+    """Edit priority/type/description/assignee, or add/remove one label, on an
+    existing todo -- the fields bd_create sets at creation time but
+    bd_action's show/close/comment/reopen never touch."""
+    kb = _kb()
+    if not kb.bd_available():
+        h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    payload = h.read_json() or {}
+    priority = payload.get("priority")
+    issue_type = payload.get("type")
+    description = payload.get("description")
+    assignee = payload.get("assignee")
+    add_label = payload.get("add_label")
+    remove_label = payload.get("remove_label")
+    if not any([priority is not None, issue_type is not None, description is not None,
+                assignee is not None, add_label, remove_label]):
+        h.send_json({"error": "nothing to update"}, status=400)
+        return
+    try:
+        message = kb.bd_update(root, issue_id, priority=priority, issue_type=issue_type,
+                                description=description, assignee=assignee,
+                                add_label=add_label, remove_label=remove_label)
+    except RuntimeError as e:
+        h.send_json({"error": str(e)}, status=502)
+        return
+    h.send_json({"message": message})
+
+
+@route("DELETE", "/api/todo/{issue_id}")
+def api_todo_delete(h, root, issue_id):
+    """Permanently delete a todo. Requires the caller to echo the issue id back
+    as `confirm` -- deletion is irreversible, so a stray DELETE (a typo'd
+    script, a forgotten confirm dialog) can't take it out by accident."""
+    kb = _kb()
+    if not kb.bd_available():
+        h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    payload = h.read_json() or {}
+    if payload.get("confirm") != issue_id:
+        h.send_json({"error": "confirmation required"}, status=400)
+        return
+    try:
+        message = kb.bd_delete(root, issue_id)
+    except RuntimeError as e:
+        h.send_json({"error": str(e)}, status=502)
+        return
+    h.send_json({"message": message})
+
+
+@route("GET", "/api/todo/{issue_id}/deps")
+def api_todo_deps(h, root, issue_id):
+    """Both directions at once: what this issue is blocked by (down) and what
+    it blocks (up) -- the modal wants both whenever it opens, not one at a time."""
+    kb = _kb()
+    if not kb.bd_available():
+        h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    try:
+        blocked_by = kb.bd_deps(root, issue_id, direction="down")
+        blocks = kb.bd_deps(root, issue_id, direction="up")
+    except RuntimeError as e:
+        h.send_json({"error": str(e)}, status=502)
+        return
+    h.send_json({"blocked_by": blocked_by, "blocks": blocks})
+
+
+@route("POST", "/api/todo/{issue_id}/deps")
+def api_todo_deps_add(h, root, issue_id):
+    kb = _kb()
+    if not kb.bd_available():
+        h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    payload = h.read_json() or {}
+    target_id = (payload.get("target_id") or "").strip()
+    direction = payload.get("direction")
+    if not target_id or direction not in ("blocked_by", "blocks"):
+        h.send_json({"error": "need target_id and direction ('blocked_by' or 'blocks')"}, status=400)
+        return
+    from_id, to_id = (issue_id, target_id) if direction == "blocked_by" else (target_id, issue_id)
+    try:
+        message = kb.bd_dep_add(root, from_id, to_id)
+    except RuntimeError as e:
+        h.send_json({"error": str(e)}, status=502)
+        return
+    h.send_json({"message": message}, status=201)
+
+
+@route("DELETE", "/api/todo/{issue_id}/deps/{target_id}")
+def api_todo_deps_remove(h, root, issue_id, target_id):
+    kb = _kb()
+    if not kb.bd_available():
+        h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    direction = h.query.get("direction", [""])[0]
+    if direction not in ("blocked_by", "blocks"):
+        h.send_json({"error": "need ?direction=blocked_by or ?direction=blocks"}, status=400)
+        return
+    from_id, to_id = (issue_id, target_id) if direction == "blocked_by" else (target_id, issue_id)
+    try:
+        message = kb.bd_dep_remove(root, from_id, to_id)
+    except RuntimeError as e:
+        h.send_json({"error": str(e)}, status=502)
+        return
+    h.send_json({"message": message})
+
+
 @route("POST", "/api/todo/{issue_id}/{action}")
 def api_todo_action(h, root, issue_id, action):
-    if action not in ("show", "close", "comment"):
+    if action not in ("show", "close", "comment", "reopen"):
         h.send_json({"error": f"unknown action '{action}'"}, status=404)
         return
     kb = _kb()

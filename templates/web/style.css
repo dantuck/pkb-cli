@@ -23,6 +23,9 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-highlight: rgba(255, 255, 255, 0.8);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -44,6 +47,9 @@
     --danger-text: #fca5a5;
     --ok: #4ade80;
     --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.3);
+    --glass-bg: rgba(54, 63, 78, 0.78);
+    --glass-border: rgba(255, 255, 255, 0.2);
+    --glass-highlight: rgba(255, 255, 255, 0.24);
   }
 }
 :root[data-theme="dark"] {
@@ -54,6 +60,7 @@
   --accent: #ff8c00; --accent-hover: #ffa733; --accent-soft: rgba(255, 140, 0, 0.18); --accent-text: #ff8c00;
   --danger: #f87171; --danger-soft: rgba(248, 113, 113, 0.12); --danger-text: #fca5a5; --ok: #4ade80;
   --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --glass-bg: rgba(26, 34, 48, 0.6); --glass-border: rgba(255, 255, 255, 0.1); --glass-highlight: rgba(255, 255, 255, 0.14);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -63,15 +70,31 @@
   --accent: #ff8c00; --accent-hover: #e67e00; --accent-soft: rgba(255, 140, 0, 0.12); --accent-text: #a65300;
   --danger: #dc2626; --danger-soft: rgba(220, 38, 38, 0.08); --danger-text: #b91c1c; --ok: #16a34a;
   --shadow-lg: 0 20px 60px rgba(10, 10, 20, 0.22), 0 4px 16px rgba(10, 10, 20, 0.1);
+  --glass-bg: rgba(255, 255, 255, 0.6); --glass-border: rgba(255, 255, 255, 0.5); --glass-highlight: rgba(255, 255, 255, 0.8);
 }
 
 * { box-sizing: border-box; }
+html {
+  background: var(--bg);
+  /* Firefox's scrollbar theming -- the page is taller than the viewport, and
+     without this the browser falls back to a plain light-gray scrollbar that
+     reads as a bright stripe against the dark theme. */
+  scrollbar-color: var(--border-strong) transparent;
+}
 body {
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   max-width: 700px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
   background: var(--bg); color: var(--text);
   transition: background 0.15s ease, color 0.15s ease;
 }
+/* Chromium/WebKit scrollbar theming -- same intent as the scrollbar-color
+   rule above, for browsers that don't support that property. */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 999px; border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 #header-row {
   display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.4rem;
@@ -106,6 +129,17 @@ h1::before {
 }
 .pill-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-strong); }
 .pill-btn svg { width: 14px; height: 14px; }
+.pill-count {
+  display: inline-block; min-width: 1.35rem; box-sizing: border-box; text-align: center;
+  font-size: 0.7rem; font-weight: 600; background: var(--accent-soft); color: var(--accent-text);
+  padding: 0.05rem 0.4rem; border-radius: 999px;
+}
+/* visibility, not x-show/display:none -- so the badge keeps reserving its
+   width and the pill button doesn't jump wider the moment the count loads. */
+.pill-count-hidden { visibility: hidden; }
+/* Zero is still an answer -- once loaded, a genuinely empty inbox/todo list
+   gets a flat "0" instead of either an alarming accent badge or nothing. */
+.pill-count-empty { background: transparent; color: var(--muted); border: 1px solid var(--border); }
 
 #capture {
   display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.75rem;
@@ -161,29 +195,72 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   margin-bottom: 1.5rem; border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;
 }
-#inbox-section, #todo-section { margin-bottom: 1.5rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); }
-#inbox-header, #todo-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0.8rem 1rem; cursor: pointer; font-size: 0.9rem; user-select: none;
-}
-#inbox-header:hover, #todo-header:hover { background: var(--surface-2); }
-#inbox-header span:last-child, #todo-header span:last-child { color: var(--muted); font-size: 0.8rem; }
-#inbox-list, #todo-list { list-style: none; margin: 0; padding: 0 1rem 0.6rem; }
-#inbox-list li, #todo-list li { padding: 0.65rem 0; border-top: 1px solid var(--divider); }
-#inbox-list .row1, #todo-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+#inbox-list { list-style: none; margin: 0; padding: 0 1rem 0.6rem; }
+#inbox-list li { padding: 0.65rem 0; border-top: 1px solid var(--divider); }
+#inbox-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
 .row-badge {
   font-size: 0.72rem; color: var(--muted); white-space: nowrap; background: var(--surface-2);
   padding: 0.1rem 0.5rem; border-radius: 999px;
 }
-#inbox-list .actions, #todo-list .actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap; }
+#todo-list .row-badge { cursor: pointer; transition: background 0.1s ease, color 0.1s ease; }
+#todo-list .row-badge.active { background: var(--accent-soft); color: var(--accent-text); }
+
+#todo-chip-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0 1.1rem 0.6rem; }
+.chip-filter {
+  font: inherit; font-size: 0.72rem; color: var(--muted); background: var(--surface-2);
+  border: 1px solid transparent; padding: 0.1rem 0.55rem; border-radius: 999px; cursor: pointer;
+}
+.chip-filter:hover { border-color: var(--border-strong); }
+.chip-filter.active { background: var(--accent-soft); color: var(--accent-text); }
+#inbox-list .actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap; }
 #inbox-empty, #todo-empty { padding: 0.7rem 1rem; color: var(--muted); font-size: 0.85rem; }
 
-.search-wrap { position: relative; margin-bottom: 0.9rem; }
-.search-wrap svg {
-  position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; color: var(--muted); pointer-events: none;
+/* Todos read as compact, clickable cards -- same hover-lift language as the
+   main feed -- with priority carried as a color, not just a "P<n>" label,
+   so the list scans by urgency at a glance instead of by reading order. */
+#todo-list { list-style: none; margin: 0; padding: 0.5rem 1rem 0.8rem; display: flex; flex-direction: column; gap: 0.5rem; }
+#todo-list li {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface-2); cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
 }
-#search-input { width: 100%; padding-left: 2.4rem; }
+#todo-list li:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+#todo-list li.pri-high { border-left-color: var(--danger); }
+#todo-list li.pri-mid { border-left-color: var(--accent); }
+#todo-list li.pri-low { border-left-color: var(--border-strong); }
+#todo-list li.pri-closed { border-left-color: var(--border); opacity: 0.6; }
+#todo-list li.closed .todo-title { text-decoration: line-through; }
+#todo-list .pri-dot {
+  width: 0.55rem; height: 0.55rem; border-radius: 999px; flex-shrink: 0; background: var(--border-strong);
+}
+#todo-list li.pri-high .pri-dot { background: var(--danger); }
+#todo-list li.pri-mid .pri-dot { background: var(--accent); }
+#todo-list .todo-title { flex: 1; font-size: 0.9rem; }
+#todo-list .todo-close { flex-shrink: 0; width: 1.6rem; height: 1.6rem; }
+#todo-list .todo-close svg { width: 13px; height: 13px; }
+.badge-pri-high { background: var(--danger-soft); color: var(--danger-text); }
+.badge-pri-mid { background: var(--accent-soft); color: var(--accent-text); }
+.todo-detail {
+  white-space: pre-wrap; font-size: 0.82rem; color: var(--muted); margin: 0 0 0.3rem;
+  background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.7rem; max-height: 40vh; overflow-y: auto;
+}
+.todo-description { width: 100%; box-sizing: border-box; font-size: 0.85rem; resize: vertical; }
+
+#todo-filter-row { display: flex; align-items: center; gap: 0.6rem; padding: 0 1.1rem 0.6rem; }
+#todo-filter-row input[type=text] { flex: 1; }
+.todo-show-closed {
+  display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted);
+  white-space: nowrap; cursor: pointer;
+}
+.todo-show-closed input { margin: 0; }
+
+.search-kbd {
+  position: absolute; right: 0.7rem; top: 50%; transform: translateY(-50%);
+  font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px;
+  padding: 0.1rem 0.4rem; pointer-events: none;
+}
 
 #type-row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
 .type-chip {
@@ -231,6 +308,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .tag:hover { filter: brightness(1.08); }
 .tag .x { opacity: 0.6; }
 .tag .x:hover { opacity: 1; }
+.tag.closed { opacity: 0.55; text-decoration: line-through; }
 
 .edit-panel {
   margin-top: 0.5rem; font-size: 0.86rem;
@@ -303,34 +381,65 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #feed-more { display: block; margin: 1.25rem auto; }
 #feed-empty { color: var(--muted); text-align: center; padding: 1rem; }
 
-#todo-list .detail { margin-top: 0.5rem; font-size: 0.8rem; color: var(--muted); white-space: pre-wrap; }
-#todo-list .actions input[type=text] { min-width: 8rem; }
-#todo-add-row { display: flex; gap: 0.4rem; padding: 0.7rem 1rem; border-top: 1px solid var(--divider); flex-wrap: wrap; }
+/* Same card-and-borderless-field treatment as #capture, so quick-adding a
+   todo reads as the same kind of action as jotting a journal capture rather
+   than a plain form bar tacked onto the bottom of the list. */
+#todo-add-row {
+  display: flex; flex-direction: column; gap: 0.6rem; margin: 0.6rem 0 0.85rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 0.8rem 0.9rem;
+}
+#todo-add-row #todo-add-title {
+  font: inherit; padding: 0.3rem 0.1rem; border: none; background: transparent; color: inherit;
+}
+.todo-add-controls { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; }
+.todo-add-controls .link-btn { margin-right: auto; }
 #todo-add-row input[type=text] { flex: 1; min-width: 8rem; }
+.todo-add-details { display: flex; flex-direction: column; gap: 0.4rem; }
+.todo-add-details textarea {
+  font: inherit; font-size: 0.85rem; resize: vertical; box-sizing: border-box;
+  padding: 0.4rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+}
 
-#admin-backdrop, .modal-backdrop {
+#admin-backdrop, .drawer-backdrop, .modal-backdrop {
   position: fixed; inset: 0; background: rgba(10, 10, 16, 0.4); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
 }
-#admin-backdrop { z-index: 40; }
-.modal-backdrop { z-index: 50; background: rgba(10, 10, 16, 0.5); }
-#admin-backdrop.open, .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+#admin-backdrop, .drawer-backdrop { z-index: 40; }
+.modal-backdrop { z-index: 50; background: rgba(10, 10, 16, 0.6); backdrop-filter: blur(3px); }
+#admin-backdrop.open, .drawer-backdrop.open, .modal-backdrop.open { opacity: 1; pointer-events: auto; }
 
-#admin-drawer {
-  position: fixed; top: 0; right: 0; height: 100%; width: min(320px, 85vw);
-  background: var(--surface); color: var(--text);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-lg);
+/* Admin, Inbox and Todos all share this same slide-from-the-right panel --
+   one place they're each a quick side trip out of the main feed rather than
+   competing for space in it, instead of Inbox/Todos being inline sections
+   and Admin alone getting the drawer treatment. */
+#admin-drawer, .side-drawer {
+  position: fixed; top: 0; right: 0; height: 100%; width: min(420px, 88vw);
+  background: var(--glass-bg); color: var(--text);
+  /* backdrop-filter stays off until .open -- these panels sit in the DOM at
+     their normal (offscreen-via-transform) position the whole time, and some
+     browsers still render an invisible element's backdrop-filter, which
+     bleeds through as a faint blurred ghost of the panel's edge even while
+     it's supposedly hidden. */
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  border-left: 1px solid var(--glass-border);
+  /* box-shadow stays off until .open too -- same leak-through-at-opacity-0
+     issue as backdrop-filter above, just for the shadow's blur instead. */
+  box-shadow: none;
   transform: translateX(100%);
   transition: transform 0.24s cubic-bezier(.2,.8,.2,1);
   z-index: 41; display: flex; flex-direction: column;
   padding: 1.1rem; box-sizing: border-box; overflow-y: auto;
 }
-#admin-drawer.open { transform: translateX(0); }
-#admin-drawer-header {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.1rem;
+#admin-drawer.open, .side-drawer.open {
+  transform: translateX(0);
+  backdrop-filter: blur(28px) saturate(180%); -webkit-backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 1px 0 0 var(--glass-highlight), var(--shadow-lg);
 }
-#admin-drawer-header strong { font-size: 1.02rem; color: var(--heading); }
+#admin-drawer-header, .side-drawer-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.1rem; flex-shrink: 0;
+}
+#admin-drawer-header strong, .side-drawer-header strong { font-size: 1.02rem; color: var(--heading); }
 #admin-bar { display: flex; flex-direction: column; gap: 0.55rem; font-size: 0.85rem; }
 #admin-bar .btn, #admin-bar select { width: 100%; box-sizing: border-box; }
 #admin-msg { color: var(--muted); font-size: 0.82rem; }
@@ -338,16 +447,27 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   white-space: pre-wrap; font-size: 0.78rem; color: var(--muted); margin-top: 0.85rem;
   background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.7rem;
 }
+.side-drawer #inbox-list, .side-drawer #todo-list { margin-left: -1.1rem; margin-right: -1.1rem; }
 
 .modal-panel {
   position: fixed; top: 5vh; left: 50%; width: min(660px, 92vw); min-height: 320px; max-height: 90vh;
-  background: var(--surface); color: var(--text); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  background: var(--glass-bg); color: var(--text); border: 1px solid var(--glass-border);
+  /* backdrop-filter stays off until .open -- see the comment on
+     #admin-drawer/.side-drawer above for why. */
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  border-radius: var(--radius-lg);
+  /* box-shadow stays off until .open too -- same leak-through-at-opacity-0
+     issue as backdrop-filter above, just for the shadow's blur instead. */
+  box-shadow: none;
   transform: translate(-50%, -8px) scale(0.98); opacity: 0; pointer-events: none;
   transition: opacity 0.18s ease, transform 0.18s cubic-bezier(.2,.8,.2,1);
   z-index: 51; display: flex; flex-direction: column; overflow: hidden;
 }
-.modal-panel.open { transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto; }
+.modal-panel.open {
+  transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto;
+  backdrop-filter: blur(28px) saturate(180%); -webkit-backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-lg);
+}
 .modal-panel-header {
   display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
   padding: 0.9rem 1.15rem; border-bottom: 1px solid var(--divider); flex-shrink: 0;
@@ -355,5 +475,50 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .modal-panel-header .stamp, .modal-panel-header strong { font-size: 0.85rem; font-weight: 600; color: var(--heading); }
 #entry-modal-actions { display: flex; align-items: center; gap: 0.3rem; }
 .modal-panel-body { padding: 1.15rem; overflow-y: auto; }
+
+/* Command palette -- a top-anchored spotlight-style modal, separate from the
+   in-page search bar's own state, so Cmd/Ctrl+K jumps straight to typing
+   without disturbing whatever's currently filtering the feed underneath. */
+.palette-panel {
+  position: fixed; top: 12vh; left: 50%; width: min(560px, 92vw); min-height: 4.6rem; max-height: 60vh;
+  background: var(--glass-bg); color: var(--text); border: 1px solid var(--glass-border);
+  /* backdrop-filter stays off until .open -- see the comment on
+     #admin-drawer/.side-drawer above for why. */
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  border-radius: var(--radius-lg);
+  /* box-shadow stays off until .open too -- same leak-through-at-opacity-0
+     issue as backdrop-filter above, just for the shadow's blur instead. */
+  box-shadow: none;
+  transform: translate(-50%, -8px) scale(0.98); opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(.2,.8,.2,1);
+  z-index: 51; display: flex; flex-direction: column; overflow: hidden;
+}
+.palette-panel.open {
+  transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto;
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-lg);
+  backdrop-filter: blur(28px) saturate(180%); -webkit-backdrop-filter: blur(28px) saturate(180%);
+}
+.palette-input-row {
+  position: relative; display: flex; align-items: center; gap: 0.7rem;
+  padding: 1rem 1.2rem; border-bottom: 1px solid var(--divider); flex-shrink: 0;
+}
+.palette-input-row svg { width: 19px; height: 19px; color: var(--text); flex-shrink: 0; }
+.palette-input-row input {
+  flex: 1; font: inherit; font-size: 1.05rem; border: none; background: transparent; color: var(--heading);
+}
+.palette-input-row input::placeholder { color: var(--muted); }
+.palette-input-row input:focus { outline: none; border-color: transparent; box-shadow: none; }
+.palette-input-row .search-kbd { position: static; transform: none; }
+.palette-results { list-style: none; margin: 0; padding: 0.5rem; overflow-y: auto; }
+.palette-results li {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
+  padding: 0.65rem 0.8rem; border-radius: var(--radius-sm); cursor: pointer;
+}
+.palette-results li:hover, .palette-results li.active { background: var(--accent-soft); }
+.palette-result-title { font-size: 0.92rem; color: var(--heading); }
+.palette-msg {
+  color: var(--muted); font-size: 0.88rem; margin: 0;
+  padding: 1.4rem 1.2rem; display: flex; align-items: center; justify-content: center; text-align: center;
+}
 
 [hidden] { display: none !important; }
