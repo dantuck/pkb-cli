@@ -5,111 +5,272 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kb</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.1rem; margin-bottom: 0.25rem; }
-  #status { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  :root {
+    color-scheme: light dark;
+    --muted: #656565;
+    --fill: rgba(128, 128, 128, 0.16);
+    --fill-strong: rgba(128, 128, 128, 0.26);
+    --divider: rgba(128, 128, 128, 0.24);
+    --border: rgba(128, 128, 128, 0.45);
+    --border-strong: rgba(128, 128, 128, 0.6);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --muted: #aaaaaa; }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; --muted: #aaaaaa; }
+  :root[data-theme="light"] { color-scheme: light; --muted: #656565; }
+  body { font: 15px/1.6 -apple-system, system-ui, sans-serif; max-width: 660px; margin: 2rem auto; padding: 0 1rem; }
+  #header-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.25rem; }
+  #header-row > span { display: flex; align-items: baseline; gap: 0.8rem; }
+  h1 { font-size: 1.1rem; margin: 0; }
+  #theme-toggle { color: var(--muted); font-size: 0.8rem; }
+  #status { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
   #status.ok { color: #2a2; }
   #status.err { color: #c33; }
 
   #capture { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
   #capture textarea {
-    font: inherit; padding: 0.6rem; border: 1px solid #8884; border-radius: 8px;
+    font: inherit; padding: 0.6rem; border: 1px solid var(--border); border-radius: 8px;
     resize: vertical; min-height: 3.5rem; background: transparent; color: inherit;
   }
   #capture button {
     align-self: flex-end; font: inherit; padding: 0.4rem 1rem; border-radius: 6px;
-    border: 1px solid #8884; background: #8881; cursor: pointer;
+    border: 1px solid var(--border); background: var(--fill); cursor: pointer;
   }
   #capture button:disabled { opacity: 0.5; cursor: default; }
-  #capture-msg { font-size: 0.85rem; color: #888; min-height: 1.2em; }
+  #capture-msg { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
 
   .btn {
     font: inherit; padding: 0.3rem 0.7rem; border-radius: 6px;
-    border: 1px solid #8884; background: #8881; cursor: pointer; color: inherit;
+    border: 1px solid var(--border); background: var(--fill); cursor: pointer; color: inherit;
   }
-  .btn:hover { background: #8883; }
+  .btn:hover { background: var(--fill-strong); }
   .link-btn {
     font: inherit; background: none; border: none; color: inherit;
     text-decoration: underline; cursor: pointer; padding: 0;
   }
-  select { font: inherit; background: transparent; color: inherit; border: 1px solid #8884; border-radius: 6px; }
+  select { font: inherit; background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 6px; }
   input[type=text], input[type=search] {
-    font: inherit; padding: 0.4rem 0.6rem; border: 1px solid #8884;
+    font: inherit; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
     border-radius: 6px; background: transparent; color: inherit;
   }
 
-  #inbox-section { margin-bottom: 1.5rem; border: 1px solid #8883; border-radius: 8px; }
+  #inbox-section { margin-bottom: 1.5rem; border: 1px solid var(--fill-strong); border-radius: 8px; }
   #inbox-header {
     display: flex; justify-content: space-between; align-items: center;
     padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
   }
   #inbox-list, #todo-list { list-style: none; margin: 0; padding: 0 0.8rem 0.6rem; }
-  #inbox-list li, #todo-list li { padding: 0.5rem 0; border-top: 1px solid #8882; }
+  #inbox-list li, #todo-list li { padding: 0.5rem 0; border-top: 1px solid var(--divider); }
   #inbox-list .row1, #todo-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
-  .row-badge { font-size: 0.75rem; color: #888; white-space: nowrap; }
+  .row-badge { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
   #inbox-list .actions, #todo-list .actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem; flex-wrap: wrap; }
-  #inbox-empty { padding: 0.6rem 0.8rem; color: #888; font-size: 0.85rem; }
+  #inbox-empty { padding: 0.6rem 0.8rem; color: var(--muted); font-size: 0.85rem; }
 
   #search-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
   #search-input { flex: 1; }
 
   #filter-bar {
     display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;
-    font-size: 0.8rem; color: #888;
+    font-size: 0.8rem; color: var(--muted);
   }
 
-  #feed { list-style: none; margin: 0; padding: 0; }
-  #feed li { padding: 0.75rem 0; border-bottom: 1px solid #8882; }
-  #feed li .meta { font-size: 0.78rem; color: #888; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  #feed li .title { margin-top: 0.15rem; }
+  #feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  /* ">" here matters: without it, this also matches <li> markdown bullets
+     rendered *inside* a card's .md-view content, turning every list item in
+     a journal entry into its own mini card. */
+  #feed > li {
+    padding: 0.9rem 1rem; border-radius: 10px; background: var(--fill);
+    transition: background 0.12s ease;
+  }
+  #feed > li:hover { background: var(--fill-strong); }
+  #feed > li { cursor: pointer; }
+  #feed > li .meta { font-size: 0.76rem; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
+  #feed > li .meta .stamp { white-space: nowrap; }
+  #feed > li .title { margin-top: 0.2rem; font-weight: 600; font-size: 1rem; }
+  #feed > li .tags-row { margin-top: 0.5rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  #feed > li .tags-row:empty { display: none; }
 
   .tag {
-    display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; padding: 0.1rem 0.5rem;
-    border-radius: 999px; border: 1px solid #8884; background: #8881;
-    cursor: pointer; color: inherit;
+    display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; padding: 0.1rem 0.5rem;
+    border-radius: 999px; background: var(--fill);
+    cursor: pointer; color: var(--muted);
   }
-  .tag:hover { background: #8883; }
+  .tag:hover { background: var(--fill-strong); color: inherit; }
   .tag .x { opacity: 0.6; }
   .tag .x:hover { opacity: 1; }
 
   .edit-panel {
-    margin-top: 0.5rem; padding: 0.6rem; border: 1px dashed #8884; border-radius: 6px;
-    font-size: 0.82rem; display: flex; flex-direction: column; gap: 0.5rem;
+    margin-top: 0.5rem; font-size: 0.82rem;
+    display: flex; flex-direction: column; gap: 0.4rem;
   }
+  .edit-panel.editing {
+    padding-left: 0.6rem; border-left: 2px solid var(--border-strong);
+  }
+  .edit-panel .more-btn { align-self: flex-start; }
   .edit-panel .row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .edit-panel .label { color: #888; min-width: 3.2rem; }
+  .edit-panel .label { color: var(--muted); min-width: 3.2rem; }
   .edit-panel input[type=text] { flex: 1; min-width: 8rem; padding: 0.2rem 0.5rem; }
+  .edit-panel .edit-title {
+    display: block; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem;
+    font: inherit; font-weight: 600; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+    border-radius: 6px; background: transparent; color: inherit;
+  }
+  .edit-panel .edit-body {
+    display: block; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem;
+    font: inherit; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: inherit; resize: vertical;
+  }
+  .edit-panel .edit-msg { color: var(--muted); }
+  .edit-panel .edit-form .row { margin-top: 0.2rem; }
+  .edit-panel .edit-form .row + .row { padding-top: 0.4rem; border-top: 1px solid var(--divider); }
+
+  .md-view { line-height: 1.5; }
+  .md-view.clamped {
+    max-height: 12rem; overflow: hidden; position: relative;
+    -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
+  }
+  .edit-panel .edit-body + .md-view {
+    margin-bottom: 0.5rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px;
+  }
+  .md-view .md-title { font-weight: 700; font-size: 1rem; margin-bottom: 0.4rem; }
+  .md-view h1, .md-view h2, .md-view h3, .md-view h4, .md-view h5, .md-view h6 {
+    margin: 0.7rem 0 0.3rem; line-height: 1.3;
+  }
+  .md-view h1 { font-size: 1.15rem; }
+  .md-view h2 { font-size: 1.05rem; }
+  .md-view h3, .md-view h4, .md-view h5, .md-view h6 { font-size: 1rem; }
+  .md-view p { margin: 0.5rem 0; }
+  .md-view ul, .md-view ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+  .md-view li { margin: 0.15rem 0; }
+  .md-view code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em;
+    background: var(--divider); border-radius: 4px; padding: 0.1em 0.35em;
+  }
+  .md-view pre {
+    background: var(--fill); border: 1px solid var(--fill-strong); border-radius: 6px; padding: 0.6rem;
+    overflow-x: auto; margin: 0.5rem 0;
+  }
+  .md-view pre code { background: none; padding: 0; }
+  .md-view blockquote {
+    margin: 0.5rem 0; padding-left: 0.7rem; border-left: 3px solid var(--border); color: var(--muted);
+  }
+  .md-view a { color: inherit; }
 
   #feed-more { display: block; margin: 1rem auto; }
-  #feed-empty { color: #888; }
+  #feed-empty { color: var(--muted); }
 
-  #todo-section { margin-bottom: 1.5rem; border: 1px solid #8883; border-radius: 8px; }
+  #todo-section { margin-bottom: 1.5rem; border: 1px solid var(--fill-strong); border-radius: 8px; }
   #todo-header {
     display: flex; justify-content: space-between; align-items: center;
     padding: 0.6rem 0.8rem; cursor: pointer; font-size: 0.9rem;
   }
-  #todo-list .detail { margin-top: 0.4rem; font-size: 0.8rem; color: #888; white-space: pre-wrap; }
+  #todo-list .detail { margin-top: 0.4rem; font-size: 0.8rem; color: var(--muted); white-space: pre-wrap; }
   #todo-list .actions input[type=text] { min-width: 8rem; }
-  #todo-empty { padding: 0.6rem 0.8rem; color: #888; font-size: 0.85rem; }
-  #todo-add-row { display: flex; gap: 0.4rem; padding: 0.6rem 0.8rem; border-top: 1px solid #8882; flex-wrap: wrap; }
+  #todo-empty { padding: 0.6rem 0.8rem; color: var(--muted); font-size: 0.85rem; }
+  #todo-add-row { display: flex; gap: 0.4rem; padding: 0.6rem 0.8rem; border-top: 1px solid var(--divider); flex-wrap: wrap; }
   #todo-add-row input[type=text] { flex: 1; min-width: 8rem; }
 
-  #admin-bar {
-    display: flex; align-items: center; gap: 0.5rem; margin-top: 2rem;
-    padding-top: 1rem; border-top: 1px solid #8882; font-size: 0.82rem; flex-wrap: wrap;
+  #admin-open { color: var(--muted); }
+
+  #admin-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 40;
   }
-  #admin-msg { color: #888; }
+  #admin-backdrop.open { opacity: 1; pointer-events: auto; }
+
+  #admin-drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(300px, 85vw);
+    background: Canvas; color: CanvasText;
+    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 28px rgba(0, 0, 0, 0.25);
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    z-index: 41; display: flex; flex-direction: column;
+    padding: 1rem; box-sizing: border-box; overflow-y: auto;
+  }
+  #admin-drawer.open { transform: translateX(0); }
+  #admin-drawer-header {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;
+  }
+  #admin-drawer-header strong { font-size: 1rem; }
+  #admin-close { font-size: 1.1rem; line-height: 1; color: var(--muted); }
+  #admin-bar { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; }
+  #admin-bar .btn, #admin-bar select { width: 100%; box-sizing: border-box; }
+  #admin-msg { color: var(--muted); font-size: 0.82rem; }
   #admin-output {
-    white-space: pre-wrap; font-size: 0.78rem; color: #888; margin-top: 0.5rem;
+    white-space: pre-wrap; font-size: 0.78rem; color: var(--muted); margin-top: 0.75rem;
   }
+
+  #entry-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 50;
+  }
+  #entry-backdrop.open { opacity: 1; pointer-events: auto; }
+
+  #entry-modal {
+    position: fixed; top: 4vh; left: 50%; width: min(640px, 92vw); max-height: 92vh;
+    background: Canvas; color: CanvasText; border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    transform: translate(-50%, -6px); opacity: 0; pointer-events: none;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+    z-index: 51; display: flex; flex-direction: column; overflow: hidden;
+  }
+  #entry-modal.open { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+  #entry-modal-header {
+    display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
+    padding: 0.8rem 1rem; border-bottom: 1px solid var(--divider); flex-shrink: 0;
+  }
+  #entry-modal-header .stamp { font-size: 0.78rem; color: var(--muted); }
+  #entry-modal-actions { display: flex; align-items: center; gap: 0.6rem; }
+  #entry-modal-close { font-size: 1.1rem; line-height: 1; color: var(--muted); }
+  #entry-modal-body { padding: 1rem; overflow-y: auto; }
 
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-<h1>kb</h1>
+<div id="header-row">
+  <h1>kb</h1>
+  <span>
+    <button id="admin-open" class="link-btn" title="Admin">Admin</button>
+    <button id="theme-toggle" class="link-btn" title="Toggle color theme"></button>
+  </span>
+</div>
 <p id="status">checking server...</p>
+
+<div id="admin-backdrop"></div>
+<div id="admin-drawer" aria-hidden="true" inert>
+  <div id="admin-drawer-header">
+    <strong>Admin</strong>
+    <button id="admin-close" class="link-btn" title="Close">✕</button>
+  </div>
+  <div id="admin-bar">
+    <button id="admin-reindex" class="btn">Reindex</button>
+    <button id="admin-validate" class="btn">Validate</button>
+    <button id="admin-doctor" class="btn">Doctor</button>
+    <select id="admin-sync-source">
+      <option value="all">all</option><option value="memos">memos</option>
+      <option value="gitlab">gitlab</option><option value="beads">beads</option>
+    </select>
+    <button id="admin-sync" class="btn">Sync</button>
+    <span id="admin-msg"></span>
+  </div>
+  <pre id="admin-output" hidden></pre>
+</div>
+
+<div id="entry-backdrop"></div>
+<div id="entry-modal" role="dialog" aria-modal="true" aria-hidden="true" inert>
+  <div id="entry-modal-header">
+    <span class="stamp" id="entry-modal-stamp"></span>
+    <span id="entry-modal-actions">
+      <button id="entry-modal-edit" class="link-btn">edit</button>
+      <button id="entry-modal-close" class="link-btn" title="Close">✕</button>
+    </span>
+  </div>
+  <div id="entry-modal-body"></div>
+</div>
 
 <div id="capture">
   <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."></textarea>
@@ -162,21 +323,102 @@
 <button id="feed-more" class="btn" hidden>Load more</button>
 <p id="feed-empty" hidden>Nothing here yet.</p>
 
-<div id="admin-bar">
-  <button id="admin-reindex" class="btn">Reindex</button>
-  <button id="admin-validate" class="btn">Validate</button>
-  <button id="admin-doctor" class="btn">Doctor</button>
-  <select id="admin-sync-source">
-    <option value="all">all</option><option value="memos">memos</option>
-    <option value="gitlab">gitlab</option><option value="beads">beads</option>
-  </select>
-  <button id="admin-sync" class="btn">Sync</button>
-  <span id="admin-msg"></span>
-</div>
-<pre id="admin-output" hidden></pre>
-
 <script>
   const CORE_TYPES = ["tutorial", "how-to", "reference", "explanation"];
+
+  // ---------- markdown rendering ----------
+  // Small hand-rolled renderer (headers, bold/italic, inline code, fenced
+  // code blocks, links, lists, blockquotes, paragraphs) -- enough for the
+  // plain notes this tool stores, without pulling in a library and breaking
+  // the single-static-file, no-build-step design.
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderInline(s) {
+    s = escapeHtml(s);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
+    // Only render as a link if the URL is a safe scheme -- blocks javascript:
+    // and other script-executing URIs from a synced/pasted entry body.
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) =>
+      /^(https?:|mailto:|\/|#)/i.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : m);
+    return s;
+  }
+
+  function renderMarkdown(md) {
+    const lines = String(md || "").split("\n");
+    let html = "";
+    let inCode = false;
+    let listType = null;
+    let inBlockquote = false;
+    let paragraph = [];
+
+    const flushParagraph = () => {
+      if (paragraph.length) {
+        html += `<p>${renderInline(paragraph.join(" "))}</p>`;
+        paragraph = [];
+      }
+    };
+    const closeList = () => {
+      if (listType) { html += `</${listType}>`; listType = null; }
+    };
+    const closeBlockquote = () => {
+      if (inBlockquote) { html += "</blockquote>"; inBlockquote = false; }
+    };
+
+    for (const line of lines) {
+      if (line.trim().startsWith("```")) {
+        if (!inCode) { flushParagraph(); closeList(); closeBlockquote(); html += "<pre><code>"; }
+        else { html += "</code></pre>"; }
+        inCode = !inCode;
+        continue;
+      }
+      if (inCode) { html += escapeHtml(line) + "\n"; continue; }
+
+      const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
+      if (headerMatch) {
+        flushParagraph(); closeList(); closeBlockquote();
+        const level = headerMatch[1].length;
+        html += `<h${level}>${renderInline(headerMatch[2])}</h${level}>`;
+        continue;
+      }
+
+      const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
+      const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+      if (ulMatch || olMatch) {
+        flushParagraph(); closeBlockquote();
+        const wantType = ulMatch ? "ul" : "ol";
+        if (listType !== wantType) { closeList(); html += `<${wantType}>`; listType = wantType; }
+        html += `<li>${renderInline((ulMatch || olMatch)[1])}</li>`;
+        continue;
+      }
+      closeList();
+
+      const bqMatch = line.match(/^>\s?(.*)$/);
+      if (bqMatch) {
+        flushParagraph();
+        if (!inBlockquote) { html += "<blockquote>"; inBlockquote = true; }
+        html += `<p>${renderInline(bqMatch[1])}</p>`;
+        continue;
+      }
+      closeBlockquote();
+
+      if (!line.trim()) { flushParagraph(); continue; }
+      paragraph.push(line.trim());
+    }
+    flushParagraph();
+    closeList();
+    closeBlockquote();
+    if (inCode) html += "</code></pre>";
+    return html;
+  }
 
   // ---------- feed / search / capture ----------
 
@@ -197,7 +439,7 @@
     span.className = "tag";
     const label = document.createElement("span");
     label.textContent = tag;
-    label.addEventListener("click", () => setTagFilter(tag));
+    label.addEventListener("click", (e) => { e.stopPropagation(); setTagFilter(tag); });
     span.appendChild(label);
     if (onRemove) {
       const x = document.createElement("span");
@@ -209,61 +451,199 @@
     return span;
   }
 
+  // A button that flips a boolean on each click, relabels itself to match,
+  // and calls `apply(state)` to update whatever it controls -- shared by the
+  // "show more"/"show less" and "preview"/"back to source" toggles below.
+  // Returns a `reset()` you can call to force it back to the initial state
+  // (e.g. when the content it toggles gets re-rendered from scratch).
+  function wireToggleButton(btn, labels, apply) {
+    let state = false;
+    function set(next) {
+      state = next;
+      btn.textContent = state ? labels[1] : labels[0];
+      apply(state);
+    }
+    btn.addEventListener("click", () => set(!state));
+    return { reset: () => set(false) };
+  }
+
+  // Toggles a shared open/closed state across a set of [element, className]
+  // pairs -- shared by the edit-panel's editing/not-editing state and the
+  // admin drawer's open/closed state, which both boil down to "flip a class
+  // on a couple of related elements together."
+  function setOpenState(open, ...pairs) {
+    for (const [el, cls] of pairs) el.classList.toggle(cls, open);
+  }
+
+  // "3h ago" / "2d ago" for recent items, falling back to a plain date once
+  // it's far enough back that relative phrasing stops being useful.
+  function formatRelative(iso) {
+    if (!iso) return "";
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return iso;
+    const mins = Math.round((Date.now() - then) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days < 14) return `${days}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
   function renderItem(item) {
     const li = document.createElement("li");
     const meta = document.createElement("div");
     meta.className = "meta";
     const stamp = document.createElement("span");
-    stamp.textContent = `${item.created || ""} · ${item.type}`;
+    stamp.className = "stamp";
+    stamp.title = item.created || "";
+    stamp.textContent = `${formatRelative(item.created)} · ${item.type}`;
     meta.appendChild(stamp);
 
-    const tagsHolder = document.createElement("span");
-    tagsHolder.className = "row";
-    for (const tag of item.tags || []) tagsHolder.appendChild(tagChip(tag));
-    meta.appendChild(tagsHolder);
+    const tagsRow = document.createElement("span");
+    tagsRow.className = "tags-row";
+    for (const tag of item.tags || []) tagsRow.appendChild(tagChip(tag));
 
-    let panel = null;
-    if (item.id) {
-      const editLink = document.createElement("button");
-      editLink.className = "link-btn";
-      editLink.textContent = "edit";
-      meta.appendChild(editLink);
-
-      panel = document.createElement("div");
-      panel.className = "edit-panel";
-      panel.hidden = true;
-      editLink.addEventListener("click", () => {
-        panel.hidden = !panel.hidden;
-        editLink.textContent = panel.hidden ? "edit" : "close";
-        if (!panel.hidden && !panel.dataset.loaded) loadEditPanel(item.id, panel, tagsHolder);
-      });
-    }
-
-    const title = document.createElement("div");
-    title.className = "title";
-    title.textContent = item.title || item.id;
+    const titleEl = document.createElement("div");
+    titleEl.className = "title";
+    titleEl.textContent = item.title || item.id;
     li.appendChild(meta);
-    li.appendChild(title);
-    if (panel) li.appendChild(panel);
+    li.appendChild(titleEl);
+    li.appendChild(tagsRow);
+
+    if (item.id) {
+      li.addEventListener("click", () => openEntryModal(item.id, titleEl, tagsRow));
+    }
     return li;
   }
 
-  async function loadEditPanel(entryId, panel, tagsHolder) {
-    panel.textContent = "loading...";
+  // Fetches an entry's full content/tags/links and builds its read/edit UI
+  // inside `panel`. Used by the standalone entry modal (see openEntryModal
+  // below) -- `titleEl`/`tagsHolder` are the corresponding feed card's
+  // elements, kept in sync as edits are saved so the modal and the card
+  // never show stale data side by side.
+  async function loadEditPanel(entryId, panel, tagsHolder, titleEl, onModeChange) {
+    panel.textContent = "loading…";
     let tags = [];
     let links = [];
+    let title = "";
+    let body = "";
     try {
       const res = await fetch(`/api/entries/${encodeURIComponent(entryId)}`);
       if (!res.ok) throw new Error();
-      const fm = (await res.json()).frontmatter;
-      tags = fm.tags || [];
-      links = fm.links || [];
+      const data = await res.json();
+      tags = data.frontmatter.tags || [];
+      links = data.frontmatter.links || [];
+      title = data.frontmatter.title || "";
+      body = data.body || "";
     } catch {
       panel.textContent = "couldn't load";
-      return;
+      return { showEdit() {}, showView() {} };
     }
-    panel.dataset.loaded = "1";
     panel.textContent = "";
+
+    // View mode: rendered markdown, read-only, shown in full -- the modal
+    // already gives it its own scrollable area, so no clamping here.
+    const contentView = document.createElement("div");
+    contentView.className = "md-view";
+
+    function renderView() {
+      // Entries conventionally open with a "# Heading" line, and the
+      // frontmatter title is already shown above every card -- so any
+      // leading H1 is redundant here regardless of its exact wording (this
+      // used to only strip it when the text matched the title verbatim,
+      // which silently stopped working the moment title and heading drifted
+      // apart; dropping any leading H1 avoids that class of bug entirely).
+      let shown = body.replace(/^\n+/, "");
+      const firstLine = shown.split("\n", 1)[0];
+      if (/^#\s+\S/.test(firstLine)) {
+        shown = shown.slice(firstLine.length).replace(/^\n+/, "");
+      }
+      contentView.innerHTML = renderMarkdown(shown);
+    }
+
+    // Edit mode: raw markdown source, with a preview toggle, plus tag/link
+    // editors -- all of it only ever shown once the user asks to edit.
+    const editForm = document.createElement("div");
+    editForm.className = "edit-form";
+    editForm.hidden = true;
+
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.className = "edit-title";
+    titleInput.placeholder = "title";
+
+    const bodyArea = document.createElement("textarea");
+    bodyArea.className = "edit-body";
+    bodyArea.rows = 10;
+
+    const previewDiv = document.createElement("div");
+    previewDiv.className = "md-view";
+    previewDiv.hidden = true;
+
+    const previewBtn = document.createElement("button");
+    previewBtn.className = "link-btn";
+    previewBtn.textContent = "preview";
+    const previewToggle = wireToggleButton(previewBtn, ["preview", "back to source"], (previewing) => {
+      if (previewing) previewDiv.innerHTML = renderMarkdown(bodyArea.value);
+      bodyArea.hidden = previewing;
+      previewDiv.hidden = !previewing;
+    });
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "btn";
+    saveBtn.textContent = "save";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "link-btn";
+    cancelBtn.textContent = "cancel";
+    const contentMsg = document.createElement("span");
+    contentMsg.className = "edit-msg";
+
+    function showView() {
+      renderView();
+      contentView.hidden = false;
+      editForm.hidden = true;
+      setOpenState(false, [panel, "editing"]);
+      if (onModeChange) onModeChange(false);
+    }
+
+    function showEdit() {
+      titleInput.value = title;
+      bodyArea.value = body;
+      previewToggle.reset();
+      contentMsg.textContent = "";
+      contentView.hidden = true;
+      editForm.hidden = false;
+      setOpenState(true, [panel, "editing"]);
+      if (onModeChange) onModeChange(true);
+      bodyArea.focus();
+    }
+
+    cancelBtn.addEventListener("click", showView);
+    editForm.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") showView();
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      contentMsg.style.color = "";
+      contentMsg.textContent = "saving…";
+      const { ok, data } = await apiFetch(`/api/entries/${encodeURIComponent(entryId)}`, "PATCH", {
+        title: titleInput.value,
+        body: bodyArea.value,
+      });
+      saveBtn.disabled = false;
+      if (ok) {
+        title = data.title != null ? data.title : title;
+        body = data.body != null ? data.body : bodyArea.value;
+        if (titleEl) titleEl.textContent = title || entryId;
+        showView();
+      } else {
+        contentMsg.style.color = "#c33";
+        contentMsg.textContent = (data && data.error) || "save failed";
+      }
+    });
 
     const tagsRow = document.createElement("div");
     tagsRow.className = "row";
@@ -330,15 +710,88 @@
       else if (r && r.error) { linkMsg.textContent = r.error; }
     });
 
-    panel.appendChild(tagsRow);
-    panel.appendChild(linksRow);
-    panel.appendChild(linkMsg);
+    const saveRow = document.createElement("div");
+    saveRow.className = "row";
+    saveRow.appendChild(saveBtn);
+    saveRow.appendChild(cancelBtn);
+    saveRow.appendChild(previewBtn);
+    saveRow.appendChild(contentMsg);
+
+    editForm.appendChild(titleInput);
+    editForm.appendChild(bodyArea);
+    editForm.appendChild(previewDiv);
+    editForm.appendChild(saveRow);
+    editForm.appendChild(tagsRow);
+    editForm.appendChild(linksRow);
+    editForm.appendChild(linkMsg);
+
+    panel.appendChild(contentView);
+    panel.appendChild(editForm);
+    renderView();
+
+    return { showEdit, showView };
   }
 
   function syncFeedTags(tagsHolder, tags) {
     tagsHolder.innerHTML = "";
     for (const t of tags) tagsHolder.appendChild(tagChip(t));
   }
+
+  // ---------- entry modal ----------
+  // Clicking a card opens it here: the full entry, unclamped, with an Edit
+  // button that switches the same panel into the tag/link/body editor built
+  // by loadEditPanel above. `cardTitleEl`/`cardTagsHolder` are the feed
+  // card's own elements so a save made in the modal is reflected on the card
+  // underneath without a full feed reload.
+
+  const entryBackdrop = document.getElementById("entry-backdrop");
+  const entryModal = document.getElementById("entry-modal");
+  const entryModalStamp = document.getElementById("entry-modal-stamp");
+  const entryModalBody = document.getElementById("entry-modal-body");
+  const entryModalEditBtn = document.getElementById("entry-modal-edit");
+  const entryModalCloseBtn = document.getElementById("entry-modal-close");
+
+  let entryModalApi = null;
+
+  function openEntryModalShell() {
+    setOpenState(true, [entryModal, "open"], [entryBackdrop, "open"]);
+    entryModal.setAttribute("aria-hidden", "false");
+    entryModal.inert = false;
+    document.body.style.overflow = "hidden";
+  }
+  function closeEntryModal() {
+    setOpenState(false, [entryModal, "open"], [entryBackdrop, "open"]);
+    entryModal.setAttribute("aria-hidden", "true");
+    entryModal.inert = true;
+    entryModalApi = null;
+    document.body.style.overflow = "";
+  }
+
+  async function openEntryModal(entryId, cardTitleEl, cardTagsHolder) {
+    entryModalStamp.textContent = cardTitleEl ? cardTitleEl.textContent : entryId;
+    entryModalEditBtn.textContent = "edit";
+    entryModalEditBtn.disabled = false;
+    entryModalBody.innerHTML = "";
+    const panel = document.createElement("div");
+    panel.className = "edit-panel";
+    entryModalBody.appendChild(panel);
+    openEntryModalShell();
+
+    entryModalApi = await loadEditPanel(entryId, panel, cardTagsHolder, cardTitleEl, (editing) => {
+      entryModalEditBtn.textContent = editing ? "done" : "edit";
+    });
+  }
+
+  entryModalEditBtn.addEventListener("click", () => {
+    if (!entryModalApi) return;
+    if (entryModalEditBtn.textContent === "done") entryModalApi.showView();
+    else entryModalApi.showEdit();
+  });
+  entryModalCloseBtn.addEventListener("click", closeEntryModal);
+  entryBackdrop.addEventListener("click", closeEntryModal);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && entryModal.classList.contains("open")) closeEntryModal();
+  });
 
   // Generic JSON fetch wrapper -- every mutating call in this file (tag/link
   // edits, capture, inbox actions, todo actions, admin actions) is a fetch
@@ -454,13 +907,11 @@
       if (!ok) throw new Error();
       textEl.value = "";
       msgEl.textContent = `added -> ${data.path}`;
-      if (!searchEl.value.trim() && !activeTag) {
-        feedEl.insertBefore(renderItem({
-          id: null, title: text.split("\n")[0], type: "journal",
-          created: new Date().toISOString(), tags: [],
-        }), feedEl.firstChild);
-        emptyEl.hidden = true;
-      }
+      // Reload rather than insert a synthetic card: today's capture lands in
+      // the same journal entry as any earlier capture from today (see
+      // journal_append in scripts/kb), so the feed needs the merged entry
+      // the server now has, not a second one-off card standing in for it.
+      if (!searchEl.value.trim() && !activeTag) loadFeed(false);
     } catch {
       msgEl.textContent = "failed to add -- try again";
     } finally {
@@ -666,6 +1117,28 @@
 
   // ---------- admin ----------
 
+  const adminOpenBtn = document.getElementById("admin-open");
+  const adminCloseBtn = document.getElementById("admin-close");
+  const adminBackdrop = document.getElementById("admin-backdrop");
+  const adminDrawer = document.getElementById("admin-drawer");
+
+  function openAdmin() {
+    setOpenState(true, [adminDrawer, "open"], [adminBackdrop, "open"]);
+    adminDrawer.setAttribute("aria-hidden", "false");
+    adminDrawer.inert = false;
+  }
+  function closeAdmin() {
+    setOpenState(false, [adminDrawer, "open"], [adminBackdrop, "open"]);
+    adminDrawer.setAttribute("aria-hidden", "true");
+    adminDrawer.inert = true; // keeps its buttons out of tab order while off-screen
+  }
+  adminOpenBtn.addEventListener("click", openAdmin);
+  adminCloseBtn.addEventListener("click", closeAdmin);
+  adminBackdrop.addEventListener("click", closeAdmin);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && adminDrawer.classList.contains("open")) closeAdmin();
+  });
+
   const adminMsg = document.getElementById("admin-msg");
   const adminOutput = document.getElementById("admin-output");
 
@@ -700,6 +1173,30 @@
   document.getElementById("admin-sync").addEventListener("click", () => {
     const source = document.getElementById("admin-sync-source").value;
     adminRun("sync", () => apiFetch("/api/sync", "POST", { source }).then(r => r.data));
+  });
+
+  // ---------- theme ----------
+
+  const THEME_KEY = "kb-theme";
+  const themeBtn = document.getElementById("theme-toggle");
+
+  function applyTheme(mode) {
+    if (mode === "light" || mode === "dark") {
+      document.documentElement.setAttribute("data-theme", mode);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+    themeBtn.textContent = mode === "light" ? "☀ light" : mode === "dark" ? "☾ dark" : "◐ system";
+  }
+
+  let theme = "system";
+  try { theme = localStorage.getItem(THEME_KEY) || "system"; } catch {}
+  applyTheme(theme);
+
+  themeBtn.addEventListener("click", () => {
+    theme = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+    applyTheme(theme);
   });
 
   // ---------- boot ----------
