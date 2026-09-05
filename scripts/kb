@@ -232,39 +232,13 @@ def _search_interactive(root, rows):
 
 def cmd_new(args):
     root = pc.get_repo_root()
-    entry_type = args.type
-    if entry_type not in pc.CORE_TYPES:
-        print(f"error: type must be one of {pc.CORE_TYPES}", file=sys.stderr)
+    tags = args.tags.split(",") if args.tags else []
+    links = args.links.split(",") if args.links else []
+    result = entry_new(root, args.type, args.title, tags=tags, links=links, body=args.body)
+    if "error" in result:
+        print(f"error: {result['error']}", file=sys.stderr)
         return 1
-
-    all_ids = pc.collect_existing_ids(root)
-
-    links = [t.strip() for t in args.links.split(",") if t.strip()] if args.links else []
-    unknown = [t for t in links if t not in all_ids]
-    if unknown:
-        print(f"error: unknown link target id(s), not found in this repo: {', '.join(unknown)}",
-              file=sys.stderr)
-        return 1
-
-    entry_id = pc.gen_id(all_ids)
-    now = pc.now_iso()
-    fm = {
-        "id": entry_id,
-        "created": now,
-        "updated": now,
-        "type": entry_type,
-        "extension": None,
-        "source": "manual",
-        "source_id": None,
-        "tags": [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else [],
-        "links": links,
-        "title": args.title,
-    }
-    path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{pc.slugify(args.title)}.md")
-    body = f"# {args.title}\n\n{args.body.strip()}\n" if args.body else f"# {args.title}\n\n"
-    pc.write_entry(path, fm, body)
-    run_script("index_fts.py")
-    print(path)
+    print(result["path"])
     return 0
 
 
@@ -898,6 +872,68 @@ def _apply_tag_changes(tags, add=None, rm=None):
         new_tags = [t for t in new_tags if t not in rm]
         changed = changed or before != len(new_tags)
     return new_tags, changed
+
+
+def _clean_list(items):
+    """Strip whitespace, drop blanks, and dedupe (order-preserving) --
+    shared by entry_new so every caller gets the same tags/links hygiene
+    regardless of whether its input arrived pre-cleaned (CLI comma-split
+    args) or raw (a JSON POST body)."""
+    seen = set()
+    cleaned = []
+    for item in items or []:
+        item = item.strip()
+        if item and item not in seen:
+            seen.add(item)
+            cleaned.append(item)
+    return cleaned
+
+
+def entry_new(root, entry_type, title, tags=None, links=None, body=None):
+    """Create a new core-content entry (tutorial/how-to/reference/explanation)
+    with correct frontmatter, write it to disk, and reindex. Returns
+    {"id", "path"} for the created entry, or {"error": ...} if `entry_type`
+    is invalid or `links` names id(s) that don't exist in this repo. Shared
+    by cmd_new (CLI) and kb web's entry-creation endpoint."""
+    if entry_type not in pc.CORE_TYPES:
+        return {"error": f"type must be one of {list(pc.CORE_TYPES)}"}
+
+    tags = _clean_list(tags)
+    links = _clean_list(links)
+
+    # kb web's server is threaded, so two POST /api/entries calls (or a web
+    # create racing a CLI `kb new`) can otherwise both scan existing ids,
+    # both land in the same gen_id() minute bucket, and both write the same
+    # path -- the second write silently clobbering the first entry. Serialize
+    # the scan-through-write on a repo-level lock (there's no entry file yet
+    # to lock on, unlike entry_set_tags/entry_set_links/entry_update_content).
+    pkb_dir = os.path.join(root, ".pkb")
+    os.makedirs(pkb_dir, exist_ok=True)
+    with pc.entry_lock(os.path.join(pkb_dir, "entry-new")):
+        all_ids = pc.collect_existing_ids(root)
+        unknown = [t for t in links if t not in all_ids]
+        if unknown:
+            return {"error": f"unknown link target id(s), not found in this repo: {', '.join(unknown)}"}
+
+        entry_id = pc.gen_id(all_ids)
+        now = pc.now_iso()
+        fm = {
+            "id": entry_id,
+            "created": now,
+            "updated": now,
+            "type": entry_type,
+            "extension": None,
+            "source": "manual",
+            "source_id": None,
+            "tags": tags,
+            "links": links,
+            "title": title,
+        }
+        path = os.path.join(root, pc.TYPE_DIR[entry_type], f"{entry_id}-{pc.slugify(title)}.md")
+        entry_body = f"# {title}\n\n{body.strip()}\n" if body else f"# {title}\n\n"
+        pc.write_entry(path, fm, entry_body)
+        _reindex_fast(root)
+    return {"id": entry_id, "path": path}
 
 
 def entry_set_tags(root, entry_id, add=None, rm=None):

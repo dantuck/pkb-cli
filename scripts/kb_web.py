@@ -230,6 +230,26 @@ def api_entries_list(h, root):
     ]})
 
 
+@route("POST", "/api/entries")
+def api_entry_create(h, root):
+    """Create a new core-content entry directly -- the web equivalent of
+    `kb new <type> "<title>"`, without the capture-then-promote-from-inbox
+    detour. Reuses entry_new(), same as cmd_new does on the CLI side."""
+    kb = _kb()
+    payload = h.read_json()
+    title = (payload.get("title") or "").strip()
+    if not title:
+        h.send_json({"error": "title is required"}, status=400)
+        return
+    result = kb.entry_new(root, payload.get("type"), title,
+                           tags=payload.get("tags"), links=payload.get("links"),
+                           body=payload.get("body"))
+    if "error" in result:
+        h.send_json(result, status=400)
+        return
+    h.send_json({"id": result["id"], "path": os.path.relpath(result["path"], root)}, status=201)
+
+
 @route("GET", "/api/entries/{entry_id}")
 def api_entry_show(h, root, entry_id):
     found = _kb()._find_entry(root, entry_id)
