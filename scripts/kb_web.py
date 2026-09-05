@@ -209,6 +209,16 @@ def api_entry_links_patch(h, root, entry_id):
     h.send_json({"links": result})
 
 
+@route("PATCH", "/api/entries/{entry_id}")
+def api_entry_content_patch(h, root, entry_id):
+    payload = h.read_json()
+    result = _kb().entry_update_content(root, entry_id, title=payload.get("title"), body=payload.get("body"))
+    if result is None:
+        h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
+        return
+    h.send_json(result)
+
+
 @route("GET", "/api/inbox")
 def api_inbox_list(h, root):
     h.send_json({"items": _kb().inbox_list(root)})

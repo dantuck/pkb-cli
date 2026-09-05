@@ -54,6 +54,17 @@ def run_script(name, args=None):
     return result.returncode
 
 
+def _reindex_fast(root):
+    """In-process incremental reindex -- same work as `run_script("index_fts.py")`
+    but without paying for a fresh interpreter + subprocess on every call.
+    Used by entry_set_tags/entry_set_links/entry_update_content, which kb
+    web's edit panel can trigger repeatedly in quick succession; other
+    callers keep using run_script for output capture / exit-code parity with
+    `kb reindex`."""
+    import index_fts
+    index_fts.index_repo(root)
+
+
 _FTS_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 
 
@@ -896,13 +907,15 @@ def entry_set_tags(root, entry_id, add=None, rm=None):
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, fm, body = found
-    tags, changed = _apply_tag_changes(fm.get("tags") or [], add=add, rm=rm)
-    if changed:
-        fm["tags"] = tags
-        fm["updated"] = pc.now_iso()
-        pc.write_entry(path, fm, body)
-        run_script("index_fts.py")
+    path, _fm, _body = found
+    with pc.entry_lock(path):
+        fm, body = pc.read_entry(path)
+        tags, changed = _apply_tag_changes(fm.get("tags") or [], add=add, rm=rm)
+        if changed:
+            fm["tags"] = tags
+            fm["updated"] = pc.now_iso()
+            pc.write_entry(path, fm, body)
+            _reindex_fast(root)
     return tags
 
 
@@ -914,20 +927,46 @@ def entry_set_links(root, entry_id, add=None, rm=None):
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, fm, body = found
-    links = list(fm.get("links") or [])
+    path, _fm, _body = found
     if add:
         all_ids = pc.collect_existing_ids(root)
         unknown = [t for t in add if t not in all_ids]
         if unknown:
             return {"error": f"unknown id(s), not found in this repo: {', '.join(unknown)}"}
-    links, changed = _apply_tag_changes(links, add=add, rm=rm)
-    if changed:
-        fm["links"] = links
-        fm["updated"] = pc.now_iso()
-        pc.write_entry(path, fm, body)
-        run_script("index_fts.py")
+    with pc.entry_lock(path):
+        fm, body = pc.read_entry(path)
+        links, changed = _apply_tag_changes(list(fm.get("links") or []), add=add, rm=rm)
+        if changed:
+            fm["links"] = links
+            fm["updated"] = pc.now_iso()
+            pc.write_entry(path, fm, body)
+            _reindex_fast(root)
     return links
+
+
+def entry_update_content(root, entry_id, title=None, body=None):
+    """Overwrite an entry's title and/or body and persist if anything changed.
+    Returns {"title", "body"} for the resulting entry, or None if no entry has
+    this id. Shared by kb web's content-edit endpoint (no CLI counterpart yet
+    -- editing full content is currently a web-only affordance)."""
+    found = _find_entry(root, entry_id)
+    if found is None:
+        return None
+    path, _fm, _body = found
+    with pc.entry_lock(path):
+        fm, cur_body = pc.read_entry(path)
+        changed = False
+        if title is not None and title != fm.get("title"):
+            fm["title"] = title
+            changed = True
+        if body is not None and body != cur_body:
+            cur_body = body
+            changed = True
+        if changed:
+            fm["updated"] = pc.now_iso()
+            pc.write_entry(path, fm, cur_body)
+            _reindex_fast(root)
+    return {"title": fm.get("title"), "body": cur_body}
 
 
 def inbox_list(root):

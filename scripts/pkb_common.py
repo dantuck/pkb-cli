@@ -3,7 +3,9 @@
 No third-party dependencies (no pyyaml) so the toolchain stays fully offline/portable
 with only the stdlib.
 """
+import contextlib
 import copy
+import fcntl
 import json
 import os
 import re
@@ -188,6 +190,20 @@ def write_entry(path, fm, body):
         f.write(body.lstrip("\n"))
 
 
+@contextlib.contextmanager
+def entry_lock(path):
+    """Advisory per-file lock so concurrent read-modify-write updates to the
+    same entry's frontmatter (tags/links/content) serialize instead of
+    racing and silently dropping one writer's change."""
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def iter_markdown_files(root):
     # walks only start inside named content dirs (never ".pkb" itself, which isn't
     # in CONTENT_DIRS), so no exclusion check is needed here -- one used to exist
@@ -205,7 +221,12 @@ def iter_markdown_files(root):
 
 
 def now_iso():
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    # microsecond precision, not just seconds: index_fts's incremental reindex
+    # treats an entry as unchanged when its `updated` string is byte-identical
+    # to what's already indexed, so two writes to the same entry within the
+    # same second used to look like one no-op write and silently kept the
+    # index stale after the second one.
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def parse_iso(ts):
