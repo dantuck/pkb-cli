@@ -24,7 +24,9 @@ kb secrets                        edit encrypted memos/gitlab credentials via so
 kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
-kb web [--port PORT]              local-only web UI (127.0.0.1, default port 4173)
+kb web [--port PORT] [--no-open]  local-only web UI (127.0.0.1, default port 4173)
+kb service install|uninstall|status [--port PORT] [--repo DIR]
+                                  run `kb web` as a login service (launchd/systemd --user)
 kb setup [--install [DIR]] [--install-skill [DIR]]   # onboarding: hook, index, bd store,
                                  # PATH (--install), Claude Code skill (--install-skill)
 kb doctor                       # diagnose issues -- read-only, never writes anything
@@ -53,6 +55,12 @@ Implementation: a thin Python wrapper (`scripts/kb`) dispatching to helper
 scripts and modules alongside it (e.g. `kb_web.py` for `kb web`). No
 daemon/server process for any other command — every invocation but `kb web`
 is a one-shot script run.
+
+`kb service` generates and loads a per-user launchd LaunchAgent (macOS) or
+systemd `--user` unit (Linux) that runs `kb web --no-open` at login, so the
+web UI is always reachable without running `kb web` by hand. It still binds
+127.0.0.1 only and needs no root/admin privileges. Not supported on other
+platforms.
 
 Search also works with zero setup via `rg`/`fzf` directly on a data repo's
 file tree — see [how-to: search without the

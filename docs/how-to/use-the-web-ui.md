@@ -23,6 +23,23 @@ from the current directory, falling back to `~/.pkb`), so `cd` into a
 specific data repo first if you want to browse something other than the
 default.
 
+## Run it as a login service instead
+
+To have it always running at `http://127.0.0.1:4173/` without starting it by
+hand each time:
+
+```bash
+kb service install                # serves the repo resolved from cwd (or --repo DIR)
+kb service status
+kb service uninstall
+```
+
+This installs a per-user launchd LaunchAgent on macOS, or a systemd `--user`
+unit on Linux — no root/admin needed, and it still binds `127.0.0.1` only.
+`--port PORT` and `--repo DIR` (at install time) work the same as `kb web
+--port` / `cd`-ing into a repo first. Logs go to `~/Library/Logs/kb-web.log`
+on macOS or `journalctl --user -u kb-web.service` on Linux.
+
 ## What's in it
 
 - **Feed** — the main view: your Diataxis content, newest first. Filter by
