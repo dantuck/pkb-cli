@@ -2151,15 +2151,32 @@ def cmd_web(args):
     return kb_web.serve(root, args.port, open_browser=not args.no_open)
 
 
-# --- `kb service` -- runs `kb web` as a login-scoped background service via
-# launchd (macOS) or systemd --user (Linux). Both stay strictly per-user (no
-# root, no system-wide daemon) and just wrap the same `kb web` binary/flags a
-# person would run by hand, so there's nothing here that `kb web` itself
-# doesn't already do -- this only automates starting it at login and keeping
-# it alive.
+# --- `kb service` / `kb sync-service` -- run `kb web` or `kb sync` as a
+# login-scoped background job via launchd (macOS) or systemd --user (Linux).
+# Both stay strictly per-user (no root, no system-wide daemon) and just wrap
+# the same `kb web`/`kb sync` invocation a person would run by hand -- this
+# only automates when it runs, nothing the underlying command doesn't already
+# do. `kb service` keeps `kb web` alive continuously (RunAtLoad+KeepAlive /
+# a plain systemd service); `kb sync-service` fires `kb sync` on a timer
+# (StartInterval / a oneshot service driven by a systemd timer unit). Those
+# two shapes differ enough (persistent vs interval-triggered) that both go
+# through one shared installer, parameterized by everything else that's
+# actually identical: label/unit naming, the launchctl/systemctl dance, PATH,
+# and status/uninstall.
 
-SERVICE_LABEL = "dev.pkb-cli.web"       # launchd label
-SERVICE_UNIT_NAME = "kb-web.service"    # systemd --user unit name
+AGENTS = {
+    "web": {
+        "launchd_label": "dev.pkb-cli.web",
+        "systemd_unit": "kb-web.service",
+        "log_name": "kb-web",
+    },
+    "sync": {
+        "launchd_label": "dev.pkb-cli.sync",
+        "systemd_unit": "kb-sync.service",
+        "systemd_timer": "kb-sync.timer",
+        "log_name": "kb-sync",
+    },
+}
 
 
 def _service_kind():
@@ -2170,12 +2187,118 @@ def _service_kind():
     return None
 
 
-def _launchd_plist_path():
-    return os.path.expanduser(f"~/Library/LaunchAgents/{SERVICE_LABEL}.plist")
+def _agent_launchd_plist_path(agent):
+    return os.path.expanduser(f"~/Library/LaunchAgents/{AGENTS[agent]['launchd_label']}.plist")
 
 
-def _systemd_unit_path():
-    return os.path.expanduser(f"~/.config/systemd/user/{SERVICE_UNIT_NAME}")
+def _agent_systemd_unit_path(agent):
+    return os.path.expanduser(f"~/.config/systemd/user/{AGENTS[agent]['systemd_unit']}")
+
+
+def _agent_systemd_timer_path(agent):
+    return os.path.expanduser(f"~/.config/systemd/user/{AGENTS[agent]['systemd_timer']}")
+
+
+def _service_path_env():
+    """PATH for a background `kb` job: os.defpath (the bare minimum
+    launchd/systemd --user give a service) plus the standard Homebrew/local
+    prefixes, so bd/glab/gh/rg/fzf resolve the same as they do under `kb
+    setup`/`kb doctor`. Deterministic on purpose -- unlike snapshotting
+    whoever ran `install`'s ambient PATH, this doesn't bake in transient
+    shims (pyenv, an active venv) or go stale once install-time is behind us."""
+    extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"]
+    return os.pathsep.join(extra + [os.defpath])
+
+
+def _resolve_agent_repo(args):
+    if args.repo:
+        root = os.path.abspath(os.path.expanduser(args.repo))
+        if not os.path.isdir(root):
+            print(f"error: --repo {root} does not exist", file=sys.stderr)
+            return None
+        return root
+    try:
+        return pc.get_repo_root()
+    except SystemExit:
+        print("error: no pkb data repo found -- pass --repo DIR, or cd into one "
+              "first (see `kb setup`)", file=sys.stderr)
+        return None
+
+
+def _launchd_load(label, plist_path):
+    """(re)load a plist -- bootout first (ignore failure, fine if nothing was
+    loaded yet) so a re-install picks up changes instead of bootstrap
+    erroring "already loaded". Returns an error string, or None on success."""
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
+    result = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
+                             capture_output=True, text=True)
+    if result.returncode != 0:
+        return result.stderr.strip()
+    return None
+
+
+def _launchd_unload_and_remove(label, plist_path):
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
+    if os.path.exists(plist_path):
+        os.remove(plist_path)
+        return True
+    return False
+
+
+def _launchd_status(label, plist_path):
+    """(installed, running, detail) -- detail is a human string for the
+    not-running/not-loaded cases."""
+    if not os.path.exists(plist_path):
+        return False, False, "not installed"
+    uid = os.getuid()
+    result = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
+                             capture_output=True, text=True)
+    if result.returncode != 0:
+        return True, False, f"installed ({plist_path}) but not loaded -- run `install` again"
+    return True, "state = running" in result.stdout, None
+
+
+def _systemd_enable_now(unit_name):
+    """daemon-reload then enable --now one unit. Returns an error string, or
+    None on success."""
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name],
+                             capture_output=True, text=True)
+    if result.returncode != 0:
+        return result.stderr.strip()
+    return None
+
+
+def _systemd_disable_and_remove(unit_name, *paths):
+    subprocess.run(["systemctl", "--user", "disable", "--now", unit_name], capture_output=True)
+    removed = False
+    for path in paths:
+        if os.path.exists(path):
+            os.remove(path)
+            removed = True
+    if removed:
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    return removed
+
+
+def _systemd_active_state(unit_name):
+    result = subprocess.run(["systemctl", "--user", "is-active", unit_name],
+                             capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def _linger_note():
+    """None, or a note to print when the current user isn't lingering --
+    without it a systemd --user timer/service dies at logout."""
+    user = os.environ.get("USER", "")
+    result = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
+                             capture_output=True, text=True)
+    if result.returncode == 0 and "Linger=no" in result.stdout:
+        return (f"  note: enable lingering so this survives logout/reboot without an active "
+                f"session: loginctl enable-linger {user}")
+    return None
 
 
 def cmd_service(args):
@@ -2188,53 +2311,33 @@ def cmd_service(args):
     if args.action == "install":
         return _service_install(kind, args)
     if args.action == "uninstall":
-        return _service_uninstall(kind)
-    return _service_status(kind)
-
-
-def _service_path_env():
-    """PATH for the background `kb web` service: os.defpath (the bare minimum
-    launchd/systemd --user give a service) plus the standard Homebrew/local
-    prefixes, so bd/glab/gh/rg/fzf resolve the same as they do under `kb
-    setup`/`kb doctor`. Deterministic on purpose -- unlike snapshotting
-    whoever ran `kb service install`'s ambient PATH, this doesn't bake in
-    transient shims (pyenv, an active venv) or go stale once install-time is
-    behind us."""
-    extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"]
-    return os.pathsep.join(extra + [os.defpath])
+        return _service_uninstall(kind, "web")
+    return _service_status(kind, "web")
 
 
 def _service_install(kind, args):
-    if args.repo:
-        root = os.path.abspath(os.path.expanduser(args.repo))
-        if not os.path.isdir(root):
-            print(f"error: --repo {root} does not exist", file=sys.stderr)
-            return 1
-    else:
-        try:
-            root = pc.get_repo_root()
-        except SystemExit:
-            print("error: no pkb data repo found -- pass --repo DIR, or cd into one "
-                  "first (see `kb setup`)", file=sys.stderr)
-            return 1
+    root = _resolve_agent_repo(args)
+    if root is None:
+        return 1
 
     kb_path = os.path.abspath(os.path.join(SCRIPT_DIR, "kb"))
     port = args.port
+    agent = AGENTS["web"]
 
     if kind == "launchd":
         import plistlib
         log_dir = os.path.expanduser("~/Library/Logs")
         os.makedirs(log_dir, exist_ok=True)
-        plist_path = _launchd_plist_path()
+        plist_path = _agent_launchd_plist_path("web")
         os.makedirs(os.path.dirname(plist_path), exist_ok=True)
         plist = {
-            "Label": SERVICE_LABEL,
+            "Label": agent["launchd_label"],
             "ProgramArguments": [sys.executable, kb_path, "web", "--port", str(port), "--no-open"],
             "WorkingDirectory": root,
             "RunAtLoad": True,
             "KeepAlive": True,
-            "StandardOutPath": os.path.join(log_dir, "kb-web.log"),
-            "StandardErrorPath": os.path.join(log_dir, "kb-web.err.log"),
+            "StandardOutPath": os.path.join(log_dir, f"{agent['log_name']}.log"),
+            "StandardErrorPath": os.path.join(log_dir, f"{agent['log_name']}.err.log"),
             # launchd defaults to /usr/bin:/bin:/usr/sbin:/sbin (no Homebrew) --
             # without this, bd/glab/gh/rg/fzf all read as "not found" under the
             # service even though `kb setup`/`kb doctor` find them fine in a shell.
@@ -2243,23 +2346,18 @@ def _service_install(kind, args):
         with open(plist_path, "wb") as f:
             plistlib.dump(plist, f)
 
-        uid = os.getuid()
-        # bootout first (ignore failure -- fine if nothing was loaded yet) so a
-        # re-install picks up changes instead of bootstrap erroring "already loaded"
-        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{SERVICE_LABEL}"], capture_output=True)
-        result = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
-                                 capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"error: launchctl bootstrap failed: {result.stderr.strip()}", file=sys.stderr)
+        error = _launchd_load(agent["launchd_label"], plist_path)
+        if error:
+            print(f"error: launchctl bootstrap failed: {error}", file=sys.stderr)
             return 1
-        print(f"installed and started {SERVICE_LABEL} -> http://127.0.0.1:{port}/")
+        print(f"installed and started {agent['launchd_label']} -> http://127.0.0.1:{port}/")
         print(f"  repo:  {root}")
         print(f"  plist: {plist_path}")
-        print(f"  logs:  {log_dir}/kb-web.log")
+        print(f"  logs:  {log_dir}/{agent['log_name']}.log")
         return 0
 
     # systemd --user
-    unit_path = _systemd_unit_path()
+    unit_path = _agent_systemd_unit_path("web")
     os.makedirs(os.path.dirname(unit_path), exist_ok=True)
     unit = (
         "[Unit]\n"
@@ -2279,72 +2377,202 @@ def _service_install(kind, args):
     )
     with open(unit_path, "w", encoding="utf-8") as f:
         f.write(unit)
-    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    result = subprocess.run(["systemctl", "--user", "enable", "--now", SERVICE_UNIT_NAME],
-                             capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"error: systemctl enable --now failed: {result.stderr.strip()}", file=sys.stderr)
+    error = _systemd_enable_now(agent["systemd_unit"])
+    if error:
+        print(f"error: systemctl enable --now failed: {error}", file=sys.stderr)
         return 1
-    print(f"installed and started {SERVICE_UNIT_NAME} -> http://127.0.0.1:{port}/")
+    print(f"installed and started {agent['systemd_unit']} -> http://127.0.0.1:{port}/")
     print(f"  repo: {root}")
     print(f"  unit: {unit_path}")
-    print(f"  logs: journalctl --user -u {SERVICE_UNIT_NAME} -f")
-    user = os.environ.get("USER", "")
-    linger = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
-                             capture_output=True, text=True)
-    if linger.returncode == 0 and "Linger=no" in linger.stdout:
-        print(f"  note: enable lingering so this survives logout/reboot without an active "
-              f"session: loginctl enable-linger {user}")
+    print(f"  logs: journalctl --user -u {agent['systemd_unit']} -f")
+    note = _linger_note()
+    if note:
+        print(note)
     return 0
 
 
-def _service_uninstall(kind):
+def _service_uninstall(kind, agent_name):
+    agent = AGENTS[agent_name]
     if kind == "launchd":
-        plist_path = _launchd_plist_path()
-        uid = os.getuid()
-        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{SERVICE_LABEL}"], capture_output=True)
-        if os.path.exists(plist_path):
-            os.remove(plist_path)
-            print(f"stopped and removed {SERVICE_LABEL} ({plist_path})")
+        plist_path = _agent_launchd_plist_path(agent_name)
+        if _launchd_unload_and_remove(agent["launchd_label"], plist_path):
+            print(f"stopped and removed {agent['launchd_label']} ({plist_path})")
         else:
-            print(f"{SERVICE_LABEL} wasn't installed")
+            print(f"{agent['launchd_label']} wasn't installed")
         return 0
 
-    unit_path = _systemd_unit_path()
-    subprocess.run(["systemctl", "--user", "disable", "--now", SERVICE_UNIT_NAME], capture_output=True)
-    if os.path.exists(unit_path):
-        os.remove(unit_path)
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-        print(f"stopped and removed {SERVICE_UNIT_NAME} ({unit_path})")
+    unit_path = _agent_systemd_unit_path(agent_name)
+    if _systemd_disable_and_remove(agent["systemd_unit"], unit_path):
+        print(f"stopped and removed {agent['systemd_unit']} ({unit_path})")
     else:
-        print(f"{SERVICE_UNIT_NAME} wasn't installed")
+        print(f"{agent['systemd_unit']} wasn't installed")
     return 0
 
 
-def _service_status(kind):
+def _service_status(kind, agent_name):
+    agent = AGENTS[agent_name]
     if kind == "launchd":
-        plist_path = _launchd_plist_path()
-        if not os.path.exists(plist_path):
-            print("not installed")
+        plist_path = _agent_launchd_plist_path(agent_name)
+        installed, running, detail = _launchd_status(agent["launchd_label"], plist_path)
+        if not installed:
+            print(detail)
             return 1
-        uid = os.getuid()
-        result = subprocess.run(["launchctl", "print", f"gui/{uid}/{SERVICE_LABEL}"],
-                                 capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"installed ({plist_path}) but not loaded -- run `kb service install` again")
+        if detail:
+            print(detail)
             return 1
-        running = "state = running" in result.stdout
         print(f"installed and {'running' if running else 'loaded but not running'} ({plist_path})")
         return 0 if running else 1
 
-    unit_path = _systemd_unit_path()
+    unit_path = _agent_systemd_unit_path(agent_name)
     if not os.path.exists(unit_path):
         print("not installed")
         return 1
-    result = subprocess.run(["systemctl", "--user", "is-active", SERVICE_UNIT_NAME],
-                             capture_output=True, text=True)
-    state = result.stdout.strip()
+    state = _systemd_active_state(agent["systemd_unit"])
     print(f"installed ({unit_path}), {state}")
+    return 0 if state == "active" else 1
+
+
+# --- `kb sync-service` -- runs `kb sync` on a recurring interval via launchd
+# (macOS, StartInterval) or a systemd --user timer (Linux), instead of
+# `kb service`'s persistent process. Shares everything above but the plist/
+# unit shape and status/uninstall need the extra timer unit on systemd.
+
+
+def cmd_sync_service(args):
+    kind = _service_kind()
+    if kind is None:
+        print(f"error: `kb sync-service` isn't supported on {sys.platform} -- only macOS "
+              f"(launchd) and Linux (systemd --user) are supported. See `kb sync` to "
+              f"run it by hand instead.", file=sys.stderr)
+        return 1
+    if args.action == "install":
+        return _sync_service_install(kind, args)
+    if args.action == "uninstall":
+        return _sync_service_uninstall(kind)
+    return _sync_service_status(kind)
+
+
+def _sync_service_install(kind, args):
+    root = _resolve_agent_repo(args)
+    if root is None:
+        return 1
+
+    kb_path = os.path.abspath(os.path.join(SCRIPT_DIR, "kb"))
+    agent = AGENTS["sync"]
+
+    if kind == "launchd":
+        import plistlib
+        log_dir = os.path.expanduser("~/Library/Logs")
+        os.makedirs(log_dir, exist_ok=True)
+        plist_path = _agent_launchd_plist_path("sync")
+        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        plist = {
+            "Label": agent["launchd_label"],
+            "ProgramArguments": [sys.executable, kb_path, "sync"],
+            "WorkingDirectory": root,
+            "StartInterval": args.interval_minutes * 60,
+            "StandardOutPath": os.path.join(log_dir, f"{agent['log_name']}.log"),
+            "StandardErrorPath": os.path.join(log_dir, f"{agent['log_name']}.err.log"),
+            # see _service_path_env() -- launchd's default PATH has no Homebrew
+            "EnvironmentVariables": {"PATH": _service_path_env()},
+        }
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist, f)
+
+        error = _launchd_load(agent["launchd_label"], plist_path)
+        if error:
+            print(f"error: launchctl bootstrap failed: {error}", file=sys.stderr)
+            return 1
+        print(f"installed and started {agent['launchd_label']} -> `kb sync` every {args.interval_minutes}m")
+        print(f"  repo:  {root}")
+        print(f"  plist: {plist_path}")
+        print(f"  logs:  {log_dir}/{agent['log_name']}.log")
+        return 0
+
+    # systemd --user: a oneshot service triggered by a timer
+    service_path = _agent_systemd_unit_path("sync")
+    timer_path = _agent_systemd_timer_path("sync")
+    os.makedirs(os.path.dirname(service_path), exist_ok=True)
+    service_unit = (
+        "[Unit]\n"
+        "Description=kb sync -- pull in pkb-cli sync sources\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f'ExecStart="{sys.executable}" "{kb_path}" sync\n'
+        f"WorkingDirectory={root}\n"
+        f'Environment="PATH={_service_path_env()}"\n'
+    )
+    with open(service_path, "w", encoding="utf-8") as f:
+        f.write(service_unit)
+    timer_unit = (
+        "[Unit]\n"
+        "Description=run kb-sync.service on an interval\n"
+        "\n"
+        "[Timer]\n"
+        f"OnBootSec={args.interval_minutes}min\n"
+        f"OnUnitActiveSec={args.interval_minutes}min\n"
+        "Persistent=true\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    with open(timer_path, "w", encoding="utf-8") as f:
+        f.write(timer_unit)
+    error = _systemd_enable_now(agent["systemd_timer"])
+    if error:
+        print(f"error: systemctl enable --now failed: {error}", file=sys.stderr)
+        return 1
+    print(f"installed and started {agent['systemd_timer']} -> `kb sync` every {args.interval_minutes}m")
+    print(f"  repo:    {root}")
+    print(f"  service: {service_path}")
+    print(f"  timer:   {timer_path}")
+    print(f"  logs:    journalctl --user -u {agent['systemd_unit']} -f")
+    note = _linger_note()
+    if note:
+        print(note)
+    return 0
+
+
+def _sync_service_uninstall(kind):
+    agent = AGENTS["sync"]
+    if kind == "launchd":
+        plist_path = _agent_launchd_plist_path("sync")
+        if _launchd_unload_and_remove(agent["launchd_label"], plist_path):
+            print(f"stopped and removed {agent['launchd_label']} ({plist_path})")
+        else:
+            print(f"{agent['launchd_label']} wasn't installed")
+        return 0
+
+    service_path = _agent_systemd_unit_path("sync")
+    timer_path = _agent_systemd_timer_path("sync")
+    if _systemd_disable_and_remove(agent["systemd_timer"], timer_path, service_path):
+        print(f"stopped and removed {agent['systemd_timer']} ({timer_path})")
+    else:
+        print(f"{agent['systemd_timer']} wasn't installed")
+    return 0
+
+
+def _sync_service_status(kind):
+    agent = AGENTS["sync"]
+    if kind == "launchd":
+        plist_path = _agent_launchd_plist_path("sync")
+        installed, _running, detail = _launchd_status(agent["launchd_label"], plist_path)
+        if not installed:
+            print(detail)
+            return 1
+        if detail:
+            print(detail.replace("`install`", "`kb sync-service install`"))
+            return 1
+        print(f"installed and scheduled ({plist_path})")
+        return 0
+
+    timer_path = _agent_systemd_timer_path("sync")
+    if not os.path.exists(timer_path):
+        print("not installed")
+        return 1
+    state = _systemd_active_state(agent["systemd_timer"])
+    print(f"installed ({timer_path}), timer {state}")
     return 0 if state == "active" else 1
 
 
@@ -2650,7 +2878,7 @@ kb operates on a data repo found by walking up from the current directory to a
 def main():
     commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
                 "links", "show", "tag", "link", "todo", "bd", "secrets", "config", "setup",
-                "web", "service", "doctor", "update", "push", "help"]
+                "web", "service", "sync-service", "doctor", "update", "push", "help"]
     parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
@@ -2949,6 +3177,28 @@ def main():
                     help="data repo to serve (default: resolved the same way `kb` normally "
                          "does -- cwd's repo, falling back to the central ~/.pkb; install only)")
     p.set_defaults(func=cmd_service)
+
+    p = sub.add_parser(
+        "sync-service", help="install/uninstall a recurring `kb sync` timer (launchd/systemd)",
+        description="Run `kb sync` on a recurring interval instead of by hand or via a "
+                     "Claude Code slash command. Generates and loads a launchd LaunchAgent "
+                     "with StartInterval (macOS) or a systemd --user timer (Linux).",
+        epilog=(
+            "  kb sync-service install                       every 60 minutes, current repo\n"
+            "  kb sync-service install --interval-minutes 15\n"
+            "  kb sync-service install --repo ~/notes         point at a specific data repo\n"
+            "  kb sync-service status\n"
+            "  kb sync-service uninstall"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("--interval-minutes", type=int, default=60, metavar="MIN",
+                    help="how often to run `kb sync` (default: 60; install only)")
+    p.add_argument("--repo", metavar="DIR",
+                    help="data repo to sync (default: resolved the same way `kb` normally "
+                         "does -- cwd's repo, falling back to the central ~/.pkb; install only)")
+    p.set_defaults(func=cmd_sync_service)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
     p.set_defaults(func=cmd_doctor)
