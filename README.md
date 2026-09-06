@@ -132,3 +132,19 @@ pkb-cli/
 ```
 
 See [docs/spec.md](docs/spec.md) §2 for the data repo's own expected layout.
+
+## Development
+
+No external dependencies to install -- the test suite runs on the stdlib
+`unittest` runner:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+CI ([.github/workflows/test.yml](.github/workflows/test.yml)) runs the same
+command on Python 3.9 and 3.12 for every push/PR against `main`.
+
+## License
+
+[Apache License 2.0](LICENSE).
