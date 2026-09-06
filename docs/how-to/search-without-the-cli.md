@@ -1,7 +1,9 @@
-# Search — Tier 1 (day one, zero setup)
+# How to search a data repo with no tooling at all
 
-Works immediately after `git clone`, no index required, and is always the fallback
-if `.pkb/*.db` doesn't exist yet.
+`rg` and `fzf` operate directly on the markdown tree. This works immediately
+after `git clone`, needs no index, and is always the fallback if
+`.pkb/*.db` doesn't exist yet — this is what [Tier
+1](../explanation/search-architecture.md) means.
 
 ## ripgrep
 
@@ -38,4 +40,4 @@ Install with `brew install ripgrep fzf` if not already present.
 
 Once you want relevance ranking, faceted queries (`--type`, `--tag`), or the corpus
 grows large enough that `rg` output is unwieldy, run `kb index` and use `kb search`
-instead (see [../README.md](../README.md)).
+instead (see [reference: CLI commands](../reference/cli.md)).

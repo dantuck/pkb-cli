@@ -1,0 +1,60 @@
+# CLI command reference
+
+```
+kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT]
+                                  type: tutorial|how-to|reference|explanation
+kb journal [<date>] [-m [TEXT]]  today (default) or YYYY-MM-DD; -m TEXT quick-adds a
+                                  timestamped line, bare -m opens $EDITOR for multiline input
+kb journal --tag <tag>            past entries carrying <tag>, newest first
+kb journal rollup [YYYY-MM]       generate/refresh that month's summary page (default: last month)
+kb search "<query>" [--type T] [--tag TAG] [--all] [--plain] [--json]
+kb inbox [--plain]                interactive triage: promote / redirect / discard
+kb inbox <id> promote <type>|redirect|discard   non-interactive triage (no terminal needed)
+kb triage [--json]                read-only overdue-inbox report
+kb links <id> [--json]            forward links + backlinks
+kb show <id> [--json]             print an entry's full content by id
+kb tag <id> [add|rm <tag>...]     view/add/remove tags (never hand-edit frontmatter)
+kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
+kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
+kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
+                                  quick-add a TODO; bare -a opens bd's interactive form
+kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
+kb sync [memos|gitlab|beads|all]  pull in external sources
+kb secrets                        edit encrypted memos/gitlab credentials via sops
+kb validate                       frontmatter/id/link integrity check
+kb index [--full]                 rebuild/refresh the search index
+kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
+kb web [--port PORT]              local-only web UI (127.0.0.1, default port 4173)
+kb setup [--install [DIR]] [--install-skill [DIR]]   # onboarding: hook, index, bd store,
+                                 # PATH (--install), Claude Code skill (--install-skill)
+kb doctor                       # diagnose issues -- read-only, never writes anything
+kb update [--check]             # pull tool updates (git pull, or tarball refresh if
+                                 # installed via install.sh); --check reports without pulling
+```
+
+Run `kb <command> -h` for full flag details on any of these, or `kb help` for
+the top-level list.
+
+`kb doctor` and `kb setup` share the same detection logic (hook state, index
+freshness, tool presence) — `setup` acts on it, `doctor` only reports, plus a
+few deeper checks `setup` doesn't do: a hook pointing at a pkb-cli install
+that no longer exists, a search index whose row count has drifted from the
+files on disk, and `cursors.json` sanity.
+
+`kb new`, `kb tag`, `kb link`, and `kb inbox promote`/`redirect` all reindex
+automatically — an entry is searchable immediately after any of these. Only
+reach for `kb index` yourself after editing an entry's body by hand (never
+the frontmatter).
+
+`kb sync` and `kb update` are the only commands that touch the network —
+search, journal, inbox, and links all work fully offline.
+
+Implementation: a thin Python wrapper (`scripts/kb`) dispatching to helper
+scripts and modules alongside it (e.g. `kb_web.py` for `kb web`). No
+daemon/server process for any other command — every invocation but `kb web`
+is a one-shot script run.
+
+Search also works with zero setup via `rg`/`fzf` directly on a data repo's
+file tree — see [how-to: search without the
+CLI](../how-to/search-without-the-cli.md). `kb web` has its own walkthrough —
+see [how-to: use the web UI](../how-to/use-the-web-ui.md).
