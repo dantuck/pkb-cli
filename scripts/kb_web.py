@@ -633,7 +633,7 @@ class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def serve(root, port):
+def serve(root, port, open_browser=True):
     Handler.root = root
     try:
         httpd = Server(("127.0.0.1", port), Handler)
@@ -643,10 +643,11 @@ def serve(root, port):
 
     url = f"http://127.0.0.1:{port}/"
     print(f"kb web running at {url} (Ctrl-C to stop)")
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+    if open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
