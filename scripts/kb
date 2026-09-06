@@ -929,7 +929,11 @@ def cmd_sync(args):
             target_rc = _run_captured([sys.executable, script_path])
         rc = target_rc or rc
     pc.git_autocommit(root, f"sync: {', '.join(targets)}")
-    return rc
+    # sync writes new/updated files straight to disk -- without this the FTS
+    # index goes stale immediately and `kb doctor`/`kb search` won't see them
+    # until someone remembers to run `kb index` by hand.
+    index_rc = run_script("index_fts.py")
+    return index_rc or rc
 
 
 def cmd_index(args):
@@ -1727,15 +1731,35 @@ def hook_managed_validate_path(content):
     return parts[3] if len(parts) > 3 else None
 
 
-def tool_status():
+# brew formula names for the always-checked tools that aren't declared by a
+# sync source's SOURCE_META (those declare their own "brew_formula").
+BUILTIN_BREW_FORMULAS = {"sops": "sops", "rg": "ripgrep", "fzf": "fzf"}
+
+
+def missing_deps_with_formulas(tools, sync_sources):
+    """(tool, brew_formula) pairs for every optional CLI tool kb knows how to
+    install that isn't currently on PATH -- the always-checked tools plus any
+    sync source that declares both cli_tool and brew_formula."""
+    missing = [(t, f) for t, f in BUILTIN_BREW_FORMULAS.items() if not tools.get(t)]
+    for _name, (_fname, meta) in sync_sources.items():
+        cli_tool, formula = meta.get("cli_tool"), meta.get("brew_formula")
+        if cli_tool and formula and not tools.get(cli_tool):
+            missing.append((cli_tool, formula))
+    return missing
+
+
+def tool_status(sync_sources=None):
     """Presence (and, where SOURCE_META declares an auth_check, auth status) of
     every CLI tool kb cares about: the always-checked ones (sops for encrypted
     credentials, rg/fzf for Tier 1 search) plus whatever cli_tool each
     auto-discovered sync source declares -- so a new sync_<name>.py with a
     cli_tool/auth_check in its SOURCE_META gets a "<tool>"/"<tool>_auth" entry
-    here automatically, no edit needed."""
-    sync_sources = discover_sync_sources()
-    cli_tools = {"sops", "rg", "fzf"}
+    here automatically, no edit needed. Callers that already discovered sync
+    sources for their own use (e.g. `kb setup`) can pass them in to avoid
+    re-scanning/re-importing every sync_<name>.py a second time."""
+    if sync_sources is None:
+        sync_sources = discover_sync_sources()
+    cli_tools = set(BUILTIN_BREW_FORMULAS)
     for _name, (_fname, meta) in sync_sources.items():
         if meta.get("cli_tool"):
             cli_tools.add(meta["cli_tool"])
@@ -2005,7 +2029,28 @@ def cmd_setup(args):
             os.symlink(skill_src, target)
             ok.append(f"installed kb skill -> {target}")
 
-    tools = tool_status()
+    sync_sources = discover_sync_sources()
+    tools = tool_status(sync_sources)
+
+    # 0c. install missing optional CLI deps via brew (opt-in via --install-deps)
+    if args.install_deps:
+        to_install = missing_deps_with_formulas(tools, sync_sources)
+        if not to_install:
+            ok.append("all optional CLI deps (bd/glab/gh/rg/fzf/sops) already installed")
+        elif not shutil.which("brew"):
+            todo.append("brew not found -- install manually: " +
+                        ", ".join(f"{t} (`{f}`)" for t, f in to_install))
+        else:
+            formulas = sorted({f for _t, f in to_install})
+            result = subprocess.run(["brew", "install", *formulas], capture_output=True, text=True)
+            if result.returncode == 0:
+                ok.append(f"installed missing deps via brew: {', '.join(formulas)}")
+                # just recheck presence of what we installed -- no need to re-discover
+                # sync sources or re-run every auth_check subprocess again
+                tools.update({t: shutil.which(t) is not None for t, _f in to_install})
+            else:
+                todo.append(f"brew install {' '.join(formulas)} failed: "
+                            f"{result.stderr.strip() or result.stdout.strip()}")
 
     if root is None:
         todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to also set up the "
@@ -2076,7 +2121,6 @@ def cmd_setup(args):
                             "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT/PKB_GITHUB_REPO directly")
 
     # 5. cli_tool sync sources (e.g. glab/gh, required for GitLab/GitHub issue sync)
-    sync_sources = discover_sync_sources()
     todo.extend(sync_tool_todos(sync_sources, tools))
 
     # 6. rg/fzf (Tier 1 search, optional -- kb search/index work without them)
@@ -2148,6 +2192,18 @@ def cmd_service(args):
     return _service_status(kind)
 
 
+def _service_path_env():
+    """PATH for the background `kb web` service: os.defpath (the bare minimum
+    launchd/systemd --user give a service) plus the standard Homebrew/local
+    prefixes, so bd/glab/gh/rg/fzf resolve the same as they do under `kb
+    setup`/`kb doctor`. Deterministic on purpose -- unlike snapshotting
+    whoever ran `kb service install`'s ambient PATH, this doesn't bake in
+    transient shims (pyenv, an active venv) or go stale once install-time is
+    behind us."""
+    extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"]
+    return os.pathsep.join(extra + [os.defpath])
+
+
 def _service_install(kind, args):
     if args.repo:
         root = os.path.abspath(os.path.expanduser(args.repo))
@@ -2179,6 +2235,10 @@ def _service_install(kind, args):
             "KeepAlive": True,
             "StandardOutPath": os.path.join(log_dir, "kb-web.log"),
             "StandardErrorPath": os.path.join(log_dir, "kb-web.err.log"),
+            # launchd defaults to /usr/bin:/bin:/usr/sbin:/sbin (no Homebrew) --
+            # without this, bd/glab/gh/rg/fzf all read as "not found" under the
+            # service even though `kb setup`/`kb doctor` find them fine in a shell.
+            "EnvironmentVariables": {"PATH": _service_path_env()},
         }
         with open(plist_path, "wb") as f:
             plistlib.dump(plist, f)
@@ -2208,6 +2268,10 @@ def _service_install(kind, args):
         "[Service]\n"
         f'ExecStart="{sys.executable}" "{kb_path}" web --port {port} --no-open\n'
         f"WorkingDirectory={root}\n"
+        # systemd --user services get a minimal PATH by default too -- see
+        # _service_path_env() for why this is a fixed Homebrew-aware PATH
+        # rather than a snapshot of the installer's shell PATH.
+        f'Environment="PATH={_service_path_env()}"\n'
         "Restart=on-failure\n"
         "\n"
         "[Install]\n"
@@ -2845,6 +2909,9 @@ def main():
     p.add_argument("--install-skill", nargs="?", const="", default=None, metavar="DIR",
                     help="also symlink the bundled Claude Code skill into ~/.claude/skills "
                          "(or a specific DIR)")
+    p.add_argument("--install-deps", action="store_true",
+                    help="also `brew install` any missing optional CLI deps "
+                         "(bd/beads, glab, gh, rg, fzf, sops)")
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser(

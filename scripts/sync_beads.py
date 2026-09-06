@@ -23,6 +23,7 @@ import pkb_common as pc
 # once `bd` is on PATH.
 SOURCE_META = {
     "cli_tool": "bd",
+    "brew_formula": "beads",
 }
 
 

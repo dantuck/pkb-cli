@@ -16,6 +16,7 @@ import pkb_common as pc
 # the SOURCE_META contract.
 SOURCE_META = {
     "cli_tool": "glab",
+    "brew_formula": "glab",
     "auth_check": ["glab", "auth", "status"],
     "not_found_hint": "glab CLI not found -- `brew install glab` (+ `glab auth login`) if you want kb sync gitlab",
     "not_authed_hint": "glab is installed but not authenticated -- run `glab auth login`",
