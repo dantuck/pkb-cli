@@ -18,6 +18,13 @@ curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | b
 Clones this repo to `~/pkb-cli` (override with `$PKB_CLI_HOME`) and symlinks `kb`
 onto your PATH. Safe to re-run — pulls latest and re-runs setup idempotently.
 
+The symlink target is the first of `~/.local/bin`, `/opt/homebrew/bin`, or
+`/usr/local/bin` that already exists **and** is already on your `PATH` (in that
+order), so it can install without editing your shell profile. On most Macs
+with Homebrew that's `/opt/homebrew/bin`; on a bare-bones machine with none of
+those set up yet, it creates `~/.local/bin` and prints the `export PATH=...`
+line to add.
+
 ### Claude Code skill (optional)
 
 This repo bundles a [Claude Code skill](https://code.claude.com/docs/en/skills)
@@ -45,6 +52,18 @@ None of that lives in this tool repo.
 git clone <your-private-notes-repo-url> ~/.pkb
 cd ~/.pkb
 kb setup       # pre-commit hook, search index, local bd store if `bd` is installed
+```
+
+Starting from scratch instead of cloning an existing notes repo? There's no
+`kb init` — just create the `.pkb/` marker directory yourself, then run
+`kb setup` from inside it. Content type directories (`tutorials/`, `how-to/`,
+etc.) don't need to exist ahead of time; `kb new` creates them on first use.
+
+```bash
+mkdir -p ~/.pkb/.pkb
+cd ~/.pkb
+git init
+kb setup
 ```
 
 `kb` resolves which data repo to use by walking up from the current directory
