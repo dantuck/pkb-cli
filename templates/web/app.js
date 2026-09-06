@@ -128,6 +128,7 @@ async function apiFetch(url, method, body) {
 const CORE_TYPES = ["tutorial", "how-to", "reference", "explanation"];
 const ALL_TYPES = ["tutorial", "how-to", "reference", "explanation", "journal", "inbox", "source"];
 const THEME_KEY = "kb-theme";
+const ADMIN_STATUS_POLL_MS = 120000;
 
 // One source of truth for the new-entry form's blank state, used both for
 // the initial Alpine state and to reset the form each time it reopens --
@@ -970,7 +971,17 @@ document.addEventListener("alpine:init", () => {
     adminMsg: "",
     adminOutput: "",
     adminSyncSource: "all",
+    // Populated by /api/admin/status -- the same read-only checks `kb doctor`
+    // reports, polled on a timer so the Admin badge and drawer reflect what
+    // needs attention without anyone clicking "Doctor" themselves.
+    adminStatus: { ok: [], todo: [], needs_attention: false, push: { is_git: false, upstream: null, ahead: null, behind: null } },
+    adminStatusLoaded: false,
 
+    async loadAdminStatus() {
+      const { ok, data } = await apiFetch("/api/admin/status", "GET");
+      if (ok) this.adminStatus = data;
+      this.adminStatusLoaded = true;
+    },
     async adminRun(label, fn) {
       this.adminMsg = `${label}...`;
       this.adminOutput = "";
@@ -987,6 +998,7 @@ document.addEventListener("alpine:init", () => {
       } catch {
         this.adminMsg = `${label} failed`;
       }
+      this.loadAdminStatus();
     },
     adminReindex() {
       this.adminRun("reindex", () => apiFetch("/api/index", "POST", { full: false }).then((r) => r.data));
@@ -1000,6 +1012,12 @@ document.addEventListener("alpine:init", () => {
     adminSync() {
       this.adminRun("sync", () => apiFetch("/api/sync", "POST", { source: this.adminSyncSource }).then((r) => r.data))
         .then(() => { this.loadTagIndex(); this.loadEntryIndex(); });
+    },
+    adminPush() {
+      this.adminRun("push", () => apiFetch("/api/push", "POST").then((r) => {
+        const { ok, message } = r.data;
+        return ok ? { ok, note: `pushed -> ${message}` } : { ok, error: message };
+      }));
     },
 
     // ---------- global keydown ----------
@@ -1058,6 +1076,13 @@ document.addEventListener("alpine:init", () => {
       this.loadTodos();
       this.loadTagIndex();
       this.loadEntryIndex();
+
+      // Admin health checks are read-only and cheap (file/sqlite checks, no
+      // network) -- poll them the whole time the tab is open, not just while
+      // the drawer is open, so the header badge can flag "needs attention"
+      // before anyone thinks to look.
+      this.loadAdminStatus();
+      setInterval(() => this.loadAdminStatus(), ADMIN_STATUS_POLL_MS);
     },
   }));
 });

@@ -24,6 +24,7 @@ kb secrets                        edit encrypted memos/gitlab credentials via so
 kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
+kb push                           push auto-commit's history to the data repo's upstream
 kb web [--port PORT] [--no-open]  local-only web UI (127.0.0.1, default port 4173)
 kb service install|uninstall|status [--port PORT] [--repo DIR]
                                   run `kb web` as a login service (launchd/systemd --user)
@@ -48,8 +49,14 @@ automatically — an entry is searchable immediately after any of these. Only
 reach for `kb index` yourself after editing an entry's body by hand (never
 the frontmatter).
 
-`kb sync` and `kb update` are the only commands that touch the network —
-search, journal, inbox, and links all work fully offline.
+`kb sync`, `kb update`, and `kb push` are the commands that touch the network
+by default — search, journal, inbox, and links all work fully offline. Every
+mutating command auto-commits to the data repo's git history if it's a git
+repo (see [how-to: use a data repo](../how-to/use-a-data-repo.md)); that part
+stays local. `kb push` is what sends that history to a remote — but if
+`.pkb/config.yml` sets `auto_push: true`, every one of those auto-committing
+commands (`kb new`, `kb journal`, `kb tag`, ...) pushes too, so "fully
+offline" no longer holds once that's turned on.
 
 Implementation: a thin Python wrapper (`scripts/kb`) dispatching to helper
 scripts and modules alongside it (e.g. `kb_web.py` for `kb web`). No

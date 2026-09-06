@@ -395,6 +395,7 @@ def journal_append(root, target, text):
     fm["updated"] = pc.now_iso()
     pc.write_entry(file_path, fm, body)
     run_script("index_fts.py")
+    pc.git_autocommit(root, f"journal: {target.isoformat()}")
     return {"path": os.path.relpath(file_path, root), "time": stamp}
 
 
@@ -717,6 +718,7 @@ def _inbox_promote(root, path, fm, body, target_type):
     os.remove(path)
     print(f"promoted -> {os.path.relpath(new_path, root)}")
     run_script("index_fts.py")
+    pc.git_autocommit(root, f"inbox promote: {title} -> {target_type}")
     return 0
 
 
@@ -746,6 +748,7 @@ def _inbox_redirect(root, path, fm, body):
     os.remove(path)
     print(f"redirected -> {os.path.relpath(journal_path, root)}")
     run_script("index_fts.py")
+    pc.git_autocommit(root, f"inbox redirect: {title}")
     return 0
 
 
@@ -754,6 +757,7 @@ def _inbox_discard(root, path):
     os.remove(path)
     print(f"discarded {name}")
     run_script("index_fts.py")
+    pc.git_autocommit(root, f"inbox discard: {name}")
     return 0
 
 
@@ -842,6 +846,7 @@ def cmd_sync(args):
         else:
             result = subprocess.run([sys.executable, script_path])
         rc = result.returncode or rc
+    pc.git_autocommit(root, f"sync: {', '.join(targets)}")
     return rc
 
 
@@ -945,6 +950,7 @@ def entry_new(root, entry_type, title, tags=None, links=None, body=None):
         entry_body = f"# {title}\n\n{body.strip()}\n" if body else f"# {title}\n\n"
         pc.write_entry(path, fm, entry_body)
         _reindex_fast(root)
+        pc.git_autocommit(root, f"new {entry_type}: {title}")
     return {"id": entry_id, "path": path}
 
 
@@ -964,6 +970,7 @@ def entry_set_tags(root, entry_id, add=None, rm=None):
             fm["updated"] = pc.now_iso()
             pc.write_entry(path, fm, body)
             _reindex_fast(root)
+            pc.git_autocommit(root, f"tags: {entry_id}")
     return tags
 
 
@@ -989,6 +996,7 @@ def entry_set_links(root, entry_id, add=None, rm=None):
             fm["updated"] = pc.now_iso()
             pc.write_entry(path, fm, body)
             _reindex_fast(root)
+            pc.git_autocommit(root, f"links: {entry_id}")
     return links
 
 
@@ -1014,6 +1022,7 @@ def entry_update_content(root, entry_id, title=None, body=None):
             fm["updated"] = pc.now_iso()
             pc.write_entry(path, fm, cur_body)
             _reindex_fast(root)
+            pc.git_autocommit(root, f"edit: {entry_id}")
     return {"title": fm.get("title"), "body": cur_body}
 
 
@@ -1800,6 +1809,56 @@ def update_status(fetch=False):
     return result
 
 
+def push_status(root):
+    """Local-only (no fetch) ahead/behind of a data repo's upstream -- the
+    counterpart to update_status() but for the *data* repo's own remote, not
+    pkb-cli's tool repo. Never touches the network, so this can go stale
+    relative to what's actually on the remote, but stays within `kb doctor`'s
+    "never writes, never hits the network" contract; `kb push` itself always
+    attempts the real push regardless of what this reports.
+
+    Returns a dict: is_git, upstream, ahead, behind. upstream/ahead/behind are
+    None when they don't apply (not a git repo, or no upstream configured)."""
+    result = {"is_git": os.path.isdir(os.path.join(root, ".git")),
+              "upstream": None, "ahead": None, "behind": None}
+    if not result["is_git"]:
+        return result
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=root)
+    if upstream.returncode != 0:
+        return result
+    result["upstream"] = upstream.stdout.strip()
+    ahead = _git("rev-list", "--count", f"{result['upstream']}..HEAD", cwd=root)
+    behind = _git("rev-list", "--count", f"HEAD..{result['upstream']}", cwd=root)
+    result["ahead"] = int(ahead.stdout.strip()) if ahead.returncode == 0 else None
+    result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
+    return result
+
+
+def cmd_push(args):
+    root = pc.get_repo_root()
+    status = push_status(root)
+    if not status["is_git"]:
+        print("error: not a git repo", file=sys.stderr)
+        return 1
+    if not status["upstream"]:
+        print("error: no upstream configured -- `git push -u <remote> <branch>` once to set one",
+              file=sys.stderr)
+        return 1
+    if status["behind"]:
+        print(f"note: {status['behind']} commit(s) behind {status['upstream']} as of the last fetch -- "
+              f"push may be rejected; `git pull` first if so")
+    if not status["ahead"]:
+        print(f"up to date with {status['upstream']}")
+        return 0
+    print(f"pushing {status['ahead']} commit(s) to {status['upstream']}...")
+    ok, message = pc.git_push(root)
+    if not ok:
+        print(f"error: {message}", file=sys.stderr)
+        return 1
+    print(f"pushed -> {message}")
+    return 0
+
+
 def cmd_setup(args):
     # root is optional: --install (and the tool/sync checks below) don't need a data
     # repo at all -- only the hook/index/bd/secrets steps do.
@@ -1877,6 +1936,12 @@ def cmd_setup(args):
                     f.write(hook_content)
                 os.chmod(hook_path, 0o755)
                 ok.append("installed pre-commit hook" if existing is None else "refreshed pre-commit hook path")
+
+            # 1b. auto-commit excludes (fts.db, entry locks) -- every kb mutation
+            # commits automatically, so these must be in place before that ever
+            # runs, not just lazily on first write
+            pc._ensure_git_excludes(root)
+            ok.append("auto-commit excludes (fts.db, entry locks) are in place")
 
         # 2. FTS index
         db_path = index_status(root)
@@ -2132,15 +2197,18 @@ def _service_status(kind):
     return 0 if state == "active" else 1
 
 
-def cmd_doctor(args):
-    """Read-only health check -- reuses the same detection helpers as `kb setup`
-    but never writes anything, and adds a few deeper checks setup doesn't do."""
-    # root is optional: tool-level checks (glab/rg/fzf, pkb-cli's own update status)
-    # don't need a data repo -- only frontmatter/hook/index/bd/secrets/cursors do.
-    try:
-        root = pc.get_repo_root()
-    except SystemExit:
-        root = None
+def doctor_checks(root, push=None):
+    """(ok, todo) lists of human-readable status lines -- the actual health
+    check logic behind `kb doctor`, factored out so `kb web`'s Admin panel can
+    show (and poll) the exact same read-only checks as data instead of parsing
+    printed output. Never writes anything. root may be None (tool-level checks
+    -- glab/rg/fzf, pkb-cli's own update status -- don't need a data repo;
+    only frontmatter/hook/index/bd/secrets/cursors do).
+
+    `push` lets a caller that already computed push_status(root) (kb web's
+    /api/admin/status also reports it separately) pass it in instead of this
+    function running its own -- push_status shells out to git twice
+    (rev-list ahead + behind), not worth doing twice per request."""
     ok, todo = [], []
 
     if root is None:
@@ -2198,6 +2266,51 @@ def cmd_doctor(args):
                             f"-- run `kb index`")
             else:
                 ok.append(f"search index is current ({indexed_count} files)")
+
+        # auto-commit: every kb mutation commits automatically, but only when root
+        # is a git repo -- and the derived files it must never stage need to
+        # actually be excluded, or every commit picks up index/lock churn
+        if not os.path.isdir(os.path.join(root, ".git")):
+            todo.append("not a git repo -- kb won't auto-commit changes; `git init` this data repo "
+                        "to get commit-per-action history")
+        else:
+            exclude_path = os.path.join(root, ".git", "info", "exclude")
+            excluded_text = ""
+            if os.path.exists(exclude_path):
+                with open(exclude_path, "r", encoding="utf-8") as f:
+                    excluded_text = f.read()
+            missing = [p for p in pc.AUTOCOMMIT_EXCLUDES if p not in excluded_text]
+            if missing:
+                todo.append(f"auto-commit excludes missing ({', '.join(missing)}) -- run `kb setup` "
+                            f"(fixed automatically on the next mutation regardless)")
+            else:
+                ok.append("auto-commit excludes (fts.db, entry locks) are in place")
+
+            # every kb mutation auto-commits, so anything left uncommitted means
+            # that failed -- most likely the pre-commit hook rejected invalid
+            # frontmatter, or something outside kb touched the repo directly
+            status = subprocess.run(["git", "-C", root, "status", "--porcelain"],
+                                     capture_output=True, text=True)
+            dirty = status.returncode == 0 and status.stdout.strip()
+            if dirty:
+                n = len(status.stdout.strip().splitlines())
+                todo.append(f"{n} uncommitted change(s) in the data repo -- auto-commit should have caught "
+                            f"this; run `git -C {root} status` (a failing pre-commit hook is the likely cause)")
+            elif status.returncode == 0:
+                ok.append("data repo is clean (auto-commit is keeping up)")
+
+            # push: local commits waiting on the remote -- informational (offline
+            # work is normal), but auto-commit's durability guarantee only holds
+            # up to "this machine" until these are actually pushed. Only reported
+            # when an upstream is actually configured -- a local-only data repo
+            # (no remote at all) is a legitimate setup, not something to flag.
+            push = push if push is not None else push_status(root)
+            if push["upstream"]:
+                if push["ahead"]:
+                    todo.append(f"{push['ahead']} commit(s) ahead of {push['upstream']}, not yet pushed "
+                                f"-- run `kb push`")
+                else:
+                    ok.append(f"up to date with {push['upstream']}")
 
     # local bd store: present and actually git-excluded
     tools = tool_status()
@@ -2266,6 +2379,18 @@ def cmd_doctor(args):
                         f"probably an interrupted write; run `kb update` to fix")
         else:
             ok.append(f"pkb-cli installed at {tarball['local'][:8]} (run `kb update` to check for a newer version)")
+
+    return ok, todo
+
+
+def cmd_doctor(args):
+    """Read-only health check -- reuses the same detection helpers as `kb setup`
+    but never writes anything, and adds a few deeper checks setup doesn't do."""
+    try:
+        root = pc.get_repo_root()
+    except SystemExit:
+        root = None
+    ok, todo = doctor_checks(root)
 
     print("kb doctor\n")
     for line in ok:
@@ -2377,7 +2502,7 @@ kb operates on a data repo found by walking up from the current directory to a
 def main():
     commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
                 "links", "show", "tag", "link", "todo", "bd", "secrets", "config", "setup",
-                "web", "service", "doctor", "update", "help"]
+                "web", "service", "doctor", "update", "push", "help"]
     parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
@@ -2497,6 +2622,15 @@ def main():
     p.add_argument("source", nargs="?", choices=["memos", "gitlab", "beads", "all"], default="all",
                     help="which source to sync (default: all)")
     p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser(
+        "push", help="push the data repo's commits to its upstream",
+        description="Push whatever `kb`'s auto-commit has accumulated to the data repo's "
+                    "configured upstream. Never guesses a remote -- if none is configured, "
+                    "set one once with `git push -u <remote> <branch>`. To push automatically "
+                    "after every auto-commit instead, set `auto_push: true` in .pkb/config.yml.",
+    )
+    p.set_defaults(func=cmd_push)
 
     p = sub.add_parser("index", help="rebuild or refresh the FTS5 search index")
     p.add_argument("--full", action="store_true", help="rebuild from scratch instead of incrementally")

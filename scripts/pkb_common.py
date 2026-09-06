@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -190,6 +191,85 @@ def write_entry(path, fm, body):
         f.write(body.lstrip("\n"))
 
 
+# Files auto-commit must never stage: the FTS index is a derived cache that
+# gets rewritten (mostly-binary diff) on every single mutation, and entry
+# locks are 0-byte flock targets that entry_lock() creates but never removes.
+# Both would turn every commit into noise if left to `git add -A` -- same
+# reasoning as .beads/ being kept out of git (see bd_store_status in kb).
+AUTOCOMMIT_EXCLUDES = (".pkb/fts.db", "*.md.lock", ".pkb/entry-new.lock")
+
+
+def _ensure_git_excludes(root):
+    exclude_path = os.path.join(root, ".git", "info", "exclude")
+    if not os.path.isdir(os.path.dirname(exclude_path)):
+        return
+    existing = ""
+    if os.path.exists(exclude_path):
+        with open(exclude_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+    missing = [p for p in AUTOCOMMIT_EXCLUDES if p not in existing]
+    if not missing:
+        return
+    with open(exclude_path, "a", encoding="utf-8") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write("\n".join(missing) + "\n")
+
+
+def git_push(root):
+    """Push root's current branch to its configured upstream. Returns
+    (ok, message) -- never raises. Fails (ok=False) with an explanatory
+    message rather than guessing when root isn't a git repo, git isn't
+    installed, or no upstream is configured (there's no safe default remote
+    to invent); `kb push` and auto-push both go through this one path so
+    they can never disagree about what counts as success."""
+    if not shutil.which("git") or not os.path.isdir(os.path.join(root, ".git")):
+        return False, "not a git repo"
+    upstream = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        capture_output=True, text=True,
+    )
+    if upstream.returncode != 0:
+        return False, "no upstream configured -- `git push -u <remote> <branch>` once to set one"
+    result = subprocess.run(["git", "-C", root, "push"], capture_output=True, text=True)
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "git push failed"
+    return True, upstream.stdout.strip()
+
+
+def git_autocommit(root, message):
+    """Stage and commit whatever changed under root's git repo, right after a
+    mutation succeeds -- so .pkb content is never more than one action away
+    from being safely in history, instead of relying on someone remembering
+    to `git commit` by hand. A no-op (never raises) if root isn't a git repo,
+    git isn't installed, or there's nothing to commit -- auto-commit must
+    never turn a successful write into a failed command.
+
+    If this data repo's config.yml sets auto_push: true, also pushes -- best
+    effort, silently, since a failed push (offline, no upstream, rejected)
+    must never block the write that triggered it; `kb doctor`/`kb push`
+    surface anything left unpushed instead.
+
+    Serialized on a repo-level lock: kb web's server handles requests on
+    separate threads, so two mutations (to two different entries, each
+    already under its own entry_lock) can otherwise call this concurrently
+    and race on git's own index/HEAD -- one `git commit` failing with a
+    swallowed error, silently leaving that write uncommitted."""
+    if not shutil.which("git") or not os.path.isdir(os.path.join(root, ".git")):
+        return
+    with entry_lock(os.path.join(root, ".git", "kb-autocommit")):
+        _ensure_git_excludes(root)
+        status = subprocess.run(["git", "-C", root, "status", "--porcelain"],
+                                 capture_output=True, text=True)
+        if status.returncode != 0 or not status.stdout.strip():
+            return
+        subprocess.run(["git", "-C", root, "add", "-A"], capture_output=True, text=True)
+        commit = subprocess.run(["git", "-C", root, "commit", "--quiet", "-m", message],
+                                 capture_output=True, text=True)
+        if commit.returncode == 0 and load_config(root).get("auto_push"):
+            git_push(root)
+
+
 @contextlib.contextmanager
 def entry_lock(path):
     """Advisory per-file lock so concurrent read-modify-write updates to the
@@ -312,6 +392,10 @@ def collect_existing_ids(root):
 DEFAULT_CONFIG = {
     "inbox_triage_days": 14,
     "fts_default_scope": "core",
+    # off by default: auto-commit is local and always safe, but pushing hits a
+    # remote/network and depends on credentials being available wherever kb
+    # runs -- opt in per data repo once that's set up (see `kb push`).
+    "auto_push": False,
     "sync": {
         "memos": {
             "base_url_env": "PKB_MEMOS_URL",
