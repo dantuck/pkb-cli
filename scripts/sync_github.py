@@ -16,6 +16,7 @@ import pkb_common as pc
 # the SOURCE_META contract.
 SOURCE_META = {
     "cli_tool": "gh",
+    "brew_formula": "gh",
     "auth_check": ["gh", "auth", "status"],
     "not_found_hint": "gh CLI not found -- `brew install gh` (+ `gh auth login`) if you want kb sync github",
     "not_authed_hint": "gh is installed but not authenticated -- run `gh auth login`",
