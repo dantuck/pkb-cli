@@ -43,11 +43,17 @@ class PushFlowTest(unittest.TestCase):
         self.root = os.path.join(base, "repo")
         os.makedirs(os.path.join(self.root, ".pkb"))
         _git(self.root, "init", "-q")
+        # `git init`'s default branch name depends on init.defaultBranch, which
+        # varies by environment (e.g. "main" via Apple Git's system gitconfig
+        # locally, "master" on a stock CI runner) -- pin it explicitly so a
+        # plain `git push` (push.default=simple) never hits a local/upstream
+        # branch-name mismatch regardless of where this test runs.
+        _git(self.root, "checkout", "-q", "-b", "main")
         _git(self.root, "config", "user.email", "test@test.com")
         _git(self.root, "config", "user.name", "test")
         _git(self.root, "remote", "add", "origin", self.remote)
         _git(self.root, "commit", "--allow-empty", "-q", "-m", "init")
-        _git(self.root, "push", "-q", "-u", "origin", "HEAD:main")
+        _git(self.root, "push", "-q", "-u", "origin", "main")
 
     def test_git_push_fails_without_upstream(self):
         no_upstream_root = os.path.join(os.path.dirname(self.root), "no-upstream")
