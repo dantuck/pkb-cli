@@ -10,6 +10,7 @@ per-source contract.
 
 - `PKB_MEMOS_URL` / `PKB_MEMOS_TOKEN` (usememos)
 - `PKB_GITLAB_PROJECT` (GitLab, via an authenticated `glab`)
+- `PKB_GITHUB_REPO` (GitHub, via an authenticated `gh`)
 
 ## Option 2: sops + age
 

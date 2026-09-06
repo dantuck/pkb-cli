@@ -19,8 +19,8 @@ kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
                                   quick-add a TODO; bare -a opens bd's interactive form
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
-kb sync [memos|gitlab|beads|all]  pull in external sources
-kb secrets                        edit encrypted memos/gitlab credentials via sops
+kb sync [memos|gitlab|github|beads|all]  pull in external sources
+kb secrets                        edit encrypted memos/gitlab/github credentials via sops
 kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
