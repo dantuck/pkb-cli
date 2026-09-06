@@ -60,10 +60,25 @@ class KBArgumentParser(argparse.ArgumentParser):
         sys.exit(2)
 
 
+def _run_captured(cmd, **kw):
+    """Run `cmd` with stderr merged into stdout, print the combined output, and
+    return the returncode -- rather than inheriting stdio directly, so kb web
+    can capture the real output via redirect_stdout (see kb_web.py's
+    _capture_stdout) instead of it only reaching the terminal kb web happens to
+    be running in, which, launched from a launchd plist, has no terminal
+    anyone can see. errors="replace" keeps this from crashing on any non-UTF-8
+    bytes a child process writes (e.g. binary noise in a library error
+    message) -- inherited stdio would have passed those bytes through as-is,
+    so decoding must not raise here either."""
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, errors="replace", **kw)
+    print(result.stdout, end="")
+    return result.returncode
+
+
 def run_script(name, args=None):
     cmd = [sys.executable, os.path.join(SCRIPT_DIR, name)] + (args or [])
-    result = subprocess.run(cmd)
-    return result.returncode
+    return _run_captured(cmd)
 
 
 def _reindex_fast(root):
@@ -842,10 +857,10 @@ def cmd_sync(args):
         script_path = os.path.join(SCRIPT_DIR, scripts[t])
         if use_sops and t in ("memos", "gitlab"):
             cmd_str = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)}"
-            result = subprocess.run(["sops", "exec-env", secrets_path, cmd_str], env=sops_key_env())
+            target_rc = _run_captured(["sops", "exec-env", secrets_path, cmd_str], env=sops_key_env())
         else:
-            result = subprocess.run([sys.executable, script_path])
-        rc = result.returncode or rc
+            target_rc = _run_captured([sys.executable, script_path])
+        rc = target_rc or rc
     pc.git_autocommit(root, f"sync: {', '.join(targets)}")
     return rc
 

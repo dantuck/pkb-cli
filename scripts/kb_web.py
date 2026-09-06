@@ -520,22 +520,24 @@ def api_todo_action(h, root, issue_id, action):
 # These call straight through to the same cmd_* functions the CLI uses, via a
 # throwaway argparse.Namespace stand-in -- not custom subprocess plumbing --
 # so kb web can never drift from what `kb index`/`kb validate`/`kb sync`/`kb
-# doctor` actually do. cmd_index/validate/sync shell out to sibling scripts
-# with inherited stdio (same as the CLI), so their real output lands in kb
-# web's own terminal rather than the JSON response; only cmd_doctor is plain
-# Python prints, so its output can be captured and returned in full.
+# doctor` actually do. cmd_index/validate/sync shell out to sibling scripts,
+# but capture+print their output (rather than inheriting stdio) specifically
+# so _capture_stdout can grab it here and return it in the JSON response --
+# otherwise it would only ever reach the terminal kb web happens to be
+# running in, which, launched from a launchd plist, has no terminal anyone
+# can see.
 
 @route("POST", "/api/index")
 def api_index(h, root):
     args = types.SimpleNamespace(full=bool((h.read_json() or {}).get("full")))
-    rc = _kb().cmd_index(args)
-    h.send_json({"ok": rc == 0, "note": "full output printed in kb web's own terminal"})
+    rc, output = _capture_stdout(_kb().cmd_index, args)
+    h.send_json({"ok": rc == 0, "output": output})
 
 
 @route("POST", "/api/validate")
 def api_validate(h, root):
-    rc = _kb().cmd_validate(types.SimpleNamespace())
-    h.send_json({"ok": rc == 0, "note": "full output printed in kb web's own terminal"})
+    rc, output = _capture_stdout(_kb().cmd_validate, types.SimpleNamespace())
+    h.send_json({"ok": rc == 0, "output": output})
 
 
 @route("POST", "/api/sync")
@@ -545,8 +547,8 @@ def api_sync(h, root):
         h.send_json({"error": f"unknown source '{source}'"}, status=400)
         return
     args = types.SimpleNamespace(source=None if source == "all" else source)
-    rc = _kb().cmd_sync(args)
-    h.send_json({"ok": rc == 0, "note": "full output printed in kb web's own terminal"})
+    rc, output = _capture_stdout(_kb().cmd_sync, args)
+    h.send_json({"ok": rc == 0, "output": output})
 
 
 @route("GET", "/api/doctor")
