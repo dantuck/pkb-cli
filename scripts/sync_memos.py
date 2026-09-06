@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ingest usememos memos into sources/memos/, one markdown file per memo.
 
-Contract (see docs/spec.md §4):
+Contract (see docs/reference/ingestion.md):
 1. Read cursor from .pkb/cursors.json.
 2. Fetch only memos created/updated after the cursor.
 3. Write one file per item into sources/memos/, keyed on source_id (idempotent).
