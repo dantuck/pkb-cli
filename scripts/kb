@@ -1697,10 +1697,13 @@ def _fetch_remote_sha(slug=TOOL_REPO_SLUG, branch=TOOL_BRANCH):
 
 
 def _read_local_version():
+    """Returns the marker's stripped content, "" if it exists but is empty/corrupt
+    (distinct from None so callers can tell "never installed via tarball" apart
+    from "installed, but the marker got truncated"), or None if it doesn't exist."""
     if not os.path.exists(VERSION_FILE):
         return None
     with open(VERSION_FILE, encoding="utf-8") as f:
-        return f.read().strip() or None
+        return f.read().strip()
 
 
 def _write_local_version(sha):
@@ -1708,12 +1711,33 @@ def _write_local_version(sha):
         f.write(sha + "\n")
 
 
+def _write_file_atomic(path, fileobj, mode=None):
+    """Write fileobj's contents to path via a same-directory temp file + os.replace,
+    so a reader never observes a partially-written file and a process killed
+    mid-write leaves the original untouched -- important here because an update
+    can be overwriting kb's own currently-running entry point."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            shutil.copyfileobj(fileobj, f)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
 def _apply_tarball_update(sha, slug=TOOL_REPO_SLUG):
     """Download the archive for `sha` and overwrite TOOL_ROOT's files with it in
     place (no directory swap -- this process is running out of TOOL_ROOT, so
     replacing file contents is safer than deleting/recreating the directory).
-    Files removed upstream are left behind rather than deleted; harmless clutter,
-    simpler and safer than trying to reconcile a delete list mid-update."""
+    Each file is written atomically (see _write_file_atomic) since one of them
+    is scripts/kb itself. Files removed upstream are left behind rather than
+    deleted; harmless clutter, simpler and safer than trying to reconcile a
+    delete list mid-update."""
     data = _github_request(f"https://github.com/{slug}/archive/{sha}.tar.gz")
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         members = tar.getmembers()
@@ -1728,11 +1752,8 @@ def _apply_tarball_update(sha, slug=TOOL_REPO_SLUG):
             if member.isdir():
                 os.makedirs(dest_path, exist_ok=True)
             elif member.isfile():
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                with open(dest_path, "wb") as f:
-                    shutil.copyfileobj(tar.extractfile(member), f)
-                if member.mode & 0o111:
-                    os.chmod(dest_path, member.mode & 0o777)
+                mode = (member.mode & 0o777) if (member.mode & 0o111) else None
+                _write_file_atomic(dest_path, tar.extractfile(member), mode=mode)
 
 
 def tarball_status(fetch=False):
@@ -2063,6 +2084,9 @@ def cmd_doctor(args):
         if tarball["local"] is None:
             todo.append(f"no version marker at {os.path.relpath(VERSION_FILE, TOOL_ROOT)} -- "
                         f"`kb update` won't know what to compare against; reinstall via install.sh to fix")
+        elif not tarball["local"]:
+            todo.append(f"version marker at {os.path.relpath(VERSION_FILE, TOOL_ROOT)} exists but is empty -- "
+                        f"probably an interrupted write; run `kb update` to fix")
         else:
             ok.append(f"pkb-cli installed at {tarball['local'][:8]} (run `kb update` to check for a newer version)")
 
@@ -2133,11 +2157,17 @@ def _cmd_update_tarball(args):
         print(f"error: couldn't check for updates: {e}", file=sys.stderr)
         return 1
 
-    if local_sha == remote_sha:
+    if not local_sha:
+        # exists but empty/corrupt (e.g. an interrupted _write_local_version) --
+        # distinct from a missing marker: still install-able, just can't say
+        # whether it's "behind"; treat it as needing a refresh either way.
+        print(f"warning: {VERSION_FILE} exists but is empty -- can't tell what's currently "
+              f"installed, refreshing to {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({remote_sha[:8]})")
+    elif local_sha == remote_sha:
         print(f"kb is up to date with {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({local_sha[:8]})")
         return 0
-
-    print(f"kb is behind {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({local_sha[:8]} -> {remote_sha[:8]})")
+    else:
+        print(f"kb is behind {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({local_sha[:8]} -> {remote_sha[:8]})")
 
     if args.check:
         print("run `kb update` (without --check) to pull")
