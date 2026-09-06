@@ -556,6 +556,40 @@ def api_doctor(h, root):
     h.send_json({"ok": rc == 0, "output": output})
 
 
+@route("GET", "/api/admin/status")
+def api_admin_status(h, root):
+    """Structured health snapshot -- the same read-only checks `kb doctor`
+    reports, as data instead of printed text, plus inbox/todo counts and
+    push status. Cheap enough (a few file/sqlite checks, no network) that the
+    web UI polls this on a timer to surface "needs attention" without anyone
+    opening Admin and clicking Doctor themselves."""
+    kb = _kb()
+    push = kb.push_status(root)
+    ok, todo = kb.doctor_checks(root, push=push)
+    inbox_count = len(kb.inbox_list(root))
+    todo_open_count = None
+    if kb.bd_available():
+        try:
+            todo_open_count = len(kb.bd_list(root))
+        except RuntimeError:
+            todo_open_count = None
+    h.send_json({
+        "ok": ok, "todo": todo,
+        "inbox_count": inbox_count, "todo_open_count": todo_open_count,
+        "needs_attention": bool(todo),
+        "push": push,
+    })
+
+
+@route("POST", "/api/push")
+def api_push(h, root):
+    """Push whatever auto-commit has accumulated to the data repo's upstream --
+    the web equivalent of `kb push`. Reuses git_push() directly (not cmd_push,
+    which prints to stdout) since there's no terminal to print into here."""
+    ok, message = _kb().pc.git_push(root)
+    h.send_json({"ok": ok, "message": message})
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     root = None  # set by serve() before the server starts handling requests
 

@@ -70,7 +70,16 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
 - **Admin** (header button) — **Reindex** (`kb index`), **Validate**
   (`kb validate`), **Doctor** (`kb doctor`), and **Sync** against a chosen
   source (`kb sync [memos|gitlab|beads|all]`), with command output shown
-  inline.
+  inline. The same read-only checks `kb doctor` reports (frontmatter,
+  pre-commit hook, index freshness, whether the data repo is a git repo and
+  actually clean, bd/secrets/tool setup, ...) also run automatically: they're
+  polled every couple of minutes for as long as the tab is open, shown as a
+  live ok/todo list in the drawer, and surfaced as a red count on the Admin
+  button itself the moment something needs attention — no need to open the
+  drawer and click Doctor to find out. A **Push** button also appears in the
+  drawer whenever there are unpushed commits (`kb push`'s web equivalent),
+  showing how many and to which upstream — see [how to use a data
+  repo](use-a-data-repo.md) for the push flow, including auto-push.
 - **Theme toggle** — light / dark / system, in the header.
 
 ## When to reach for it instead of the CLI

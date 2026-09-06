@@ -28,7 +28,8 @@
     </button>
     <button class="pill-btn" title="Admin" @click="adminOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      Admin
+      Admin <span class="pill-count" :class="{ 'pill-count-hidden': !adminStatusLoaded, 'pill-count-empty': adminStatusLoaded && !adminStatus.needs_attention, 'pill-count-warn': adminStatus.needs_attention }"
+                  x-text="adminStatusLoaded ? adminStatus.todo.length : ''"></span>
     </button>
     <button class="icon-btn" :title="themeLabel" @click="toggleTheme()">
       <svg x-show="theme === 'light'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
@@ -59,9 +60,26 @@
       <option value="gitlab">gitlab</option><option value="beads">beads</option>
     </select>
     <button class="btn btn-primary" @click="adminSync()">Sync</button>
+    <button class="btn" x-show="adminStatus.push.upstream && adminStatus.push.ahead"
+            @click="adminPush()">
+      Push <span x-text="adminStatus.push.ahead"></span> commit(s) to <span x-text="adminStatus.push.upstream"></span>
+    </button>
     <span id="admin-msg" x-text="adminMsg"></span>
   </div>
   <pre id="admin-output" x-show="adminOutput" x-text="adminOutput"></pre>
+
+  <div id="admin-status" x-show="adminStatusLoaded">
+    <p id="admin-status-summary" :class="{ warn: adminStatus.needs_attention }"
+       x-text="adminStatus.needs_attention ? `${adminStatus.todo.length} thing(s) need attention` : 'all clear'"></p>
+    <ul id="admin-check-list">
+      <template x-for="line in adminStatus.todo" :key="'todo:' + line">
+        <li class="todo" x-text="line"></li>
+      </template>
+      <template x-for="line in adminStatus.ok" :key="'ok:' + line">
+        <li class="ok" x-text="line"></li>
+      </template>
+    </ul>
+  </div>
 </div>
 
 <div class="drawer-backdrop" :class="{ open: inboxDrawerOpen }" @click="inboxDrawerOpen = false"></div>
