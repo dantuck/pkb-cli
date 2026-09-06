@@ -47,10 +47,12 @@ directly) and `sync_gitlab.py`/`sync_github.py` for the full shape.
 6. Exit non-zero with a clear message on auth/network failure; never
    partially advance the cursor on failure.
 
-Runnable via cron, systemd timer, or a Claude Code slash command (`/sync`).
-Since ingestion requires network/API access, it is explicitly the *only* part
-of the system allowed to depend on connectivity — search and editing must
-work without it.
+Runnable by hand, via a Claude Code slash command (`/sync`), or on a recurring
+schedule with `kb sync-service install` (a launchd LaunchAgent on macOS, a
+systemd --user timer on Linux; `--interval-minutes` sets the cadence, default
+60). Since ingestion requires network/API access, it is explicitly the *only*
+part of the system allowed to depend on connectivity — search and editing
+must work without it.
 
 See [how-to: set up ingestion credentials](../how-to/set-up-ingestion-credentials.md)
 for configuring the scripts, and [how-to: triage the
