@@ -15,8 +15,14 @@ Zero-setup search without this tool at all: [docs/search.md](docs/search.md).
 curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | bash
 ```
 
-Clones this repo to `~/pkb-cli` (override with `$PKB_CLI_HOME`) and symlinks `kb`
-onto your PATH. Safe to re-run — pulls latest and re-runs setup idempotently.
+Downloads a tarball snapshot of this repo to `~/pkb-cli` (override with
+`$PKB_CLI_HOME`) and symlinks `kb` onto your PATH. Safe to re-run — updates in
+place and re-runs setup idempotently. **`python3` is the only requirement** —
+no `git`, `curl`, or `tar` needed; the installer's own download/extract and
+`kb update` both use Python's stdlib `urllib`/`tarfile` against the GitHub API,
+not a git checkout. (If `$PKB_CLI_HOME` already happens to be a git checkout —
+e.g. you cloned it yourself to contribute — the installer detects that and
+runs `git pull` there instead, so that workflow isn't disrupted.)
 
 The symlink target is the first of `~/.local/bin`, `/opt/homebrew/bin`, or
 `/usr/local/bin` that already exists **and** is already on your `PATH` (in that

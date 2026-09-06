@@ -5,6 +5,7 @@ one-shot per invocation. Operates on a data repo (found by walking up from cwd t
 import argparse
 import calendar
 import difflib
+import io
 import json
 import os
 import re
@@ -13,13 +14,24 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 TOOL_ROOT = os.path.dirname(SCRIPT_DIR)  # the pkb-cli checkout itself, not the data repo
 sys.path.insert(0, SCRIPT_DIR)
 import pkb_common as pc
+
+# Where kb itself comes from and how it self-updates when TOOL_ROOT isn't a git
+# checkout (the common case: install.sh downloads a tarball snapshot, no git
+# required). A git checkout (e.g. a contributor's manual `git clone`) instead
+# uses `_git`/`update_status` below, which take priority when TOOL_ROOT/.git exists.
+TOOL_REPO_SLUG = os.environ.get("PKB_CLI_REPO", "dantuck/pkb-cli")
+TOOL_BRANCH = os.environ.get("PKB_CLI_BRANCH", "main")
+VERSION_FILE = os.path.join(TOOL_ROOT, ".pkb-cli-version")
 
 
 class KBArgumentParser(argparse.ArgumentParser):
@@ -1672,6 +1684,68 @@ def _git(*args, cwd=TOOL_ROOT):
     return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
 
 
+def _github_request(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "pkb-cli"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read()
+
+
+def _fetch_remote_sha(slug=TOOL_REPO_SLUG, branch=TOOL_BRANCH):
+    """Latest commit sha on `branch`, via the GitHub API (no auth, public repo)."""
+    data = json.loads(_github_request(f"https://api.github.com/repos/{slug}/commits/{branch}"))
+    return data["sha"]
+
+
+def _read_local_version():
+    if not os.path.exists(VERSION_FILE):
+        return None
+    with open(VERSION_FILE, encoding="utf-8") as f:
+        return f.read().strip() or None
+
+
+def _write_local_version(sha):
+    with open(VERSION_FILE, "w", encoding="utf-8") as f:
+        f.write(sha + "\n")
+
+
+def _apply_tarball_update(sha, slug=TOOL_REPO_SLUG):
+    """Download the archive for `sha` and overwrite TOOL_ROOT's files with it in
+    place (no directory swap -- this process is running out of TOOL_ROOT, so
+    replacing file contents is safer than deleting/recreating the directory).
+    Files removed upstream are left behind rather than deleted; harmless clutter,
+    simpler and safer than trying to reconcile a delete list mid-update."""
+    data = _github_request(f"https://github.com/{slug}/archive/{sha}.tar.gz")
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        members = tar.getmembers()
+        top = members[0].name.split("/")[0] + "/"
+        for member in members:
+            if not member.name.startswith(top):
+                continue
+            rel = member.name[len(top):]
+            if not rel:
+                continue
+            dest_path = os.path.join(TOOL_ROOT, rel)
+            if member.isdir():
+                os.makedirs(dest_path, exist_ok=True)
+            elif member.isfile():
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                with open(dest_path, "wb") as f:
+                    shutil.copyfileobj(tar.extractfile(member), f)
+                if member.mode & 0o111:
+                    os.chmod(dest_path, member.mode & 0o777)
+
+
+def tarball_status(fetch=False):
+    """Version check for a non-git (tarball) pkb-cli install -- the counterpart to
+    update_status() for git checkouts. fetch=False (used by `kb doctor`) only reads
+    the local .pkb-cli-version marker, no network; fetch=True (used by `kb update`)
+    also queries GitHub for the latest commit on TOOL_BRANCH."""
+    result = {"installed": os.path.exists(VERSION_FILE), "local": _read_local_version(), "remote": None}
+    if fetch and result["local"] is not None:
+        result["remote"] = _fetch_remote_sha()
+    return result
+
+
 def update_status(fetch=False):
     """Compare this pkb-cli checkout's HEAD against its upstream.
 
@@ -1977,12 +2051,20 @@ def cmd_doctor(args):
     # here (that's `kb update`'s job), so this can go stale but never blocks/slows
     # down a doctor run or touches the network on its own.
     update = update_status(fetch=False)
-    if update["is_git"] and update["upstream"]:
-        if update["behind"]:
-            todo.append(f"pkb-cli is {update['behind']} commit(s) behind {update['upstream']} as of the last "
-                        f"fetch -- run `kb update` to check for real and pull")
+    if update["is_git"]:
+        if update["upstream"]:
+            if update["behind"]:
+                todo.append(f"pkb-cli is {update['behind']} commit(s) behind {update['upstream']} as of the last "
+                            f"fetch -- run `kb update` to check for real and pull")
+            else:
+                ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
+    else:
+        tarball = tarball_status(fetch=False)
+        if tarball["local"] is None:
+            todo.append(f"no version marker at {os.path.relpath(VERSION_FILE, TOOL_ROOT)} -- "
+                        f"`kb update` won't know what to compare against; reinstall via install.sh to fix")
         else:
-            ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
+            ok.append(f"pkb-cli installed at {tarball['local'][:8]} (run `kb update` to check for a newer version)")
 
     print("kb doctor\n")
     for line in ok:
@@ -1995,11 +2077,15 @@ def cmd_doctor(args):
 
 
 def cmd_update(args):
-    """Fetch + check this pkb-cli checkout against its upstream; pull if behind
-    and clean. The only kb command besides `kb sync` that touches the network."""
+    """Check this pkb-cli install against upstream; update if behind. Branches on
+    how it was installed: a git checkout (e.g. a contributor's manual `git clone`)
+    uses git fetch/pull; the common case -- install.sh's tarball snapshot, no git
+    required -- compares the local .pkb-cli-version marker against the latest
+    commit sha via the GitHub API and, if different, overwrites TOOL_ROOT's files
+    with a fresh tarball. The only kb command besides `kb sync` that touches the
+    network."""
     if not os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
-        print(f"error: {TOOL_ROOT} isn't a git checkout -- can't check for updates", file=sys.stderr)
-        return 1
+        return _cmd_update_tarball(args)
 
     fetch = _git("fetch", "--quiet", "origin")
     if fetch.returncode != 0:
@@ -2031,6 +2117,39 @@ def cmd_update(args):
         print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
         return 1
     print(pull.stdout.strip())
+    print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
+    return 0
+
+
+def _cmd_update_tarball(args):
+    local_sha = _read_local_version()
+    if local_sha is None:
+        print(f"error: no version marker at {VERSION_FILE} -- reinstall via install.sh", file=sys.stderr)
+        return 1
+
+    try:
+        remote_sha = _fetch_remote_sha()
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        print(f"error: couldn't check for updates: {e}", file=sys.stderr)
+        return 1
+
+    if local_sha == remote_sha:
+        print(f"kb is up to date with {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({local_sha[:8]})")
+        return 0
+
+    print(f"kb is behind {TOOL_REPO_SLUG}@{TOOL_BRANCH} ({local_sha[:8]} -> {remote_sha[:8]})")
+
+    if args.check:
+        print("run `kb update` (without --check) to pull")
+        return 1
+
+    try:
+        _apply_tarball_update(remote_sha)
+    except (urllib.error.URLError, OSError, tarfile.TarError) as e:
+        print(f"error: update failed: {e}", file=sys.stderr)
+        return 1
+    _write_local_version(remote_sha)
+    print(f"updated -> {remote_sha[:8]}")
     print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
     return 0
 
