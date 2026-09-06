@@ -30,6 +30,14 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(__file__))
 import pkb_common as pc
 
+# Read by kb's discover_sync_sources() -- see docs/reference/ingestion.md for
+# the SOURCE_META contract. No cli_tool: memos talks straight to the REST API
+# over urllib, no external CLI to check for.
+SOURCE_META = {
+    "env_keys": ["PKB_MEMOS_URL", "PKB_MEMOS_TOKEN"],
+    "uses_sops": True,
+}
+
 
 def memo_source_id(memo):
     # name looks like "memos/101"

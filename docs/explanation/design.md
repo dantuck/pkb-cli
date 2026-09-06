@@ -2,7 +2,7 @@
 
 A portable, offline-capable personal knowledge base with **Diataxis as the
 core content model**, extended (not diluted) by journaling and multi-source
-ingestion (usememos, GitLab issues, beads).
+ingestion (usememos, GitLab issues, GitHub issues, beads).
 
 Non-negotiable principles, in priority order:
 
@@ -12,7 +12,7 @@ Non-negotiable principles, in priority order:
    markdown files. No server, database daemon, or network access required to
    read, write, or search it.
 3. **Offline-first.** All indexing and search tooling must run fully
-   locally. Sync to external sources (usememos, GitLab, beads) is a one-way
+   locally. Sync to external sources (usememos, GitLab, GitHub, beads) is a one-way
    *ingestion* step, never a runtime dependency.
 4. **Non-core content never competes with core content.** Journals, inbox
    captures, and raw synced source dumps are extensions that link to or feed
@@ -39,7 +39,7 @@ framework itself.
 
 - No web UI or server process — CLI/file-based only, per the portability
   requirement.
-- No real-time sync/webhooks from usememos/GitLab/beads — polling/cursor-based
+- No real-time sync/webhooks from usememos/GitLab/GitHub/beads — polling/cursor-based
   batch sync only.
 - No automatic Diataxis classification of inbox content — triage is
   human-in-the-loop.
@@ -59,7 +59,7 @@ The tool was built in phases, each depending on the last:
 | 5 | `index_fts.py` + `kb search` | 1, 2 |
 | 6 | `sync_memos.py` (first ingestion source — usememos is the active capture point) | 1, 2 |
 | 7 | `triage_report.py` + `kb triage`, `kb inbox` | 6 |
-| 8 | `sync_gitlab.py`, `sync_beads.py` (same contract as memos) | 1, 2 |
+| 8 | `sync_gitlab.py`, `sync_github.py`, `sync_beads.py` (same contract as memos) | 1, 2 |
 | 9 | `kb links` (graph/backlink queries from frontmatter) | 2 |
 | 10 | Embeddings layer (`index_embeddings.py`) — only if FTS5 relevance proves insufficient | 5 |
 | 11 | Monthly journal rollups + on-this-day look-back | 8 (journal volume exists) — done |

@@ -18,7 +18,24 @@ from datetime import datetime, timedelta, timezone
 CORE_TYPES = ("tutorial", "how-to", "reference", "explanation")
 EXTENSION_TYPES = ("journal", "inbox", "source")
 ALL_TYPES = CORE_TYPES + EXTENSION_TYPES
-VALID_SOURCES = ("manual", "memos", "gitlab", "beads")
+
+
+def _discover_source_names():
+    """Sync source names derived from sync_<name>.py scripts alongside this file,
+    plus "manual" for hand-written entries. Keeps frontmatter's `source` field
+    validation (VALID_SOURCES) automatically in sync with whatever sync scripts
+    actually exist -- adding a new sync_<name>.py registers its source name here
+    too, no separate list to edit or forget."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    names = [
+        fname[len("sync_"):-len(".py")]
+        for fname in sorted(os.listdir(script_dir))
+        if fname.startswith("sync_") and fname.endswith(".py")
+    ]
+    return ("manual", *names)
+
+
+VALID_SOURCES = _discover_source_names()
 
 ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}(-\d+)?$")
 
@@ -404,6 +421,10 @@ DEFAULT_CONFIG = {
         },
         "gitlab": {
             "project_env": "PKB_GITLAB_PROJECT",
+            "inbox_all_issues": True,
+        },
+        "github": {
+            "repo_env": "PKB_GITHUB_REPO",
             "inbox_all_issues": True,
         },
         "beads": {

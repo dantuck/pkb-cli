@@ -27,6 +27,7 @@ pkb/
   sources/
     memos/
     gitlab/
+    github/
     beads/
 
   .pkb/

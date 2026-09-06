@@ -9,8 +9,8 @@ created: 2026-08-31T14:23:00-06:00   # required, ISO 8601 with offset
 updated: 2026-08-31T14:23:00-06:00   # required, bumped on every edit
 type: reference                   # required: tutorial|how-to|reference|explanation|journal|inbox|source
 extension: null                   # null | journal | inbox | source — null means fully-triaged core content
-source: manual                    # manual|memos|gitlab|beads
-source_id: null                   # external id (memo id, issue iid, bead id) if source != manual
+source: manual                    # manual|memos|gitlab|github|beads
+source_id: null                   # external id (memo id, issue iid/number, bead id) if source != manual
 tags: [tailscale, networking]
 links: [2026-08-20-0900]          # ids of related pkb entries
 title: "Tailscale sidecar config for Synology"

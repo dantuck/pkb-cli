@@ -69,7 +69,7 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   or permanently delete it.
 - **Admin** (header button) — **Reindex** (`kb index`), **Validate**
   (`kb validate`), **Doctor** (`kb doctor`), and **Sync** against a chosen
-  source (`kb sync [memos|gitlab|beads|all]`), with command output shown
+  source (`kb sync [memos|gitlab|github|beads|all]`), with command output shown
   inline. The same read-only checks `kb doctor` reports (frontmatter,
   pre-commit hook, index freshness, whether the data repo is a git repo and
   actually clean, bd/secrets/tool setup, ...) also run automatically: they're

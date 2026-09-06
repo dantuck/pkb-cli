@@ -543,7 +543,9 @@ def api_validate(h, root):
 @route("POST", "/api/sync")
 def api_sync(h, root):
     source = (h.read_json() or {}).get("source", "all")
-    if source not in ("memos", "gitlab", "beads", "all"):
+    # derived from discover_sync_sources() (not a hardcoded list) so a new
+    # sync_<name>.py script is immediately syncable from the web UI too
+    if source not in (*_kb().discover_sync_sources().keys(), "all"):
         h.send_json({"error": f"unknown source '{source}'"}, status=400)
         return
     args = types.SimpleNamespace(source=None if source == "all" else source)

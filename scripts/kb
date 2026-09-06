@@ -5,6 +5,7 @@ one-shot per invocation. Operates on a data repo (found by walking up from cwd t
 import argparse
 import calendar
 import difflib
+import importlib
 import io
 import json
 import os
@@ -79,6 +80,75 @@ def _run_captured(cmd, **kw):
 def run_script(name, args=None):
     cmd = [sys.executable, os.path.join(SCRIPT_DIR, name)] + (args or [])
     return _run_captured(cmd)
+
+
+def discover_sync_sources():
+    """Auto-discover sync_<name>.py scripts in SCRIPT_DIR as pluggable sync sources.
+
+    Adding a new one -- with an optional module-level SOURCE_META dict (see
+    docs/reference/ingestion.md for the contract) -- registers it as `kb sync
+    <name>` and, wherever SOURCE_META declares cli_tool/env_keys, in doctor/
+    setup's health checks and the sops-injection decision, without any other
+    file needing an edit. A script with no SOURCE_META (or an empty one) still
+    works via `kb sync <name>`, just opts out of those automated checks.
+
+    Returns {name: (filename, meta)}, sorted by name so `kb sync all`, the
+    argparse choices list, and --help output all have a stable order.
+
+    This runs on every `kb` invocation (argparse needs the choices list up
+    front), so an import error in one sync_<name>.py must not take down every
+    `kb` command -- it's skipped with a warning instead, same as a broken
+    plugin in any discover-and-load system."""
+    sources = {}
+    for fname in sorted(os.listdir(SCRIPT_DIR)):
+        if fname.startswith("sync_") and fname.endswith(".py"):
+            name = fname[len("sync_"):-len(".py")]
+            try:
+                module = importlib.import_module(f"sync_{name}")
+            except Exception as e:
+                print(f"warning: {fname} failed to load, skipping (kb sync {name} unavailable): {e}",
+                      file=sys.stderr)
+                continue
+            sources[name] = (fname, getattr(module, "SOURCE_META", {}))
+    return sources
+
+
+def sync_tool_todos(sync_sources, tools):
+    """todo lines for any discovered sync source whose SOURCE_META declares a
+    cli_tool that's missing, or installed but (per auth_check) not
+    authenticated. Shared by `kb setup` and `kb doctor` so the two can't drift
+    on wording for the same check."""
+    todo = []
+    for name, (_fname, meta) in sync_sources.items():
+        cli_tool = meta.get("cli_tool")
+        if not cli_tool or not meta.get("not_found_hint"):
+            continue
+        if tools[cli_tool]:
+            if meta.get("auth_check") and not tools.get(f"{cli_tool}_auth"):
+                todo.append(meta.get("not_authed_hint", f"{cli_tool} is installed but not authenticated"))
+        else:
+            todo.append(meta["not_found_hint"])
+    return todo
+
+
+def sync_configured_sources(sync_sources, tools):
+    """Names of discovered sync sources that look ready to run right now, per
+    SOURCE_META: env_keys (if any) all set in the environment, and (if
+    cli_tool/auth_check are declared) that tool authenticated. A source with
+    neither env_keys nor cli_tool declared (SOURCE_META is empty/absent) is
+    never reported here -- there's nothing to check."""
+    configured = []
+    for name, (_fname, meta) in sync_sources.items():
+        env_keys = meta.get("env_keys") or []
+        cli_tool = meta.get("cli_tool")
+        if not env_keys and not cli_tool:
+            continue
+        if env_keys and not all(os.environ.get(k) for k in env_keys):
+            continue
+        if cli_tool and not (tools.get(f"{cli_tool}_auth") if meta.get("auth_check") else tools.get(cli_tool)):
+            continue
+        configured.append(name)
+    return configured
 
 
 def _reindex_fast(root):
@@ -837,16 +907,12 @@ def cmd_triage(args):
 
 
 def cmd_sync(args):
-    scripts = {
-        "memos": "sync_memos.py",
-        "gitlab": "sync_gitlab.py",
-        "beads": "sync_beads.py",
-    }
-    # memos/gitlab read credentials from the environment; if this data repo keeps
-    # them sops-encrypted, decrypt straight into that one subprocess's env via
-    # `sops exec-env` -- no wrapping needed at the call site, and the values never
-    # pass through kb's own environment or output. beads has no secret to inject.
-    targets = list(scripts.keys()) if args.source in (None, "all") else [args.source]
+    sync_sources = discover_sync_sources()
+    # sources whose SOURCE_META sets uses_sops read credentials from the environment;
+    # if this data repo keeps them sops-encrypted, decrypt straight into that one
+    # subprocess's env via `sops exec-env` -- no wrapping needed at the call site,
+    # and the values never pass through kb's own environment or output.
+    targets = list(sync_sources.keys()) if args.source in (None, "all") else [args.source]
     root = pc.get_repo_root()
     secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
     use_sops = shutil.which("sops") and os.path.exists(secrets_path)
@@ -854,8 +920,9 @@ def cmd_sync(args):
     rc = 0
     for t in targets:
         print(f"--- sync: {t} ---")
-        script_path = os.path.join(SCRIPT_DIR, scripts[t])
-        if use_sops and t in ("memos", "gitlab"):
+        fname, meta = sync_sources[t]
+        script_path = os.path.join(SCRIPT_DIR, fname)
+        if use_sops and meta.get("uses_sops"):
             cmd_str = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)}"
             target_rc = _run_captured(["sops", "exec-env", secrets_path, cmd_str], env=sops_key_env())
         else:
@@ -1661,11 +1728,25 @@ def hook_managed_validate_path(content):
 
 
 def tool_status():
-    status = {t: shutil.which(t) is not None for t in ("bd", "sops", "glab", "rg", "fzf")}
-    status["glab_auth"] = (
-        subprocess.run(["glab", "auth", "status"], capture_output=True).returncode == 0
-        if status["glab"] else False
-    )
+    """Presence (and, where SOURCE_META declares an auth_check, auth status) of
+    every CLI tool kb cares about: the always-checked ones (sops for encrypted
+    credentials, rg/fzf for Tier 1 search) plus whatever cli_tool each
+    auto-discovered sync source declares -- so a new sync_<name>.py with a
+    cli_tool/auth_check in its SOURCE_META gets a "<tool>"/"<tool>_auth" entry
+    here automatically, no edit needed."""
+    sync_sources = discover_sync_sources()
+    cli_tools = {"sops", "rg", "fzf"}
+    for _name, (_fname, meta) in sync_sources.items():
+        if meta.get("cli_tool"):
+            cli_tools.add(meta["cli_tool"])
+    status = {t: shutil.which(t) is not None for t in cli_tools}
+    for _name, (_fname, meta) in sync_sources.items():
+        cli_tool, auth_check = meta.get("cli_tool"), meta.get("auth_check")
+        if cli_tool and auth_check:
+            status[f"{cli_tool}_auth"] = (
+                subprocess.run(auth_check, capture_output=True).returncode == 0
+                if status[cli_tool] else False
+            )
     return status
 
 
@@ -1988,18 +2069,15 @@ def cmd_setup(args):
                 ok.append(".pkb/secrets.enc.env already set up")
             elif tools["sops"]:
                 example_path = os.path.join(SCRIPT_DIR, "..", "templates", "secrets.env.example")
-                todo.append("run `kb secrets` to create encrypted memos/gitlab credentials "
+                todo.append("run `kb secrets` to create encrypted memos/gitlab/github credentials "
                             f"(see {os.path.normpath(example_path)} for the expected keys)")
             else:
                 todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
-                            "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT directly")
+                            "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT/PKB_GITHUB_REPO directly")
 
-    # 5. glab (required for GitLab sync)
-    if tools["glab"]:
-        if not tools["glab_auth"]:
-            todo.append("glab is installed but not authenticated -- run `glab auth login` for kb sync gitlab")
-    else:
-        todo.append("glab CLI not found -- `brew install glab` (+ `glab auth login`) if you want kb sync gitlab")
+    # 5. cli_tool sync sources (e.g. glab/gh, required for GitLab/GitHub issue sync)
+    sync_sources = discover_sync_sources()
+    todo.extend(sync_tool_todos(sync_sources, tools))
 
     # 6. rg/fzf (Tier 1 search, optional -- kb search/index work without them)
     missing_search_tools = [t for t in ("rg", "fzf") if not tools[t]]
@@ -2008,17 +2086,11 @@ def cmd_setup(args):
                      f"search (`brew install ripgrep fzf`); kb search/index don't need them")
 
     # 7. what's actually configured for sync right now (informational)
-    configured = []
-    if os.environ.get("PKB_MEMOS_URL") and os.environ.get("PKB_MEMOS_TOKEN"):
-        configured.append("memos")
-    if os.environ.get("PKB_GITLAB_PROJECT") and tools["glab_auth"]:
-        configured.append("gitlab")
-    if tools["bd"]:
-        configured.append("beads")
+    configured = sync_configured_sources(sync_sources, tools)
     if configured:
         ok.append(f"sync sources ready in this shell: {', '.join(configured)}")
     else:
-        todo.append("no sync source has credentials in this shell yet (memos/gitlab need env vars, "
+        todo.append("no sync source has credentials in this shell yet (memos/gitlab/github need env vars, "
                      "see README 'Ingestion credentials')")
 
     print("kb setup\n")
@@ -2344,15 +2416,12 @@ def doctor_checks(root, push=None):
         # secrets
         sops_configured, secrets_exists = secrets_status(root)
         if sops_configured and not secrets_exists:
-            todo.append("no .pkb/secrets.enc.env yet -- run `kb secrets` if you sync memos/gitlab")
+            todo.append("no .pkb/secrets.enc.env yet -- run `kb secrets` if you sync memos/gitlab/github")
         elif sops_configured:
             ok.append(".pkb/secrets.enc.env is present")
 
-    # glab / rg / fzf -- not data-repo-specific, always checked
-    if tools["glab"] and not tools["glab_auth"]:
-        todo.append("glab is installed but not authenticated -- run `glab auth login`")
-    elif not tools["glab"]:
-        todo.append("glab CLI not found -- needed for kb sync gitlab")
+    # cli_tool sync sources / rg / fzf -- not data-repo-specific, always checked
+    todo.extend(sync_tool_todos(discover_sync_sources(), tools))
     missing_search_tools = [t for t in ("rg", "fzf") if not tools[t]]
     if missing_search_tools:
         todo.append(f"{'/'.join(missing_search_tools)} not found (optional, Tier 1 search)")
@@ -2633,8 +2702,9 @@ def main():
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_triage)
 
-    p = sub.add_parser("sync", help="pull in usememos / GitLab / beads")
-    p.add_argument("source", nargs="?", choices=["memos", "gitlab", "beads", "all"], default="all",
+    sync_source_names = list(discover_sync_sources().keys())
+    p = sub.add_parser("sync", help="pull in " + " / ".join(sync_source_names))
+    p.add_argument("source", nargs="?", choices=sync_source_names + ["all"], default="all",
                     help="which source to sync (default: all)")
     p.set_defaults(func=cmd_sync)
 
@@ -2755,7 +2825,7 @@ def main():
     p.add_argument("bd_args", nargs=argparse.REMAINDER, help="arguments passed straight to bd")
     p.set_defaults(func=cmd_bd)
 
-    p = sub.add_parser("secrets", help="edit encrypted memos/gitlab credentials via sops")
+    p = sub.add_parser("secrets", help="edit encrypted memos/gitlab/github credentials via sops")
     p.set_defaults(func=cmd_secrets)
 
     p = sub.add_parser(

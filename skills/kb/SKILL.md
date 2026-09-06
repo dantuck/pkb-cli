@@ -1,6 +1,6 @@
 ---
 name: kb
-description: Use the `kb` CLI to work with the user's personal Diataxis-based knowledge base -- search notes, create tutorial/how-to/reference/explanation entries, log to today's journal, triage the inbox, check TODOs (via beads), and sync external sources (usememos, GitLab, beads). Trigger whenever the user asks to look something up in their notes, write something down, log a journal entry, check their inbox or TODO list, or sync notes from an external source.
+description: Use the `kb` CLI to work with the user's personal Diataxis-based knowledge base -- search notes, create tutorial/how-to/reference/explanation entries, log to today's journal, triage the inbox, check TODOs (via beads), and sync external sources (usememos, GitLab, GitHub, beads). Trigger whenever the user asks to look something up in their notes, write something down, log a journal entry, check their inbox or TODO list, or sync notes from an external source.
 ---
 
 # kb -- personal knowledge base CLI
@@ -61,7 +61,7 @@ the data repo.
   no need to look up its path first (`search`/`links`/`inbox` all print
   paths too, but `show` is the direct route when you already know the id).
 - **Pull in external sources**: `kb sync all` (or `memos` / `gitlab` /
-  `beads`) ingests into `sources/`, stubbing anything notable into `inbox/`
+  `github` / `beads`) ingests into `sources/`, stubbing anything notable into `inbox/`
   for triage.
 - **Something seems broken**: `kb doctor` is read-only -- reports on
   frontmatter validity, search-index freshness, pre-commit hook state, and
@@ -111,7 +111,7 @@ kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
                                   quick-add a TODO; bare -a opens bd's interactive form
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
-kb sync [memos|gitlab|beads|all]  pull in external sources
+kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb doctor                         read-only health check

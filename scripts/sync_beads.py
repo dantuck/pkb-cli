@@ -14,6 +14,17 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import pkb_common as pc
 
+# Read by kb's discover_sync_sources() -- see docs/reference/ingestion.md for
+# the SOURCE_META contract. No auth_check/hints/env_keys/uses_sops: beads is
+# local-only (no login, no secret to inject), and its tool-presence + local
+# store setup already get their own bespoke checks in `kb setup`/`kb doctor`
+# (store init, git-exclude verification) that a generic cli_tool block can't
+# express -- cli_tool is declared anyway so it still counts as "configured"
+# once `bd` is on PATH.
+SOURCE_META = {
+    "cli_tool": "bd",
+}
+
 
 def fetch_beads(cli, since_timestamp, directory=None, use_global=False):
     # bd auto-discovers .beads/*.db from the cwd upward, but that's the pkb repo's

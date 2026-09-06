@@ -57,7 +57,8 @@
     <button class="btn" @click="adminDoctor()">Doctor</button>
     <select x-model="adminSyncSource">
       <option value="all">all</option><option value="memos">memos</option>
-      <option value="gitlab">gitlab</option><option value="beads">beads</option>
+      <option value="gitlab">gitlab</option><option value="github">github</option>
+      <option value="beads">beads</option>
     </select>
     <button class="btn btn-primary" @click="adminSync()">Sync</button>
     <button class="btn" x-show="adminStatus.push.upstream && adminStatus.push.ahead"
