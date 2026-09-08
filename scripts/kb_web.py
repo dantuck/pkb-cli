@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import types
 import webbrowser
 from datetime import datetime
@@ -585,6 +586,53 @@ def api_admin_status(h, root):
     })
 
 
+@route("GET", "/api/events")
+def api_events(h, root):
+    """Server-Sent Events stream so open tabs learn about new data (a sync
+    from another process, an edit from another tab) without polling the
+    content endpoints themselves. Watches fts.db's PRAGMA data_version and
+    emits a `changed` event when it moves -- the client reacts by re-running
+    the same loadFeed/loadInbox/etc. calls it already uses everywhere else,
+    so this stream carries no payload of its own.
+
+    data_version only detects external writes when re-queried on the *same*
+    connection over time -- a fresh connection always reports the baseline
+    value for itself, since it has nothing yet to compare against -- so this
+    holds one sqlite3 connection open for the life of the stream rather than
+    reconnecting each poll."""
+    db_path = os.path.join(root, ".pkb", "fts.db")
+    if not os.path.exists(db_path):
+        h.send_json({"error": "no search index found -- run `kb index` first"}, status=503)
+        return
+
+    h.send_response(200)
+    h.send_header("Content-Type", "text/event-stream")
+    h.send_header("Cache-Control", "no-cache")
+    h.send_header("Connection", "keep-alive")
+    h.end_headers()
+
+    conn = sqlite3.connect(db_path)
+
+    def data_version():
+        return conn.execute("PRAGMA data_version").fetchone()[0]
+
+    try:
+        last_version = data_version()
+        while True:
+            time.sleep(2)
+            version = data_version()
+            if version != last_version:
+                last_version = version
+                h.wfile.write(b"event: changed\ndata: {}\n\n")
+            else:
+                h.wfile.write(b": ping\n\n")  # comment line -- keeps proxies/idle timeouts from dropping the connection
+            h.wfile.flush()
+    except OSError:
+        pass  # client navigated away or closed the tab (covers BrokenPipeError/ConnectionResetError, both subclasses)
+    finally:
+        conn.close()
+
+
 @route("POST", "/api/push")
 def api_push(h, root):
     """Push whatever auto-commit has accumulated to the data repo's upstream --
@@ -599,6 +647,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         pass  # kb web stays quiet on stdout; add real logging if this needs debugging later
+
+    def send_response(self, code, message=None):
+        # Tracks whether a response has already gone out on this request, so
+        # _dispatch knows not to attempt a second status line if a handler
+        # throws after it's started streaming (e.g. /api/events mid-stream) --
+        # a plain request/response handler never gets far enough to hit this.
+        self._response_started = True
+        super().send_response(code, message)
 
     def send_json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
@@ -634,6 +690,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path
         self.query = parse_qs(parsed.query)
+        self._response_started = False
         for route_method, pattern, handler in ROUTES:
             if route_method != method:
                 continue
@@ -642,6 +699,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     handler(self, self.root, *match.groups())
                 except Exception as e:
+                    if self._response_started:
+                        return  # already streaming a response -- can't send a second status line
                     self.send_json({"error": str(e)}, status=500)
                 return
         if method == "GET":

@@ -1071,11 +1071,7 @@ document.addEventListener("alpine:init", () => {
           this.statusClass = "err";
         });
 
-      this.loadFeed(false);
-      this.loadInbox();
-      this.loadTodos();
-      this.loadTagIndex();
-      this.loadEntryIndex();
+      this.refreshAll();
 
       // Admin health checks are read-only and cheap (file/sqlite checks, no
       // network) -- poll them the whole time the tab is open, not just while
@@ -1083,6 +1079,37 @@ document.addEventListener("alpine:init", () => {
       // before anyone thinks to look.
       this.loadAdminStatus();
       setInterval(() => this.loadAdminStatus(), ADMIN_STATUS_POLL_MS);
+
+      this.connectEvents();
+    },
+
+    // Reloads every list the feed/drawers show -- shared by the initial
+    // load and by connectEvents() so there's one place that knows what
+    // "refresh everything" means.
+    refreshAll() {
+      if (!this.activeTag) this.loadFeed(false);
+      this.loadInbox();
+      this.loadTodos();
+      this.loadTagIndex();
+      this.loadEntryIndex();
+    },
+
+    // ---------- live updates ----------
+    // Picks up data written by another process -- a `kb sync` run from the
+    // CLI, sync-service's timer, or bd -- that this tab has no other way to
+    // hear about. The server has no payload to send (see /api/events); on
+    // each "changed" event we re-run refreshAll(), debounced so a burst of
+    // writes (e.g. syncing several sources back to back) collapses into one
+    // reload instead of one per event.
+    connectEvents() {
+      const es = new EventSource("/api/events");
+      let debounceTimer = null;
+      es.addEventListener("changed", () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => this.refreshAll(), 500);
+      });
+      // EventSource retries on its own after a drop (server restart, laptop
+      // sleep) -- nothing to do here but let it.
     },
   }));
 });
