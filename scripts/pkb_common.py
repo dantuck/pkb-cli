@@ -429,7 +429,7 @@ DEFAULT_CONFIG = {
         },
         "beads": {
             "cli": "bd",
-            "inbox_all": True,
+            "inbox_all": False,
         },
     },
 }
