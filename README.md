@@ -49,7 +49,7 @@ repo](docs/how-to/use-a-data-repo.md), or walk through the full
 ```
 pkb-cli/
   scripts/      the kb CLI and everything it dispatches to
-  skills/kb/    Claude Code skill (SKILL.md), installed via `kb setup --install-skill`
+  skills/kb/    Claude Code skill (SKILL.md), `kb setup` offers to install it
   templates/    schema.sql (loaded at runtime, never copied into a data repo)
                 and secrets.env.example (documentation only)
   docs/         tutorials/, how-to/, reference/, explanation/

@@ -30,8 +30,9 @@ kb service install|uninstall|status [--port PORT] [--repo DIR]
                                   run `kb web` as a login service (launchd/systemd --user)
 kb sync-service install|uninstall|status [--interval-minutes MIN] [--repo DIR]
                                   run `kb sync` on a recurring interval (launchd/systemd --user)
-kb setup [--install [DIR]] [--install-skill [DIR]]   # onboarding: hook, index, bd store,
-                                 # PATH (--install), Claude Code skill (--install-skill)
+kb setup [--yes]                # guided onboarding: PATH, Claude Code skill, optional
+                                 # deps (asks before each), hook, index, bd store.
+                                 # --yes skips prompts and accepts defaults (scripted installs)
 kb doctor                       # diagnose issues -- read-only, never writes anything
 kb update [--check]             # pull tool updates (git pull, or tarball refresh if
                                  # installed via install.sh); --check reports without pulling

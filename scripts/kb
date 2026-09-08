@@ -1685,6 +1685,24 @@ def cmd_config(args):
     return 0
 
 
+def _confirm(prompt, default, assume_yes=False):
+    """Yes/no prompt for `kb setup`'s guided flow. Auto-accepts `default`
+    without asking when `assume_yes` (--yes) is set, or when stdin isn't a
+    tty (e.g. install.sh's `curl | bash`, where there's no terminal to read
+    from) -- so scripted/non-interactive invocations still get a sane,
+    fully-automated setup instead of hanging on input()."""
+    if assume_yes or not sys.stdin.isatty():
+        return default
+    suffix = "Y/n" if default else "y/N"
+    try:
+        resp = input(f"{prompt} [{suffix}] ").strip().lower()
+    except EOFError:
+        return default
+    if not resp:
+        return default
+    return resp.startswith("y")
+
+
 def find_install_dir():
     """Return (dir, already_on_path). Prefers a candidate already on PATH; falls
     back to ~/.local/bin (created if needed) so --install always succeeds on a
@@ -1982,65 +2000,80 @@ def cmd_push(args):
 def cmd_setup(args):
     # root is optional: --install (and the tool/sync checks below) don't need a data
     # repo at all -- only the hook/index/bd/secrets steps do.
+    ok, todo = [], []
     try:
         root = pc.get_repo_root()
     except SystemExit:
-        root = None
-    ok, todo = [], []
+        # No data repo found anywhere (walking up from cwd) and no central kb at
+        # ~/.pkb either -- this is a brand-new machine. Bootstrap the central kb
+        # here instead of requiring a manual `mkdir -p ~/.pkb/.pkb && git init`
+        # before setup can do anything, since that step was easy to miss (e.g.
+        # when install.sh runs `kb setup --install` non-interactively).
+        central = os.path.join(os.path.expanduser("~"), ".pkb")
+        os.makedirs(os.path.join(central, ".pkb"), exist_ok=True)
+        if shutil.which("git") and not os.path.isdir(os.path.join(central, ".git")):
+            subprocess.run(["git", "init", "-q"], cwd=central, check=True)
+        pc.REPO_ROOT = central
+        root = central
+        ok.append(f"created central kb at {central} (none found)")
 
-    # 0. install kb itself onto PATH (opt-in via --install [DIR])
-    if args.install is not None:
-        script_path = os.path.abspath(os.path.join(SCRIPT_DIR, "kb"))
-        if args.install:
-            install_dir, on_path = os.path.expanduser(args.install), args.install in os.environ.get("PATH", "").split(os.pathsep)
+    # 0. install kb itself onto PATH -- guided: asked interactively, or
+    # auto-accepted (assume_yes) for scripted callers like install.sh, which
+    # pipes through `curl | bash` and has no terminal to prompt against.
+    script_path = os.path.abspath(os.path.join(SCRIPT_DIR, "kb"))
+    install_dir, on_path = find_install_dir()
+    target = os.path.join(install_dir, "kb")
+    if os.path.islink(target) and os.readlink(target) == script_path:
+        ok.append(f"kb already installed at {target}")
+    elif os.path.lexists(target):
+        todo.append(f"{target} already exists and isn't this repo's kb -- remove it yourself "
+                     f"if you want kb symlinked there")
+    elif _confirm(f"Install kb onto your PATH ({target})?", default=True, assume_yes=args.yes):
+        os.makedirs(install_dir, exist_ok=True)
+        os.symlink(script_path, target)
+        if on_path:
+            ok.append(f"installed kb -> {target}")
         else:
-            install_dir, on_path = find_install_dir()
-        target = os.path.join(install_dir, "kb")
-        if os.path.islink(target) and os.readlink(target) == script_path:
-            ok.append(f"kb already installed at {target}")
-        elif os.path.exists(target):
-            todo.append(f"--install: {target} already exists and isn't this repo's kb -- remove it "
-                        f"or pass a different --install <dir>")
-        else:
-            os.makedirs(install_dir, exist_ok=True)
-            os.symlink(script_path, target)
-            if on_path:
-                ok.append(f"installed kb -> {target}")
-            else:
-                ok.append(f"installed kb -> {target} (not yet on PATH)")
-                todo.append(f'add this to your shell profile: export PATH="{install_dir}:$PATH"')
+            ok.append(f"installed kb -> {target} (not yet on PATH)")
+            todo.append(f'add this to your shell profile: export PATH="{install_dir}:$PATH"')
+    else:
+        todo.append("skipped installing kb onto PATH -- run `kb setup` again to add it later")
 
-    # 0b. install the bundled Claude Code skill (opt-in via --install-skill [DIR]).
-    # A symlink, not a copy -- Claude Code follows a skill-directory symlink and
-    # reads SKILL.md from the target, so this repo stays the single source of
-    # truth and a `kb update` picks up any skill changes automatically, the same
-    # reasoning as symlinking the kb binary itself above.
-    if args.install_skill is not None:
-        skill_src = os.path.abspath(os.path.join(TOOL_ROOT, "skills", "kb"))
-        skill_dir = os.path.expanduser(args.install_skill) if args.install_skill else os.path.expanduser("~/.claude/skills")
-        target = os.path.join(skill_dir, "kb")
-        if os.path.islink(target) and os.readlink(target) == skill_src:
-            ok.append(f"kb skill already installed at {target}")
-        elif os.path.lexists(target):
-            todo.append(f"--install-skill: {target} already exists and isn't this repo's skill -- remove it "
-                        f"or pass a different --install-skill <dir>")
-        else:
-            os.makedirs(skill_dir, exist_ok=True)
-            os.symlink(skill_src, target)
-            ok.append(f"installed kb skill -> {target}")
+    # 0b. install the bundled Claude Code skill -- guided, default no (not
+    # everyone using kb also uses Claude Code). A symlink, not a copy --
+    # Claude Code follows a skill-directory symlink and reads SKILL.md from
+    # the target, so this repo stays the single source of truth and a `kb
+    # update` picks up any skill changes automatically, same reasoning as
+    # symlinking the kb binary itself above.
+    skill_src = os.path.abspath(os.path.join(TOOL_ROOT, "skills", "kb"))
+    skill_dir = os.path.expanduser("~/.claude/skills")
+    skill_target = os.path.join(skill_dir, "kb")
+    if os.path.islink(skill_target) and os.readlink(skill_target) == skill_src:
+        ok.append(f"kb skill already installed at {skill_target}")
+    elif os.path.lexists(skill_target):
+        todo.append(f"{skill_target} already exists and isn't this repo's skill -- remove it yourself "
+                     f"if you want kb's version there")
+    elif _confirm("Install the Claude Code skill for kb (lets Claude Code drive kb directly)?",
+                   default=False, assume_yes=args.yes):
+        os.makedirs(skill_dir, exist_ok=True)
+        os.symlink(skill_src, skill_target)
+        ok.append(f"installed kb skill -> {skill_target}")
 
     sync_sources = discover_sync_sources()
     tools = tool_status(sync_sources)
 
-    # 0c. install missing optional CLI deps via brew (opt-in via --install-deps)
-    if args.install_deps:
-        to_install = missing_deps_with_formulas(tools, sync_sources)
-        if not to_install:
-            ok.append("all optional CLI deps (bd/glab/gh/rg/fzf/sops) already installed")
-        elif not shutil.which("brew"):
-            todo.append("brew not found -- install manually: " +
-                        ", ".join(f"{t} (`{f}`)" for t, f in to_install))
-        else:
+    # 0c. install missing optional CLI deps via brew -- guided, default yes
+    # (this is the "including optional tooling" part of setup: bd/beads,
+    # glab/gh for sync sources, rg/fzf for Tier 1 search, sops for secrets).
+    to_install = missing_deps_with_formulas(tools, sync_sources)
+    if not to_install:
+        ok.append("all optional CLI deps (bd/glab/gh/rg/fzf/sops) already installed")
+    elif not shutil.which("brew"):
+        todo.append("brew not found -- install manually: " +
+                    ", ".join(f"{t} (`{f}`)" for t, f in to_install))
+    else:
+        names = ", ".join(t for t, _f in to_install)
+        if _confirm(f"Install missing optional CLI deps via brew ({names})?", default=True, assume_yes=args.yes):
             formulas = sorted({f for _t, f in to_install})
             result = subprocess.run(["brew", "install", *formulas], capture_output=True, text=True)
             if result.returncode == 0:
@@ -2051,6 +2084,9 @@ def cmd_setup(args):
             else:
                 todo.append(f"brew install {' '.join(formulas)} failed: "
                             f"{result.stderr.strip() or result.stdout.strip()}")
+        else:
+            todo.append(f"skipped installing optional deps: {names} -- rerun `kb setup` "
+                        f"or `brew install {' '.join(sorted({f for _t, f in to_install}))}` later")
 
     if root is None:
         todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to also set up the "
@@ -3130,16 +3166,16 @@ def main():
                     help="new value to save (omit to show the current one and its source)")
     p.set_defaults(func=cmd_config)
 
-    p = sub.add_parser("setup", help="onboarding: pre-commit hook, index, bd store, PATH install")
-    p.add_argument("--install", nargs="?", const="", default=None, metavar="DIR",
-                    help="also symlink kb onto PATH (auto-detects ~/.local/bin, /opt/homebrew/bin, "
-                         "/usr/local/bin, or pass a specific DIR)")
-    p.add_argument("--install-skill", nargs="?", const="", default=None, metavar="DIR",
-                    help="also symlink the bundled Claude Code skill into ~/.claude/skills "
-                         "(or a specific DIR)")
-    p.add_argument("--install-deps", action="store_true",
-                    help="also `brew install` any missing optional CLI deps "
-                         "(bd/beads, glab, gh, rg, fzf, sops)")
+    p = sub.add_parser(
+        "setup", help="guided onboarding: PATH install, optional deps, pre-commit hook, index, bd store",
+        description="Guided onboarding. Bootstraps a central kb at ~/.pkb if no data repo is found, "
+                     "then walks through installing kb onto PATH, the Claude Code skill, and any "
+                     "missing optional CLI deps (bd/beads, glab, gh, rg, fzf, sops) via brew -- asking "
+                     "before each -- before wiring up the pre-commit hook, search index, and local bd "
+                     "store. Safe to re-run any time; every step is idempotent.",
+    )
+    p.add_argument("-y", "--yes", action="store_true",
+                    help="skip prompts and accept defaults (for scripted installs, e.g. install.sh)")
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser(

@@ -20,7 +20,7 @@
 # Respects $PKB_CLI_HOME to override the install destination (default: ~/pkb-cli),
 # $PKB_CLI_REPO to override the source (default: dantuck/pkb-cli, as an
 # "owner/repo" GitHub slug), and $PKB_CLI_BRANCH (default: main). Safe to
-# re-run: updates in place if already installed, and `kb setup --install` is
+# re-run: updates in place if already installed, and `kb setup --yes` is
 # idempotent.
 set -euo pipefail
 
@@ -119,7 +119,7 @@ with open(version_file, "w") as f:
     f.write(sha + "\n")
 PYEOF
 
-python3 "$DEST/scripts/kb" setup --install
+python3 "$DEST/scripts/kb" setup --yes
 
 echo
 echo "kb is installed. if the command isn't found, open a new shell, or:"

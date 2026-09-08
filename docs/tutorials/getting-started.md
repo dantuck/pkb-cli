@@ -33,12 +33,10 @@ cd ~/.pkb
 kb setup
 ```
 
-Starting from nothing instead:
+Starting from nothing instead, just run setup -- it bootstraps `~/.pkb` (marker
+directory + `git init`) when it finds no data repo anywhere:
 
 ```bash
-mkdir -p ~/.pkb/.pkb
-cd ~/.pkb
-git init
 kb setup
 ```
 

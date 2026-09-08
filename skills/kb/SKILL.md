@@ -116,7 +116,7 @@ kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb doctor                         read-only health check
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
-kb setup [--install] [--install-skill]
+kb setup [--yes]                 guided onboarding, asks before each optional step
 ```
 
 Run `kb <command> -h` for full flag details on any of these, or `kb help` for

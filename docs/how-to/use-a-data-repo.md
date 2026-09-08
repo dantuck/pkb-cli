@@ -13,12 +13,20 @@ kb setup       # pre-commit hook, search index, local bd store if `bd` is instal
 
 ## Start a data repo from scratch
 
-There's no `kb init`. Create the `.pkb/` marker directory yourself, then run
-`kb setup` from inside it:
+There's no `kb init`. If `kb setup` finds no data repo anywhere (no `.pkb/`
+walking up from cwd, and nothing at `~/.pkb`), it bootstraps one at `~/.pkb`
+for you -- creates the `.pkb/` marker directory and runs `git init`:
 
 ```bash
-mkdir -p ~/.pkb/.pkb
-cd ~/.pkb
+kb setup
+```
+
+To start a data repo somewhere other than `~/.pkb`, create the marker
+directory yourself first:
+
+```bash
+mkdir -p /path/to/repo/.pkb
+cd /path/to/repo
 git init
 kb setup
 ```
