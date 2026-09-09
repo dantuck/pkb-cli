@@ -5,7 +5,8 @@ Contract (see docs/reference/ingestion.md):
 1. Read cursor from .pkb/cursors.json.
 2. Fetch only memos created/updated after the cursor.
 3. Write one file per item into sources/memos/, keyed on source_id (idempotent).
-4. Stub anything above the configured length threshold into inbox/ for triage.
+4. Stub anything above the configured length threshold into inbox/ for triage
+   (inbox_min_length: null disables this -- no memo ever gets an inbox stub).
 5. Advance the cursor only after a fully successful write pass.
 6. Exit non-zero with a clear message on auth/network failure; never partially
    advance the cursor.
@@ -197,7 +198,9 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
     through a previous run's image downloads gets healed on the next sync
     instead of leaving the mirror's images permanently missing.
 
-    Returns (path, "added" | "updated" | "unchanged").
+    Returns (path, "added" | "updated" | "unchanged"). threshold=None means the
+    inbox stub is disabled outright: every memo is mirrored into sources/memos/
+    only, never duplicated into inbox/.
     """
     source_id = memo_source_id(memo)
     if not source_id:
@@ -249,7 +252,7 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
     path = os.path.join(root, "sources", "memos", f"{entry_id}.md")
     pc.write_entry(path, fm, content)
 
-    if len(raw_content) >= threshold:
+    if threshold is not None and len(raw_content) >= threshold:
         inbox_id = pc.gen_id(all_ids)
         inbox_fm = dict(fm)
         inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
