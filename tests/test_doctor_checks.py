@@ -78,6 +78,43 @@ class DoctorChecksTest(unittest.TestCase):
         ok, todo = kb_cli.doctor_checks(self.root)
         self.assertTrue(any("auto-commit excludes" in line and "in place" in line for line in ok))
 
+    def _write_entry(self, rel_path, **fm_overrides):
+        fm = {
+            "id": "2026-01-01-0000", "created": "2026-01-01T00:00:00", "updated": "2026-01-01T00:00:00",
+            "type": "how-to", "extension": None, "source": "manual", "source_id": None,
+            "tags": [], "links": [], "title": "t",
+        }
+        fm.update(fm_overrides)
+        path = os.path.join(self.root, rel_path)
+        pc.write_entry(path, fm, "body\n")
+        return path
+
+    def test_no_promoted_entries_reports_ok(self):
+        ok, todo = kb_cli.doctor_checks(self.root)
+        self.assertTrue(any("no promoted entries are stale" in line for line in ok))
+        self.assertFalse(any("is stale" in line for line in todo))
+
+    def test_promoted_entry_current_with_source_reports_ok(self):
+        self._write_entry("sources/memos/2026-01-01-0001.md", id="2026-01-01-0001",
+                           type="source", extension="source", source="memos", source_id="101",
+                           updated="2026-01-01T00:00:00")
+        self._write_entry("how-to/2026-01-01-0000-t.md",
+                           source="memos", source_id="101", updated="2026-01-02T00:00:00")
+        ok, todo = kb_cli.doctor_checks(self.root)
+        self.assertTrue(any("no promoted entries are stale" in line for line in ok))
+        self.assertFalse(any("is stale" in line for line in todo))
+
+    def test_promoted_entry_behind_updated_source_is_flagged(self):
+        self._write_entry("sources/memos/2026-01-01-0001.md", id="2026-01-01-0001",
+                           type="source", extension="source", source="memos", source_id="101",
+                           updated="2026-02-01T00:00:00")  # re-synced after promotion
+        promoted = self._write_entry("how-to/2026-01-01-0000-t.md",
+                                      source="memos", source_id="101", updated="2026-01-02T00:00:00")
+        ok, todo = kb_cli.doctor_checks(self.root)
+        self.assertTrue(any("is stale" in line and os.path.relpath(promoted, self.root) in line
+                             for line in todo))
+        self.assertFalse(any("no promoted entries are stale" in line for line in ok))
+
 
 if __name__ == "__main__":
     unittest.main()

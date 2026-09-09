@@ -374,19 +374,26 @@ def existing_source_paths(root, source):
     sources/<source>/.
 
     Keyed on source_id, not path, so a re-fetch of a changed item updates the
-    same mirror file in place instead of creating a duplicate.
+    same mirror file in place instead of creating a duplicate. Walks only
+    sources/<source>/ directly rather than every content dir (as
+    iter_markdown_files does) -- every caller (each sync_*.py script, once
+    per run) only ever wants this one source's mirrors.
     """
     paths = {}
-    for path in iter_markdown_files(root):
-        rel = os.path.relpath(path, root)
-        if not rel.startswith(f"sources{os.sep}{source}{os.sep}"):
-            continue
-        try:
-            fm, _ = read_entry(path)
-        except ValueError:
-            continue
-        if fm.get("source_id"):
-            paths[str(fm["source_id"])] = path
+    base = os.path.join(root, "sources", source)
+    if not os.path.isdir(base):
+        return paths
+    for dirpath, _, filenames in os.walk(base):
+        for name in filenames:
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                fm, _ = read_entry(path)
+            except ValueError:
+                continue
+            if fm.get("source_id"):
+                paths[str(fm["source_id"])] = path
     return paths
 
 
@@ -400,6 +407,55 @@ def collect_existing_ids(root):
         if fm.get("id"):
             ids.add(fm["id"])
     return ids
+
+
+def stale_promoted_entries(root):
+    """Core entries (tutorial/how-to/reference/explanation) that were promoted
+    from a synced source (see _inbox_promote in kb -- it carries `source` and
+    `source_id` over from the inbox item unchanged) whose source mirror under
+    sources/<source>/ has since been updated again by a later sync pass.
+
+    Promotion is a one-time copy: nothing re-links a promoted entry to its
+    mirror afterward, so an edit made upstream (e.g. a usememos memo edited
+    after its note was promoted into a how-to) never surfaces anywhere unless
+    something compares the two `updated` timestamps -- which is what this does.
+
+    Returns a list of (promoted_path, mirror_path) pairs, mirror newer than
+    promoted. Mirror lookups are cached per source, and each mirror's
+    frontmatter read at most once, since multiple promoted entries commonly
+    share one source (and, in principle, one mirror).
+    """
+    stale = []
+    mirrors_by_source = {}
+    mirror_fm_by_path = {}
+    for path in iter_markdown_files(root):
+        try:
+            fm, _ = read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("type") not in CORE_TYPES:
+            continue
+        source, source_id = fm.get("source"), fm.get("source_id")
+        if not source or source == "manual" or not source_id:
+            continue
+        if source not in mirrors_by_source:
+            mirrors_by_source[source] = existing_source_paths(root, source)
+        mirror_path = mirrors_by_source[source].get(str(source_id))
+        if not mirror_path or mirror_path == path:
+            continue
+        if mirror_path not in mirror_fm_by_path:
+            try:
+                mirror_fm_by_path[mirror_path], _ = read_entry(mirror_path)
+            except ValueError:
+                mirror_fm_by_path[mirror_path] = None
+        mirror_fm = mirror_fm_by_path[mirror_path]
+        if mirror_fm is None:
+            continue
+        promoted_updated = parse_iso(fm.get("updated"))
+        mirror_updated = parse_iso(mirror_fm.get("updated"))
+        if promoted_updated and mirror_updated and mirror_updated > promoted_updated:
+            stale.append((path, mirror_path))
+    return stale
 
 
 # ---------------------------------------------------------------------------

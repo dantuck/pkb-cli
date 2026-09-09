@@ -2682,6 +2682,19 @@ def doctor_checks(root, push=None):
             else:
                 ok.append(f"search index is current ({indexed_count} files)")
 
+        # promoted entries whose source (e.g. an edited usememos memo) has been
+        # re-synced since promotion -- promotion is a one-time copy, so nothing
+        # else notices the source moving on without this
+        stale_promoted = pc.stale_promoted_entries(root)
+        if stale_promoted:
+            for promoted_path, mirror_path in stale_promoted:
+                todo.append(
+                    f"{os.path.relpath(promoted_path, root)} is stale -- its source "
+                    f"{os.path.relpath(mirror_path, root)} was updated since promotion; review and reconcile"
+                )
+        else:
+            ok.append("no promoted entries are stale relative to their source")
+
         # auto-commit: every kb mutation commits automatically, but only when root
         # is a git repo -- and the derived files it must never stage need to
         # actually be excluded, or every commit picks up index/lock churn

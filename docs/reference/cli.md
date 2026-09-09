@@ -45,7 +45,11 @@ the top-level list.
 freshness, tool presence) — `setup` acts on it, `doctor` only reports, plus a
 few deeper checks `setup` doesn't do: a hook pointing at a pkb-cli install
 that no longer exists, a search index whose row count has drifted from the
-files on disk, and `cursors.json` sanity.
+files on disk, `cursors.json` sanity, and a promoted entry (tutorial/how-to/
+reference/explanation) whose source (e.g. a synced usememos memo) was
+re-synced with a newer `updated` timestamp after promotion — promotion is a
+one-time copy, so nothing else notices the source moving on; `kb doctor`
+flags it for manual review/reconciliation.
 
 `kb new`, `kb tag`, `kb link`, and `kb inbox promote`/`redirect` all reindex
 automatically — an entry is searchable immediately after any of these. Only
