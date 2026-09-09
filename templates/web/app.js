@@ -586,6 +586,10 @@ document.addEventListener("alpine:init", () => {
     modalLoading: false,
     modalLoadError: "",
     modalEditing: false,
+    // {label, url} when the entry is a read-only mirror of an external
+    // source (see _readonly_source_info in the kb script) -- null for any
+    // normal, editable entry. Set from the GET response in openEntryModal.
+    modalReadonly: null,
     modalTitle: "",
     modalBody: "",
     modalTags: [],
@@ -712,6 +716,7 @@ document.addEventListener("alpine:init", () => {
       this.modalEntryId = item.id;
       this.modalStamp = item.title || item.id;
       this.modalEditing = false;
+      this.modalReadonly = null;
       this.modalLoading = true;
       this.modalLoadError = "";
       this.modalTagInput = "";
@@ -731,6 +736,7 @@ document.addEventListener("alpine:init", () => {
         this.modalLinks = data.frontmatter.links || [];
         this.modalTitle = data.frontmatter.title || "";
         this.modalBody = data.body || "";
+        this.modalReadonly = data.readonly || null;
       } catch {
         this.modalLoadError = "couldn't load";
       } finally {
@@ -743,6 +749,7 @@ document.addEventListener("alpine:init", () => {
       this.modalEntryId = null;
     },
     showModalEdit() {
+      if (this.modalReadonly) return;  // belt-and-suspenders: the edit button is hidden for these
       this.modalPreview = false;
       this.modalSaveMsg = "";
       this.modalEditing = true;

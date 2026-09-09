@@ -232,7 +232,7 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
         fm["updated"] = updated
         fm["title"] = title
         fm["tags"] = tags
-        pc.write_entry(existing_path, fm, build_content(fm["id"]))
+        pc.write_entry_readonly(existing_path, fm, build_content(fm["id"]))
         return existing_path, "updated"
 
     entry_id = pc.gen_id(all_ids)
@@ -250,14 +250,14 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
     }
     content = build_content(entry_id)
     path = os.path.join(root, "sources", "memos", f"{entry_id}.md")
-    pc.write_entry(path, fm, content)
+    pc.write_entry_readonly(path, fm, content)
 
     if threshold is not None and len(raw_content) >= threshold:
         inbox_id = pc.gen_id(all_ids)
         inbox_fm = dict(fm)
         inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
         inbox_path = os.path.join(root, "inbox", f"{inbox_id}.md")
-        pc.write_entry(inbox_path, inbox_fm, f"Synced from memos (see [{entry_id}]).\n\n{content}")
+        pc.write_entry_readonly(inbox_path, inbox_fm, f"Synced from memos (see [{entry_id}]).\n\n{content}")
 
     return path, "added"
 

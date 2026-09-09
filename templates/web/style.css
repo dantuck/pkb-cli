@@ -313,6 +313,14 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .tag .x:hover { opacity: 1; }
 .tag.closed { opacity: 0.55; text-decoration: line-through; }
 
+.readonly-banner {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  margin-bottom: 0.6rem; padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--border-strong); color: var(--muted); font-size: 0.85rem;
+}
+.readonly-banner a { color: var(--accent); white-space: nowrap; }
+
 .edit-panel {
   margin-top: 0.5rem; font-size: 0.86rem;
   display: flex; flex-direction: column; gap: 0.5rem;

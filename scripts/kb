@@ -959,6 +959,28 @@ def _find_entry(root, entry_id):
     return None
 
 
+_SOURCE_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://\S+)\)\s*$")
+
+
+def _readonly_source_info(path, body):
+    """None if `path` is writable; otherwise (label, url) describing where to
+    make the edit instead. A source mirror is written chmod 0o444 by
+    write_entry_readonly (see sync_memos.py) precisely so a local edit can't
+    be silently clobbered by the next sync pass -- checking the filesystem
+    bit directly (rather than e.g. fm.get("source") == "memos") means this
+    stays correct for any sync that adopts the same read-only convention,
+    without this file needing to know which sources do.
+
+    Every read-only-mirroring sync script appends exactly one trailing
+    markdown link to the body naming where the item lives upstream (e.g.
+    "[Memo](https://.../memos/101)") -- reused here as the "edit it there"
+    pointer rather than reconstructing the URL from frontmatter."""
+    if os.access(path, os.W_OK):
+        return None
+    m = _SOURCE_LINK_RE.search(body.strip())
+    return (m.group(1), m.group(2)) if m else ("its source", None)
+
+
 def _apply_tag_changes(tags, add=None, rm=None):
     """Pure list transform: apply add/rm to a list, returning (new_list,
     changed) -- the only place the actual add/rm set-diff logic lives. Used
@@ -1040,14 +1062,33 @@ def entry_new(root, entry_type, title, tags=None, links=None, body=None):
     return {"id": entry_id, "path": path}
 
 
+def _readonly_error(label, url):
+    where = f"{label} ({url})" if url else label
+    return {"error": f"read-only: synced from {where} -- edit it there instead",
+            "readonly": True, "source_label": label, "source_url": url}
+
+
+def _readonly_guard(path, body):
+    """{"error": ..., "readonly": True, ...} if `path` is a read-only source
+    mirror, else None -- the guard entry_set_tags, entry_set_links, and
+    entry_update_content each need before mutating an entry."""
+    readonly = _readonly_source_info(path, body)
+    return _readonly_error(*readonly) if readonly else None
+
+
 def entry_set_tags(root, entry_id, add=None, rm=None):
     """Apply add/rm to an entry's tags and persist if anything changed.
-    Returns the resulting tag list, or None if no entry has this id. Shared
-    by cmd_tag (CLI) and kb web's tag-edit endpoint."""
+    Returns the resulting tag list, {"error": ..., "readonly": True, ...} if
+    the entry is a read-only source mirror (see _readonly_source_info), or
+    None if no entry has this id. Shared by cmd_tag (CLI) and kb web's
+    tag-edit endpoint."""
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, _fm, _body = found
+    path, _fm, body = found
+    guard = _readonly_guard(path, body)
+    if guard:
+        return guard
     with pc.entry_lock(path):
         fm, body = pc.read_entry(path)
         tags, changed = _apply_tag_changes(fm.get("tags") or [], add=add, rm=rm)
@@ -1068,7 +1109,10 @@ def entry_set_links(root, entry_id, add=None, rm=None):
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, _fm, _body = found
+    path, _fm, body = found
+    guard = _readonly_guard(path, body)
+    if guard:
+        return guard
     if add:
         all_ids = pc.collect_existing_ids(root)
         unknown = [t for t in add if t not in all_ids]
@@ -1094,7 +1138,10 @@ def entry_update_content(root, entry_id, title=None, body=None):
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, _fm, _body = found
+    path, _fm, body = found
+    guard = _readonly_guard(path, body)
+    if guard:
+        return guard
     with pc.entry_lock(path):
         fm, cur_body = pc.read_entry(path)
         changed = False

@@ -183,7 +183,7 @@
   <div class="modal-panel-header">
     <span class="stamp" x-text="modalStamp"></span>
     <span id="entry-modal-actions">
-      <button class="link-btn" x-show="!modalLoadError" x-text="modalEditing ? 'done' : 'edit'"
+      <button class="link-btn" x-show="!modalLoadError && !modalReadonly" x-text="modalEditing ? 'done' : 'edit'"
               @click="modalEditing ? showModalView() : showModalEdit()"></button>
       <button class="icon-btn" title="Close" @click="closeEntryModal()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -197,6 +197,10 @@
     <template x-if="!modalLoading && modalLoadError">
       <span x-text="modalLoadError"></span>
     </template>
+    <div class="readonly-banner" x-show="!modalLoading && !modalLoadError && modalReadonly">
+      <span>Synced from <span x-text="modalReadonly && modalReadonly.label"></span> — read-only here.</span>
+      <a x-show="modalReadonly && modalReadonly.url" :href="modalReadonly && modalReadonly.url" target="_blank" rel="noopener">Edit at the source →</a>
+    </div>
     <div class="edit-panel" :class="{ editing: modalEditing }" x-show="!modalLoading && !modalLoadError">
       <div class="md-view" x-show="!modalEditing" x-html="modalViewHtml"></div>
 

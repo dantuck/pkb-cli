@@ -208,6 +208,21 @@ def write_entry(path, fm, body):
         f.write(body.lstrip("\n"))
 
 
+def write_entry_readonly(path, fm, body):
+    """write_entry, but the file is left chmod 0o444 (owner read-only) after
+    writing -- for mirrors of an external source (e.g. sources/memos/*.md)
+    where a local edit would silently be clobbered by the next sync pass
+    (see write_memo in sync_memos.py). Re-chmods writable first if the file
+    already exists read-only from a prior sync, so an update pass can still
+    overwrite it; other code (os.remove, an rm on triage/promote) is
+    unaffected -- deleting a file only needs write permission on its
+    containing directory, not on the file itself."""
+    if os.path.exists(path):
+        os.chmod(path, 0o644)
+    write_entry(path, fm, body)
+    os.chmod(path, 0o444)
+
+
 # Files auto-commit must never stage: the FTS index is a derived cache that
 # gets rewritten (mostly-binary diff) on every single mutation, and entry
 # locks are 0-byte flock targets that entry_lock() creates but never removes.

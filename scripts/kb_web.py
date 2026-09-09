@@ -269,12 +269,18 @@ def api_entry_create(h, root):
 
 @route("GET", "/api/entries/{entry_id}")
 def api_entry_show(h, root, entry_id):
-    found = _kb()._find_entry(root, entry_id)
+    kb = _kb()
+    found = kb._find_entry(root, entry_id)
     if found is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
     path, fm, body = found
-    h.send_json({"id": entry_id, "path": os.path.relpath(path, root), "frontmatter": fm, "body": body})
+    # Lets the UI grey out editing and point at the upstream source before the
+    # user ever tries a PATCH (which would 409 anyway -- see api_error_status).
+    readonly = kb._readonly_source_info(path, body)
+    readonly_info = {"label": readonly[0], "url": readonly[1]} if readonly else None
+    h.send_json({"id": entry_id, "path": os.path.relpath(path, root), "frontmatter": fm, "body": body,
+                 "readonly": readonly_info})
 
 
 @route("GET", "/api/entries/{entry_id}/links")
@@ -286,12 +292,30 @@ def api_entry_links(h, root, entry_id):
     h.send_json(json.loads(message))
 
 
+# A mutator's error result is always a dict with an "error" key -- checking
+# for that key (rather than "is this a dict") also works for entry_update_content,
+# whose *success* result is a dict too ({"title", "body"}, no "error" key).
+def _mutation_error(result):
+    return isinstance(result, dict) and "error" in result
+
+
+# 409 (not 400): a readonly rejection isn't a bad request -- the request was
+# well-formed, the entry just refuses that kind of write, same reasoning as
+# an HTTP conflict on a locked resource. Any other dict error (e.g. unknown
+# link target id) is a genuine 400.
+def _mutation_error_status(result):
+    return 409 if result.get("readonly") else 400
+
+
 @route("PATCH", "/api/entries/{entry_id}/tags")
 def api_entry_tags_patch(h, root, entry_id):
     payload = h.read_json()
     result = _kb().entry_set_tags(root, entry_id, add=payload.get("add"), rm=payload.get("rm"))
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
+        return
+    if _mutation_error(result):
+        h.send_json(result, status=_mutation_error_status(result))
         return
     h.send_json({"tags": result})
 
@@ -303,8 +327,8 @@ def api_entry_links_patch(h, root, entry_id):
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
-    if isinstance(result, dict):  # {"error": "unknown id(s) ..."}
-        h.send_json(result, status=400)
+    if _mutation_error(result):
+        h.send_json(result, status=_mutation_error_status(result))
         return
     h.send_json({"links": result})
 
@@ -315,6 +339,9 @@ def api_entry_content_patch(h, root, entry_id):
     result = _kb().entry_update_content(root, entry_id, title=payload.get("title"), body=payload.get("body"))
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
+        return
+    if _mutation_error(result):
+        h.send_json(result, status=_mutation_error_status(result))
         return
     h.send_json(result)
 
