@@ -173,10 +173,12 @@ def api_search(h, root):
 @route("GET", "/api/feed")
 def api_feed(h, root):
     """Reverse-chronological feed over everything in the index (journal entries
-    and core content alike), the same `files` table `kb search` reads from.
-    Cursor-paginated on `created` (?before=<ISO created>), optionally filtered
-    by ?tag= and/or ?type= -- the latter is how the feed's type chips browse
-    the repo without needing a search term."""
+    and core content alike), the same `files` table `kb search` reads from,
+    except beads-sourced items -- TODO-tracking noise that already has a home
+    via `kb todo`/`bd`, so it's excluded unconditionally rather than left to
+    ?type=/?tag= filtering. Cursor-paginated on `created` (?before=<ISO
+    created>), optionally filtered by ?tag= and/or ?type= -- the latter is how
+    the feed's type chips browse the repo without needing a search term."""
     db_path = os.path.join(root, ".pkb", "fts.db")
     if not os.path.exists(db_path):
         h.send_json({"error": "no search index found -- run `kb index` first"}, status=503)
@@ -188,6 +190,10 @@ def api_feed(h, root):
     entry_type = h.query.get("type", [None])[0]
 
     where, params = [], []
+    # beads-sourced items are TODO-tracking noise, not stream-worthy content --
+    # they already have a home via `kb todo`/`bd` (see sync_beads.py's inbox_all
+    # default for the same reasoning applied to inbox stubs).
+    where.append("IFNULL(f.source, '') != 'beads'")
     if before:
         where.append("f.created < ?")
         params.append(before)
