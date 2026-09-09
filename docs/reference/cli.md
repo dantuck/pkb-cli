@@ -15,6 +15,9 @@ kb links <id> [--json]            forward links + backlinks
 kb show <id> [--json]             print an entry's full content by id
 kb tag <id> [add|rm <tag>...]     view/add/remove tags (never hand-edit frontmatter)
 kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
+kb rm <id> [--force]              delete an entry (refuses if other entries link to it,
+                                  unless --force, which also cleans up those links)
+kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
                                   quick-add a TODO; bare -a opens bd's interactive form
@@ -51,10 +54,10 @@ re-synced with a newer `updated` timestamp after promotion — promotion is a
 one-time copy, so nothing else notices the source moving on; `kb doctor`
 flags it for manual review/reconciliation.
 
-`kb new`, `kb tag`, `kb link`, and `kb inbox promote`/`redirect` all reindex
-automatically — an entry is searchable immediately after any of these. Only
-reach for `kb index` yourself after editing an entry's body by hand (never
-the frontmatter).
+`kb new`, `kb tag`, `kb link`, `kb rm`, `kb mv`, and `kb inbox promote`/
+`redirect` all reindex automatically — an entry is searchable immediately
+after any of these. Only reach for `kb index` yourself after editing an
+entry's body by hand (never the frontmatter).
 
 `kb sync`, `kb update`, and `kb push` are the commands that touch the network
 by default — search, journal, inbox, and links all work fully offline. Every

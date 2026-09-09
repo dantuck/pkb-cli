@@ -1112,6 +1112,93 @@ def entry_update_content(root, entry_id, title=None, body=None):
     return {"title": fm.get("title"), "body": cur_body}
 
 
+def entry_delete(root, entry_id, force=False):
+    """Delete an entry by id. Refuses if other entries still link to it, unless
+    force=True -- in which case this id is also stripped from every one of
+    those entries' `links` first, so the delete can never leave a dangling
+    reference for `kb validate` to catch later. Returns {"path",
+    "backlinks_cleared"} on success, or {"error": ...}. Shared by cmd_rm (CLI)
+    and kb web's delete endpoint.
+
+    Finds the target and collects backlinks in one pass over the repo --
+    locating the target and checking every entry's `links` both require
+    reading every file's frontmatter anyway, so there's no early exit to lose
+    by combining them (unlike _find_entry, which can stop as soon as it
+    matches)."""
+    path = None
+    backlinks = []
+    for p in pc.iter_markdown_files(root):
+        try:
+            fm, _body = pc.read_entry(p)
+        except ValueError:
+            continue
+        if fm.get("id") == entry_id:
+            path = p
+            continue
+        if entry_id in (fm.get("links") or []):
+            backlinks.append((p, fm))
+
+    if path is None:
+        return {"error": f"no entry with id '{entry_id}'"}
+
+    if backlinks and not force:
+        ids = ", ".join(fm.get("id") for _p, fm in backlinks)
+        return {"error": f"'{entry_id}' is linked from {len(backlinks)} entry(ies) ({ids}) "
+                          f"-- pass --force to delete anyway (their links will be cleaned up)"}
+
+    for p, _fm in backlinks:
+        with pc.entry_lock(p):
+            bfm, bbody = pc.read_entry(p)
+            bfm["links"] = [l for l in (bfm.get("links") or []) if l != entry_id]
+            bfm["updated"] = pc.now_iso()
+            pc.write_entry(p, bfm, bbody)
+
+    with pc.entry_lock(path):
+        os.remove(path)
+    _reindex_fast(root)
+    pc.git_autocommit(root, f"rm: {entry_id}")
+    return {"path": os.path.relpath(path, root), "backlinks_cleared": len(backlinks)}
+
+
+def entry_move(root, entry_id, new_type=None, new_title=None):
+    """Move a core entry to a different Diataxis type and/or rename its title,
+    rewriting frontmatter and relocating the file to match -- the sanctioned
+    way to fix a miscategorized or mistitled entry, since hand-editing
+    frontmatter (or moving the file yourself, which would desync `type` from
+    the directory it lives in) is off limits. Returns {"path"} on success, or
+    {"error": ...}. Shared by cmd_mv (CLI) and kb web's move endpoint."""
+    if new_type is None and new_title is None:
+        return {"error": "need --type and/or --title"}
+    if new_type is not None and new_type not in pc.CORE_TYPES:
+        return {"error": f"type must be one of {list(pc.CORE_TYPES)}"}
+
+    found = _find_entry(root, entry_id)
+    if found is None:
+        return {"error": f"no entry with id '{entry_id}'"}
+    path, fm, _body = found
+    if fm.get("type") not in pc.CORE_TYPES:
+        return {"error": f"'{entry_id}' is type '{fm.get('type')}' -- kb mv only handles core "
+                          f"content ({', '.join(pc.CORE_TYPES)}); inbox items use "
+                          f"`kb inbox <id> promote`"}
+
+    with pc.entry_lock(path):
+        fm, body = pc.read_entry(path)
+        target_type = new_type or fm["type"]
+        target_title = new_title or fm["title"]
+        if target_type == fm["type"] and target_title == fm["title"]:
+            return {"path": os.path.relpath(path, root)}
+        fm["type"] = target_type
+        fm["title"] = target_title
+        fm["updated"] = pc.now_iso()
+        new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{entry_id}-{pc.slugify(target_title)}.md")
+        pc.write_entry(new_path, fm, body)
+        if new_path != path:
+            os.remove(path)
+    _reindex_fast(root)
+    pc.git_autocommit(root, f"mv: {entry_id} -> {target_type}")
+    return {"path": os.path.relpath(new_path, root)}
+
+
 def inbox_list(root):
     """[{"id", "name", "title", "age_days", "created"}, ...] for everything in
     inbox/, sorted by filename -- the data behind `kb inbox`'s plain listing.
@@ -1263,11 +1350,42 @@ def cmd_tag(args):
         if not values:
             return 0  # cancelled
 
-    tags = entry_set_tags(root, entry_id, add=values if args.action == "add" else None,
-                           rm=values if args.action == "rm" else None)
-    changed = tags != (fm.get("tags") or [])
+    result = entry_set_tags(root, entry_id, add=values if args.action == "add" else None,
+                             rm=values if args.action == "rm" else None)
+    if isinstance(result, dict):  # {"error": "...", "readonly": True, ...}
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    changed = result != (fm.get("tags") or [])
     prefix = "" if changed else "no change -- "
-    print(f"{prefix}tags for {entry_id}: {', '.join(tags) if tags else '(none)'}")
+    print(f"{prefix}tags for {entry_id}: {', '.join(result) if result else '(none)'}")
+    return 0
+
+
+def cmd_rm(args):
+    """Delete an entry by id -- the sanctioned way to remove a file created
+    under the Diataxis structure, since deleting it out from under kb (with
+    `rm` directly) would leave the FTS index and any backlinks stale."""
+    root = pc.get_repo_root()
+    result = entry_delete(root, args.id, force=args.force)
+    if "error" in result:
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    suffix = f" ({result['backlinks_cleared']} backlink(s) cleaned up)" if result["backlinks_cleared"] else ""
+    print(f"deleted {result['path']}{suffix}")
+    return 0
+
+
+def cmd_mv(args):
+    """Move an entry to a different Diataxis type and/or rename its title --
+    the sanctioned way to recategorize or retitle a file created under the
+    Diataxis structure, since hand-moving it would desync `type` from the
+    directory it lives in."""
+    root = pc.get_repo_root()
+    result = entry_move(root, args.id, new_type=args.type, new_title=args.title)
+    if "error" in result:
+        print(f"error: {result['error']}", file=sys.stderr)
+        return 1
+    print(f"-> {result['path']}")
     return 0
 
 
@@ -2926,7 +3044,7 @@ kb operates on a data repo found by walking up from the current directory to a
 
 def main():
     commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
-                "links", "show", "tag", "link", "todo", "bd", "secrets", "config", "setup",
+                "links", "show", "tag", "link", "rm", "mv", "todo", "bd", "secrets", "config", "setup",
                 "web", "service", "sync-service", "doctor", "update", "push", "help"]
     parser = KBArgumentParser(
         prog="kb",
@@ -3124,6 +3242,42 @@ def main():
                     help="id(s) to link/unlink (omit for an fzf picker)")
     p.add_argument("--json", action="store_true", help="machine-readable output (no-action form only)")
     p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser(
+        "rm", help="delete an entry",
+        description="Delete an entry by id -- the sanctioned way to remove a file "
+                    "created under the Diataxis structure (deleting it directly would "
+                    "leave the search index and any backlinks stale).",
+        epilog=(
+            "  kb rm 2026-08-31-1423             delete it (refuses if other entries link to it)\n"
+            "  kb rm 2026-08-31-1423 --force     delete it, also removing it from any\n"
+            "                                     other entry's `links`"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("--force", action="store_true",
+                    help="delete even if other entries still link to it, cleaning up those links")
+    p.set_defaults(func=cmd_rm)
+
+    p = sub.add_parser(
+        "mv", help="move an entry to a different Diataxis type and/or rename it",
+        description="Move a core entry (tutorial/how-to/reference/explanation) to a "
+                    "different Diataxis type and/or rename its title -- the sanctioned "
+                    "way to fix a miscategorized or mistitled file, since moving it "
+                    "yourself would desync `type` from the directory it lives in. "
+                    "Inbox items use `kb inbox <id> promote` instead.",
+        epilog=(
+            "  kb mv 2026-08-31-1423 --type how-to             recategorize\n"
+            "  kb mv 2026-08-31-1423 --title \"New title\"        rename\n"
+            "  kb mv 2026-08-31-1423 --type how-to --title \"New title\""
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
+    p.add_argument("--type", choices=pc.CORE_TYPES, help="new Diataxis type")
+    p.add_argument("--title", help="new title")
+    p.set_defaults(func=cmd_mv)
 
     p = sub.add_parser(
         "todo", help="list open bd (beads) TODOs, sorted by priority",

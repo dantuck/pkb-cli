@@ -43,6 +43,13 @@ the data repo.
   `kb link <id> add <target-id>...` / `kb link <id> rm <target-id>...` (bare
   `kb link <id>` is the same as `kb links <id>`). These are the *only*
   sanctioned way to change `tags`/`links` after creation -- see below.
+- **Delete or move a core entry**: `kb rm <id>` deletes it (refuses if other
+  entries still link to it, unless `--force`, which also strips it from those
+  entries' `links`). `kb mv <id> [--type T] [--title "..."]` recategorizes
+  and/or renames it, relocating the file to match. These are the sanctioned
+  way to remove or reorganize a file created under the Diataxis structure --
+  not `rm`/`mv` on the filesystem, which would leave the search index (and,
+  for `rm`, any backlinks) stale.
 - **Check what's pending triage**: `kb inbox` (interactive picker: promote to
   a Diataxis type / redirect into the journal / discard) or `kb triage`
   (read-only, exit-code-friendly and `--json`-able, good for scripts). No
@@ -81,9 +88,10 @@ the data repo.
 - **Use `kb journal -m` for quick notes** instead of opening the file
   directly -- it appends correctly formatted, timestamped content and bumps
   the entry's `updated` timestamp.
-- **`kb new`, `kb tag`, `kb link`, and `kb inbox promote`/`redirect` all
-  reindex automatically** -- an entry is searchable immediately after any of
-  these. Only reach for `kb index` yourself after editing an entry's body by
+- **`kb new`, `kb tag`, `kb link`, `kb rm`, `kb mv`, and `kb inbox
+  promote`/`redirect` all reindex automatically** -- an entry is searchable
+  immediately after any of these. Only reach for `kb index` yourself after
+  editing an entry's body by
   hand (never the frontmatter). `kb validate` catches structural mistakes
   before they're committed (also runs automatically as a pre-commit hook
   once `kb setup` has been run in the data repo).
@@ -107,6 +115,8 @@ kb links <id> [--json]            forward links + backlinks
 kb show <id> [--json]             print an entry's full content by id
 kb tag <id> [add|rm <tag>...]     view/add/remove tags (never hand-edit frontmatter)
 kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
+kb rm <id> [--force]              delete an entry (--force also cleans up backlinks)
+kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
                                   quick-add a TODO; bare -a opens bd's interactive form
