@@ -380,6 +380,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   margin: 0.55rem 0; padding-left: 0.8rem; border-left: 3px solid var(--accent); color: var(--muted);
 }
 .md-view a { color: var(--accent-text); }
+.md-view img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.4rem 0; display: block; }
 
 #feed-more { display: block; margin: 1.25rem auto; }
 #feed-empty { color: var(--muted); text-align: center; padding: 1rem; }

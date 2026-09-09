@@ -19,9 +19,22 @@ the `filter` query param takes a CEL expression, e.g. updated_ts > timestamp("<i
 ("found no matching overload for '_>_' applied to '(timestamp, string)'"), confirmed
 against a real instance. Filtering on updated_ts (not created_ts) is what makes an
 edited memo -- same createTime, new updateTime -- get re-fetched at all (see write_memo).
+
+Attachments (images and other files) are exposed inline on each memo as an
+`attachments` array (NOT `resources` -- that's an older/other API version's
+name), each shaped like {"name": "attachments/{id}", "filename", "content"
+(empty here in practice), "externalLink" (empty unless the instance stores
+attachments externally), "type" (mime), "size"}. Confirmed against a real
+instance with an image-attached memo. The actual bytes are fetched from
+`{base_url}/file/{name}/{filename}` with the same Bearer token -- this
+endpoint returned 200 with the exact `size` byte count and correct
+Content-Type; `/api/v1/{name}` by contrast returns only the JSON metadata
+above (empty content), and `/api/v1/{name}/blob` 404s. externalLink, when
+set, is used directly (no Bearer auth -- it's not this instance's API).
 """
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -45,6 +58,103 @@ def memo_source_id(memo):
     return name.rsplit("/", 1)[-1] if name else None
 
 
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_attachment_filename(attachment):
+    """A filesystem- and markdown-path-safe filename for one attachment.
+
+    The API's `filename` is server-controlled but not trusted here: strip any
+    directory components (a defensively-basename'd value, in case a hostile
+    or buggy instance sends one embedding "../") and replace anything outside
+    a conservative safe set, so it can never escape the per-entry assets dir
+    it's written into. Falls back to the attachment id when the name is
+    empty or collapses entirely (e.g. a filename that was only "../../").
+    """
+    name = os.path.basename(attachment.get("filename") or "")
+    name = _UNSAFE_FILENAME_RE.sub("_", name).strip("._") or "attachment"
+    attachment_id = attachment.get("name", "").rsplit("/", 1)[-1]
+    return f"{attachment_id}-{name}" if attachment_id else name
+
+
+def _authed_get(req, timeout, what):
+    """Run one urlopen(req) and return the raw response bytes, wrapping any
+    failure in a RuntimeError tagged with `what` (shared by fetch_memos and
+    fetch_attachment_bytes, which otherwise duplicated this exact try/except
+    scaffolding). HTTPError is caught first -- it's a URLError subclass, so
+    catching URLError first would silently swallow it before this branch ever
+    ran, losing the HTTP status code from the message."""
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"{what} auth/HTTP error ({e.code}): {e}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"failed to reach {what}: {e}")
+
+
+def fetch_attachment_bytes(base_url, token, attachment):
+    """Return the raw bytes for one memo attachment. Raises RuntimeError on
+    network/auth failure (same failure contract as fetch_memos)."""
+    external = attachment.get("externalLink")
+    if external:
+        req = urllib.request.Request(external)
+    else:
+        quoted_filename = urllib.parse.quote(attachment.get("filename") or "")
+        url = f"{base_url.rstrip('/')}/file/{attachment['name']}/{quoted_filename}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    return _authed_get(req, timeout=30, what=f"attachment {attachment.get('name')}")
+
+
+def sync_attachments(root, entry_id, attachments, base_url, token):
+    """Download every attachment on one memo into sources/memos/assets/<entry_id>/,
+    skipping any file already on disk (attachments are immutable once created,
+    so this is idempotent and cheap to re-run on every sync pass, including for
+    memos whose text is otherwise unchanged -- heals a prior run that wrote the
+    markdown mirror but crashed partway through downloading images).
+
+    Returns a list of (relative_markdown_path, filename, mime) for use in the
+    entry body, in attachment order.
+    """
+    results = []
+    if not attachments:
+        return results
+    asset_dir = os.path.join(root, "sources", "memos", "assets", entry_id)
+    os.makedirs(asset_dir, exist_ok=True)
+    for attachment in attachments:
+        filename = safe_attachment_filename(attachment)
+        dest = os.path.join(asset_dir, filename)
+        if not os.path.exists(dest):
+            data = fetch_attachment_bytes(base_url, token, attachment)
+            tmp = dest + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, dest)
+        # Root-relative (leading "/"), not relative to whichever file embeds it: the
+        # same rendered content is also copied verbatim into an inbox/ stub (see
+        # write_memo), a directory a path relative to sources/memos/ wouldn't resolve
+        # from. kb web serves any path under a known content dir (sources/, etc.)
+        # straight off the data repo root -- see _serve_static in kb_web.py -- and
+        # the client's markdown renderer already treats a leading "/" as a safe,
+        # renderable link/image target.
+        results.append((f"/sources/memos/assets/{entry_id}/{filename}", filename, attachment.get("type") or ""))
+    return results
+
+
+def attachments_markdown(attachments):
+    """Render synced attachments as markdown: images inline via `![]()` (kb web
+    serves the root-relative path directly -- see _serve_static in kb_web.py);
+    anything else (pdf, audio, ...) as a plain link so it's still reachable,
+    just not inlined."""
+    lines = []
+    for rel_path, filename, mime in attachments:
+        if mime.startswith("image/"):
+            lines.append(f"![{filename}]({rel_path})")
+        else:
+            lines.append(f"[{filename}]({rel_path})")
+    return "\n\n".join(lines)
+
+
 def fetch_memos(base_url, token, since_updated_time):
     """Fetch memos updated after since_updated_time (exclusive). Raises on network/auth failure."""
     memos = []
@@ -62,13 +172,7 @@ def fetch_memos(base_url, token, since_updated_time):
             params["pageToken"] = page_token
         url = f"{base_url.rstrip('/')}/api/v1/memos?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"failed to reach memos API at {url}: {e}")
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"memos API auth/HTTP error ({e.code}) at {url}: {e}")
+        data = json.loads(_authed_get(req, timeout=15, what=f"memos API at {url}").decode("utf-8"))
 
         memos.extend(data.get("memos", []))
         page_token = data.get("nextPageToken")
@@ -79,7 +183,7 @@ def fetch_memos(base_url, token, since_updated_time):
     return memos
 
 
-def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
+def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
     """Write or refresh the sources/memos/ mirror for one memo.
 
     A source_id already on disk gets its mirror updated in place (title/body/
@@ -87,6 +191,12 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
     memo would leave a permanently stale mirror. The inbox stub is only ever
     created once, on first sight, so this can't reopen something already
     triaged out of inbox.
+
+    Attachments are synced (downloaded if missing) on every pass, even the
+    "unchanged" fast path -- see sync_attachments -- so a crash partway
+    through a previous run's image downloads gets healed on the next sync
+    instead of leaving the mirror's images permanently missing.
+
     Returns (path, "added" | "updated" | "unchanged").
     """
     source_id = memo_source_id(memo)
@@ -101,17 +211,25 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
     # web route confirmed against usememos' own frontend router source
     # (web/src/router/index.tsx: "memos/:uid" -> <MemoDetail />), not /m/<uid>.
     permalink = f"{base_url.rstrip('/')}/memos/{source_id}"
-    content = f"{raw_content}\n\n[Memo]({permalink})\n" if raw_content else f"[Memo]({permalink})\n"
+
+    def build_content(entry_id):
+        attachments = sync_attachments(root, entry_id, memo.get("attachments"), base_url, token)
+        parts = [p for p in (raw_content, attachments_markdown(attachments)) if p]
+        parts.append(f"[Memo]({permalink})\n")
+        return "\n\n".join(parts)
 
     existing_path = existing_paths.get(source_id)
     if existing_path:
         fm, _ = pc.read_entry(existing_path)
         if fm.get("updated") == updated and fm.get("title") == title:
+            # heal any incomplete attachment download from a prior crashed run;
+            # body itself is already correct, so skip reassembling it
+            sync_attachments(root, fm["id"], memo.get("attachments"), base_url, token)
             return existing_path, "unchanged"
         fm["updated"] = updated
         fm["title"] = title
         fm["tags"] = tags
-        pc.write_entry(existing_path, fm, content)
+        pc.write_entry(existing_path, fm, build_content(fm["id"]))
         return existing_path, "updated"
 
     entry_id = pc.gen_id(all_ids)
@@ -127,6 +245,7 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url):
         "links": [],
         "title": title,
     }
+    content = build_content(entry_id)
     path = os.path.join(root, "sources", "memos", f"{entry_id}.md")
     pc.write_entry(path, fm, content)
 
@@ -169,7 +288,7 @@ def main():
     last_updated_time = since_updated_time
     try:
         for memo in memos:
-            path, outcome = write_memo(root, memo, existing_paths, all_ids, config["inbox_min_length"], base_url)
+            path, outcome = write_memo(root, memo, existing_paths, all_ids, config["inbox_min_length"], base_url, token)
             source_id = memo_source_id(memo)
             if source_id:
                 existing_paths[source_id] = path

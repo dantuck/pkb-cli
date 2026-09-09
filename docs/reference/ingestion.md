@@ -26,7 +26,7 @@ directly) and `sync_gitlab.py`/`sync_github.py` for the full shape.
 
 | Source | Script | Cursor stored | API/mechanism |
 |---|---|---|---|
-| usememos | `sync_memos.py` | last memo `id`/timestamp | REST API `/api/v1/memos`, over Tailscale |
+| usememos | `sync_memos.py` | last memo `id`/timestamp | REST API `/api/v1/memos`, over Tailscale; image/file attachments are downloaded into `sources/memos/assets/<id>/` and embedded as markdown |
 | GitLab | `sync_gitlab.py` | last `updated_after` timestamp | `glab api` or GitLab REST API, filtered by project |
 | GitHub | `sync_github.py` | last `updated_after` timestamp | `gh api`, filtered by repo (`owner/repo`) |
 | beads | `sync_beads.py` | last bead timestamp/id | local `bd` CLI or its backing store, queried directly |

@@ -12,15 +12,24 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+const SAFE_URL_RE = /^(https?:|mailto:|\/|#)/i;
+
 function renderInline(s) {
   s = escapeHtml(s);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
+  // Images first -- `![alt](src)` would otherwise also match the plain-link
+  // pattern below (missing only its leading "!"), rendering a broken link
+  // instead of the picture. Same safe-scheme allowlist as links, for the
+  // same reason: blocks javascript: and other script-executing URIs from a
+  // synced/pasted entry body.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) =>
+    SAFE_URL_RE.test(url) ? `<img src="${url}" alt="${alt}" loading="lazy">` : m);
   // Only render as a link if the URL is a safe scheme -- blocks javascript:
   // and other script-executing URIs from a synced/pasted entry body.
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) =>
-    /^(https?:|mailto:|\/|#)/i.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : m);
+    SAFE_URL_RE.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : m);
   return s;
 }
 

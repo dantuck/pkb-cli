@@ -25,6 +25,16 @@ WEB_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "web")
 )
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+import pkb_common as pc
+
+# Top-level dirs kb web is willing to serve raw files from at a root-relative
+# path (e.g. /sources/memos/assets/<id>/photo.jpg, written by sync_memos.py's
+# attachment sync) -- reuses pkb_common's own list of content dirs rather than
+# a separate one, so this can never drift from what the rest of kb considers
+# repo content. Deliberately not WEB_DIR (the app's own JS/CSS) and never
+# ".pkb" (config, cursors, the FTS index, decrypted-in-memory secrets).
+_CONTENT_DIR_PREFIXES = tuple(f"/{d}/" for d in pc.CONTENT_DIRS)
 
 _kb_module = None
 
@@ -711,9 +721,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _serve_static(self, path):
         if path == "/":
             path = "/index.html"
+        if path.startswith(_CONTENT_DIR_PREFIXES):
+            self._serve_file(path, self.root)
+            return
+        self._serve_file(path, WEB_DIR)
+
+    def _serve_file(self, path, base_dir):
+        """Serve `path` (a root-relative URL path) from under `base_dir`, refusing
+        anything that normalizes outside it -- shared by the app's own static
+        assets (base_dir=WEB_DIR) and repo content like synced attachment images
+        (base_dir=self.root, gated to known content dirs by the caller)."""
         safe = os.path.normpath(path).lstrip("/")
-        file_path = os.path.join(WEB_DIR, safe)
-        if not file_path.startswith(WEB_DIR) or not os.path.isfile(file_path):
+        file_path = os.path.join(base_dir, safe)
+        if not file_path.startswith(base_dir) or not os.path.isfile(file_path):
             self.send_json({"error": "not found"}, status=404)
             return
         ctype = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
