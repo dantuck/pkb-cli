@@ -35,9 +35,15 @@ function renderInline(s, mediaCounter) {
   s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => {
     if (!SAFE_URL_RE.test(url)) return m;
     if (mediaCounter) mediaCounter.count++;
+    // No `controls` on the inline video -- a click anywhere on it needs to
+    // open the lightbox (see handleMediaClick in app.js), and native
+    // controls swallow clicks meant for that (a click on the play/seek bar
+    // is retargeted to the <video> host through the UA's closed shadow
+    // root, so it's indistinguishable from a click on the frame itself).
+    // The lightbox's own <video> gets `controls` for real playback.
     return VIDEO_EXT_RE.test(url)
-      ? `<video src="${url}" controls preload="metadata"></video>`
-      : `<img src="${url}" alt="${alt}" loading="lazy">`;
+      ? `<span class="media-thumb media-video" data-src="${url}" data-type="video"><video src="${url}" preload="metadata" muted playsinline></video><span class="play-badge" aria-hidden="true">&#9654;</span></span>`
+      : `<img class="media-thumb" data-type="image" src="${url}" alt="${alt}" loading="lazy">`;
   });
   // Only render as a link if the URL is a safe scheme -- blocks javascript:
   // and other script-executing URIs from a synced/pasted entry body.
@@ -1056,6 +1062,50 @@ document.addEventListener("alpine:init", () => {
       }));
     },
 
+    // ---------- lightbox ----------
+    // Opened by clicking any `.media-thumb` (image or video) rendered inside
+    // a `.md-view` block -- see handleMediaClick below and renderInline's
+    // markup for the media it targets. `lightboxItems` is built fresh from
+    // whichever `.md-view` container was clicked (there's no separate JSON
+    // media array per post -- see renderMarkdown), so next/prev only ever
+    // moves within that one post's media, in the order it was rendered.
+    lightboxOpen: false,
+    lightboxItems: [],
+    lightboxIndex: 0,
+    get lightboxItem() {
+      return this.lightboxItems[this.lightboxIndex] || null;
+    },
+    openLightbox(items, index) {
+      if (!items.length) return;
+      this.lightboxItems = items;
+      this.lightboxIndex = index;
+      this.lightboxOpen = true;
+    },
+    closeLightbox() {
+      this.lightboxOpen = false;
+      this.lightboxItems = [];
+    },
+    lightboxStep(delta) {
+      const n = this.lightboxItems.length;
+      if (n < 2) return;
+      this.lightboxIndex = (this.lightboxIndex + delta + n) % n;
+    },
+    // Bound once, window-wide (see `click.window.capture` on <body>), since
+    // `.md-view` content is `x-html`-injected and can't carry its own
+    // per-element Alpine directives. Capture phase so a click on a post's
+    // media is claimed -- and, for the feed, kept from also opening the
+    // entry modal -- before it bubbles to the feed <li>'s own click handler.
+    handleMediaClick(e) {
+      const el = e.target.closest(".media-thumb");
+      if (!el) return;
+      const container = el.closest(".md-view");
+      if (!container) return;
+      e.stopPropagation();
+      const thumbs = Array.from(container.querySelectorAll(".media-thumb"));
+      const items = thumbs.map((t) => ({ src: t.dataset.src || t.src, type: t.dataset.type }));
+      this.openLightbox(items, thumbs.indexOf(el));
+    },
+
     // ---------- global keydown ----------
     onKeydown(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -1063,7 +1113,13 @@ document.addEventListener("alpine:init", () => {
         this.paletteOpen ? this.closePalette() : this.openPalette();
         return;
       }
+      if (this.lightboxOpen && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        this.lightboxStep(e.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
       if (e.key !== "Escape") return;
+      if (this.lightboxOpen) { this.closeLightbox(); return; }
       if (this.paletteOpen) this.closePalette();
       if (this.adminOpen) this.adminOpen = false;
       if (this.inboxDrawerOpen) this.inboxDrawerOpen = false;
@@ -1086,7 +1142,8 @@ document.addEventListener("alpine:init", () => {
       // form), but they all share one body.
       const updateBodyScrollLock = () => {
         document.body.style.overflow = (this.modalOpen || this.newEntryOpen || this.todoModalOpen
-          || this.adminOpen || this.inboxDrawerOpen || this.todoDrawerOpen || this.paletteOpen) ? "hidden" : "";
+          || this.adminOpen || this.inboxDrawerOpen || this.todoDrawerOpen || this.paletteOpen
+          || this.lightboxOpen) ? "hidden" : "";
       };
       this.$watch("modalOpen", updateBodyScrollLock);
       this.$watch("newEntryOpen", updateBodyScrollLock);
@@ -1095,6 +1152,7 @@ document.addEventListener("alpine:init", () => {
       this.$watch("inboxDrawerOpen", updateBodyScrollLock);
       this.$watch("todoDrawerOpen", updateBodyScrollLock);
       this.$watch("paletteOpen", updateBodyScrollLock);
+      this.$watch("lightboxOpen", updateBodyScrollLock);
 
       fetch("/api/health")
         .then((r) => r.json())

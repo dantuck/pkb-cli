@@ -388,21 +388,68 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   margin: 0.55rem 0; padding-left: 0.8rem; border-left: 3px solid var(--accent); color: var(--muted);
 }
 .md-view a { color: var(--accent-text); }
-.md-view img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.4rem 0; display: block; }
-.md-view video { max-width: 100%; border-radius: 6px; margin: 0.4rem 0; display: block; background: #000; }
+.md-view img.media-thumb { max-width: 100%; height: auto; border-radius: 6px; margin: 0.4rem 0; display: block; cursor: zoom-in; }
+.md-view .media-video {
+  position: relative; display: block; margin: 0.4rem 0; border-radius: 6px; overflow: hidden; cursor: zoom-in;
+}
+.md-view .media-video video {
+  max-width: 100%; width: 100%; display: block; background: #000; pointer-events: none;
+}
+.md-view .media-video .play-badge {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 2.6rem; height: 2.6rem; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 1rem;
+}
 .md-view .media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.5rem;
   margin: 0.4rem 0;
 }
-.md-view .media-grid img,
-.md-view .media-grid video {
+.md-view .media-grid .media-thumb {
   margin: 0;
   width: 100%;
   height: 160px;
   object-fit: cover;
-  border-radius: 6px;
+}
+.md-view .media-grid .media-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Lightbox -- click any post image/video to open it larger, with next/prev
+   across the same post's media (see handleMediaClick/openLightbox in
+   app.js). Reuses .modal-backdrop's fade but its own near-full-viewport
+   panel instead of .modal-panel's side-sheet layout. */
+.lightbox-backdrop { z-index: 60; }
+.lightbox-panel {
+  position: fixed; inset: 0; z-index: 61;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+}
+.lightbox-panel.open { opacity: 1; pointer-events: auto; }
+.lightbox-media {
+  display: flex; align-items: center; justify-content: center;
+  width: min(92vw, 1100px); height: 86vh;
+}
+.lightbox-media img, .lightbox-media video {
+  max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain;
+  background: #000;
+}
+.lightbox-close {
+  position: absolute; top: 1rem; right: 1rem; color: #fff; background: rgba(0, 0, 0, 0.4);
+}
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); color: #fff; background: rgba(0, 0, 0, 0.4);
+}
+.lightbox-prev { left: 1rem; }
+.lightbox-next { right: 1rem; }
+.lightbox-count {
+  position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  color: #fff; background: rgba(0, 0, 0, 0.4); padding: 0.2rem 0.6rem; border-radius: 999px;
+  font-size: 0.8rem;
 }
 
 #feed-more { display: block; margin: 1.25rem auto; }
