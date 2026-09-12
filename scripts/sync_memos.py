@@ -228,16 +228,19 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
 
     existing_path = existing_paths.get(source_id)
     if existing_path:
-        fm, _ = pc.read_entry(existing_path)
-        if fm.get("updated") == updated and fm.get("title") == title:
-            # heal any incomplete attachment download from a prior crashed run;
-            # body itself is already correct, so skip reassembling it
-            sync_attachments(root, fm["id"], memo.get("attachments"), base_url, token)
+        fm, existing_content = pc.read_entry(existing_path)
+        # Rebuild (not just compare timestamps): the memo itself may not have
+        # changed server-side, but attachments_markdown's rendering of it can
+        # change across pkb-cli versions (e.g. the video/gallery-grid markup
+        # fix), and a stale mirror would otherwise never pick that up since
+        # its updateTime never advances.
+        content = build_content(fm["id"])
+        if fm.get("updated") == updated and fm.get("title") == title and content == existing_content:
             return existing_path, "unchanged"
         fm["updated"] = updated
         fm["title"] = title
         fm["tags"] = tags
-        pc.write_entry_readonly(existing_path, fm, build_content(fm["id"]))
+        pc.write_entry_readonly(existing_path, fm, content)
         return existing_path, "updated"
 
     entry_id = pc.gen_id(all_ids)
