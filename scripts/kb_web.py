@@ -14,6 +14,7 @@ import mimetypes
 import os
 import re
 import sqlite3
+import stat
 import sys
 import time
 import types
@@ -35,6 +36,11 @@ import pkb_common as pc
 # repo content. Deliberately not WEB_DIR (the app's own JS/CSS) and never
 # ".pkb" (config, cursors, the FTS index, decrypted-in-memory secrets).
 _CONTENT_DIR_PREFIXES = tuple(f"/{d}/" for d in pc.CONTENT_DIRS)
+
+# Hoisted so a video's many small range requests during seeking don't each
+# recompile the pattern.
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+_RANGE_COPY_BLOCK_SIZE = 64 * 1024
 
 _kb_module = None
 
@@ -763,20 +769,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Serve `path` (a root-relative URL path) from under `base_dir`, refusing
         anything that normalizes outside it -- shared by the app's own static
         assets (base_dir=WEB_DIR) and repo content like synced attachment images
-        (base_dir=self.root, gated to known content dirs by the caller)."""
+        and videos (base_dir=self.root, gated to known content dirs by the
+        caller). Honors a single-range Range header when present -- browsers'
+        <video> element uses range requests to seek and, on some engines
+        (Safari in particular), to play at all, so a synced video attachment
+        needs this to be watchable in place rather than only downloadable."""
         safe = os.path.normpath(path).lstrip("/")
         file_path = os.path.join(base_dir, safe)
-        if not file_path.startswith(base_dir) or not os.path.isfile(file_path):
+        try:
+            st = os.stat(file_path)
+        except OSError:
+            st = None
+        if not file_path.startswith(base_dir) or not st or not stat.S_ISREG(st.st_mode):
             self.send_json({"error": "not found"}, status=404)
             return
         ctype = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
-        with open(file_path, "rb") as f:
-            body = f.read()
-        self.send_response(200)
+        size = st.st_size
+        start, end, status = 0, size - 1, 200
+        match = self.headers.get("Range") and _RANGE_RE.match(self.headers["Range"])
+        if match and (match.group(1) or match.group(2)):
+            if match.group(1):
+                start, end = int(match.group(1)), int(match.group(2)) if match.group(2) else size - 1
+            else:
+                start, end = max(0, size - int(match.group(2))), size - 1
+            start, end = max(0, min(start, size - 1)), max(start, min(end, size - 1))
+            status = 206
+        length = end - start + 1
+        self.send_response(status)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
-        self.wfile.write(body)
+        # Streamed in blocks rather than one read()/write() of the whole
+        # range -- a synced video can be large, and this is now a path video
+        # playback (not just small app assets/images) routes through.
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(_RANGE_COPY_BLOCK_SIZE, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
 
 class Server(http.server.ThreadingHTTPServer):
