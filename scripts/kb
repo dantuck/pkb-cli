@@ -1138,8 +1138,8 @@ def entry_update_content(root, entry_id, title=None, body=None):
     found = _find_entry(root, entry_id)
     if found is None:
         return None
-    path, _fm, body = found
-    guard = _readonly_guard(path, body)
+    path, _fm, existing_body = found
+    guard = _readonly_guard(path, existing_body)
     if guard:
         return guard
     with pc.entry_lock(path):
