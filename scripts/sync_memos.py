@@ -143,17 +143,22 @@ def sync_attachments(root, entry_id, attachments, base_url, token):
 
 
 def attachments_markdown(attachments):
-    """Render synced attachments as markdown: images inline via `![]()` (kb web
-    serves the root-relative path directly -- see _serve_static in kb_web.py);
+    """Render synced attachments as markdown: images and videos inline via
+    `![]()` (kb web serves the root-relative path directly -- see
+    _serve_static in kb_web.py -- and its renderer plays video/* extensions
+    with a <video> element instead of <img>, see renderInline in app.js);
     anything else (pdf, audio, ...) as a plain link so it's still reachable,
-    just not inlined."""
+    just not inlined. Joined with single newlines rather than blank lines so
+    multiple attachments on one memo land in the same rendered paragraph --
+    app.js groups a paragraph with more than one image/video into a gallery
+    grid instead of stacking them full-width."""
     lines = []
     for rel_path, filename, mime in attachments:
-        if mime.startswith("image/"):
+        if mime.startswith("image/") or mime.startswith("video/"):
             lines.append(f"![{filename}]({rel_path})")
         else:
             lines.append(f"[{filename}]({rel_path})")
-    return "\n\n".join(lines)
+    return "\n".join(lines)
 
 
 def fetch_memos(base_url, token, since_updated_time):

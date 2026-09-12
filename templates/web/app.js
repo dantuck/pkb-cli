@@ -13,19 +13,32 @@ function escapeHtml(s) {
 }
 
 const SAFE_URL_RE = /^(https?:|mailto:|\/|#)/i;
+const VIDEO_EXT_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(\?.*)?$/i;
 
-function renderInline(s) {
+// `mediaCounter`, when passed, gets `.count` incremented once per embedded
+// image/video -- lets a caller (flushParagraph, for gallery-grid grouping)
+// learn how much media a string contains without a second pass over the
+// rendered HTML.
+function renderInline(s, mediaCounter) {
   s = escapeHtml(s);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
-  // Images first -- `![alt](src)` would otherwise also match the plain-link
-  // pattern below (missing only its leading "!"), rendering a broken link
-  // instead of the picture. Same safe-scheme allowlist as links, for the
-  // same reason: blocks javascript: and other script-executing URIs from a
-  // synced/pasted entry body.
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) =>
-    SAFE_URL_RE.test(url) ? `<img src="${url}" alt="${alt}" loading="lazy">` : m);
+  // Images (and, by extension, videos) first -- `![alt](src)` would otherwise
+  // also match the plain-link pattern below (missing only its leading "!"),
+  // rendering a broken link instead of the media. Same safe-scheme allowlist
+  // as links, for the same reason: blocks javascript: and other
+  // script-executing URIs from a synced/pasted entry body. A synced video
+  // attachment (e.g. from usememos) uses this same `![]()` syntax -- see
+  // attachments_markdown in sync_memos.py -- distinguished here purely by
+  // file extension so it plays inline instead of rendering as a static image.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => {
+    if (!SAFE_URL_RE.test(url)) return m;
+    if (mediaCounter) mediaCounter.count++;
+    return VIDEO_EXT_RE.test(url)
+      ? `<video src="${url}" controls preload="metadata"></video>`
+      : `<img src="${url}" alt="${alt}" loading="lazy">`;
+  });
   // Only render as a link if the URL is a safe scheme -- blocks javascript:
   // and other script-executing URIs from a synced/pasted entry body.
   s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) =>
@@ -43,7 +56,14 @@ function renderMarkdown(md) {
 
   const flushParagraph = () => {
     if (paragraph.length) {
-      html += `<p>${renderInline(paragraph.join(" "))}</p>`;
+      const mediaCounter = { count: 0 };
+      const inner = renderInline(paragraph.join(" "), mediaCounter);
+      // A paragraph made up of several attached images/videos (usememos
+      // syncs multiple attachments as consecutive `![]()` lines within one
+      // paragraph -- see attachments_markdown in sync_memos.py) reads better
+      // as a gallery grid than stacked full-width, so it gets its own
+      // wrapper instead of a plain <p>; see .media-grid in style.css.
+      html += mediaCounter.count > 1 ? `<div class="media-grid">${inner}</div>` : `<p>${inner}</p>`;
       paragraph = [];
     }
   };
