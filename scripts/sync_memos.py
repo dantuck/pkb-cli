@@ -233,9 +233,11 @@ def write_memo(root, memo, existing_paths, all_ids, threshold, base_url, token):
         # changed server-side, but attachments_markdown's rendering of it can
         # change across pkb-cli versions (e.g. the video/gallery-grid markup
         # fix), and a stale mirror would otherwise never pick that up since
-        # its updateTime never advances.
+        # its updateTime never advances. (read_entry keeps the blank line that
+        # write_entry puts after the frontmatter, hence the lstrip -- without it
+        # this never matched and every sync rewrote every mirror.)
         content = build_content(fm["id"])
-        if fm.get("updated") == updated and fm.get("title") == title and content == existing_content:
+        if fm.get("updated") == updated and fm.get("title") == title and content == existing_content.lstrip("\n"):
             return existing_path, "unchanged"
         fm["updated"] = updated
         fm["title"] = title
