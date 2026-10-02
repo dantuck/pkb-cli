@@ -538,6 +538,45 @@ def _parse_simple_config(text):
     return result
 
 
+def config_problems(text):
+    """Human-readable problems found in a config.yml's text, [] if it looks fine.
+
+    The parser above is deliberately lenient (it never raises), so a typo'd key,
+    a line missing its colon, or a wrongly-typed value would otherwise be
+    silently ignored or silently change behavior. This is what `kb doctor`
+    surfaces instead. Checks: lines with no `key: value` shape, unknown keys
+    (against DEFAULT_CONFIG), and values whose type differs from the default's.
+    """
+    problems = []
+    for n, raw in enumerate(text.split("\n"), 1):
+        stripped = raw.strip()
+        if stripped and not stripped.startswith("#") and ":" not in stripped:
+            problems.append(f"line {n}: {stripped!r} is not a `key: value` line")
+    try:
+        parsed = _parse_simple_config(text)
+    except Exception as e:  # defensive: the parser is not expected to raise
+        return problems + [f"couldn't parse: {e}"]
+
+    def walk(found, default, path):
+        for key, value in found.items():
+            where = ".".join(path + [key])
+            if key not in default:
+                problems.append(f"unknown key `{where}` (ignored)")
+                continue
+            want = default[key]
+            if isinstance(want, dict):
+                if isinstance(value, dict):
+                    walk(value, want, path + [key])
+                else:
+                    problems.append(f"`{where}` should be a section, got {value!r} (ignored)")
+            elif isinstance(want, bool) != isinstance(value, bool) or (
+                    not isinstance(want, bool) and isinstance(want, int) != isinstance(value, int)):
+                problems.append(f"`{where}` should be {type(want).__name__}, got {value!r}")
+
+    walk(parsed, DEFAULT_CONFIG, [])
+    return problems
+
+
 def _deep_merge(base, override):
     """Merge override onto a deep copy of base, recursively for nested dicts.
 

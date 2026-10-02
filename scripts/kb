@@ -2587,6 +2587,16 @@ def doctor_checks(root, push=None):
         if not any("cursors.json" in t for t in todo):
             ok.append("cursors.json looks sane")
 
+    # config.yml sanity (the parser is lenient, so typos would otherwise go unnoticed)
+    if root is not None:
+        config_path = os.path.join(root, ".pkb", "config.yml")
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                problems = pc.config_problems(f.read())
+            todo.extend(f"config.yml: {p}" for p in problems)
+            if not problems:
+                ok.append("config.yml looks sane")
+
     # pkb-cli version, checked against whatever was last fetched -- no network call
     # here (that's `kb update`'s job), so this can go stale but never blocks/slows
     # down a doctor run or touches the network on its own.

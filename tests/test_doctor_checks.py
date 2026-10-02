@@ -118,3 +118,18 @@ class DoctorChecksTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigProblemsTest(unittest.TestCase):
+    def test_clean_config_has_no_problems(self):
+        self.assertEqual(pc.config_problems("inbox_triage_days: 7\nsync:\n  memos:\n    inbox_min_length: 100\n"), [])
+
+    def test_flags_unknown_key_missing_colon_and_wrong_type(self):
+        problems = pc.config_problems("inbox_triage_dayz: 7\nauto_push: maybe\nbogus line\n")
+        text = "\n".join(problems)
+        self.assertIn("unknown key `inbox_triage_dayz`", text)
+        self.assertIn("`auto_push` should be bool", text)
+        self.assertIn("not a `key: value` line", text)
+
+    def test_flags_section_replaced_by_scalar(self):
+        self.assertTrue(any("should be a section" in p for p in pc.config_problems("sync: off\n")))
