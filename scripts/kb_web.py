@@ -20,7 +20,7 @@ import time
 import types
 import webbrowser
 from datetime import datetime
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import parse_qs, unquote, urlsplit
 
 WEB_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "web")
@@ -758,6 +758,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_json({"error": f"no route for {method} {path}"}, status=404)
 
     def _serve_static(self, path):
+        # Decode and normalize *before* the prefix check: otherwise
+        # "/sources/../.pkb/x" passes startswith("/sources/") and then
+        # _serve_file resolves it to a path outside the content dirs
+        # (e.g. .pkb/, which holds config and the search index).
+        path = os.path.normpath("/" + unquote(path).lstrip("/"))
         if path == "/":
             path = "/index.html"
         if path.startswith(_CONTENT_DIR_PREFIXES):
@@ -780,7 +785,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             st = os.stat(file_path)
         except OSError:
             st = None
-        if not file_path.startswith(base_dir) or not st or not stat.S_ISREG(st.st_mode):
+        if os.path.commonpath([os.path.realpath(file_path), os.path.realpath(base_dir)]) != os.path.realpath(base_dir) or not st or not stat.S_ISREG(st.st_mode):
             self.send_json({"error": "not found"}, status=404)
             return
         ctype = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
