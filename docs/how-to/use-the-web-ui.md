@@ -17,6 +17,11 @@ network-reachable interface) and opens it in your browser. Default port is
 kb web --port 8080
 ```
 
+If a `kb web` is already listening on that port (for instance the login
+service below), `kb web` doesn't fail: it just opens the running instance in
+your browser and exits. It warns if that instance is serving a different data
+repo than the one you're in. Use `--no-open` to skip opening the browser.
+
 It runs in the foreground for as long as you're using it — `Ctrl-C` to stop.
 Like every `kb` command, it operates on the resolved data repo (walking up
 from the current directory, falling back to `~/.pkb`), so `cd` into a

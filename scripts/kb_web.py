@@ -18,6 +18,7 @@ import stat
 import sys
 import time
 import types
+import urllib.request
 import webbrowser
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -825,21 +826,46 @@ class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def _running_root(port):
+    """The data repo root of a kb web already listening on 127.0.0.1:`port`,
+    or None if nothing there answers /api/health like kb web does."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as resp:
+            data = json.loads(resp.read())
+        return data.get("root") if data.get("ok") else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _open_browser(url):
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def serve(root, port, open_browser=True):
     Handler.root = root
     try:
         httpd = Server(("127.0.0.1", port), Handler)
     except OSError as e:
-        print(f"error: can't bind 127.0.0.1:{port} -- {e}", file=sys.stderr)
-        return 1
+        url = f"http://127.0.0.1:{port}/"
+        running_root = _running_root(port)
+        if running_root is None:
+            print(f"error: can't bind 127.0.0.1:{port} -- {e}", file=sys.stderr)
+            return 1
+        # Already running (e.g. via `kb service`): just open it.
+        print(f"kb web is already running at {url}")
+        if os.path.realpath(running_root) != os.path.realpath(root):
+            print(f"note: it is serving {running_root}, not {root}", file=sys.stderr)
+        if open_browser:
+            _open_browser(url)
+        return 0
 
     url = f"http://127.0.0.1:{port}/"
     print(f"kb web running at {url} (Ctrl-C to stop)")
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        _open_browser(url)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

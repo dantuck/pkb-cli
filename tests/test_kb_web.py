@@ -107,6 +107,22 @@ class KbWebTest(unittest.TestCase):
         status, _, raw = self.request("GET", "/sources/memos/clip.bin")
         self.assertEqual((status, len(raw)), (200, 100))
 
+    def test_serve_on_busy_port_opens_existing_instance(self):
+        with mock.patch.object(kb_web.webbrowser, "open") as opened:
+            rc = kb_web.serve(self.root, self.port, open_browser=True)
+        self.assertEqual(rc, 0)
+        opened.assert_called_once_with(f"http://127.0.0.1:{self.port}/")
+
+    def test_serve_on_port_held_by_something_else_fails(self):
+        import socket
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            with mock.patch.object(kb_web.webbrowser, "open") as opened:
+                rc = kb_web.serve(self.root, sock.getsockname()[1], open_browser=True)
+        self.assertEqual(rc, 1)
+        opened.assert_not_called()
+
     def test_make_snippet_strips_title_and_truncates(self):
         self.assertEqual(kb_web._make_snippet("# Title\n\nbody"), "body")
         out = kb_web._make_snippet("word " * 400, limit=50)
