@@ -96,6 +96,13 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
+/* Pinned to the top so the feed scrolls underneath. Negative margins let the
+   opaque background span body's side padding; the top padding replaces body's. */
+#site-header {
+  position: sticky; top: 0; z-index: 20; background: var(--bg);
+  margin: -2.5rem -1.25rem 1.25rem; padding: 1.5rem 1.25rem 0.5rem;
+  transition: background 0.15s ease;
+}
 #header-row {
   display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.4rem;
 }
@@ -108,7 +115,7 @@ h1::before {
   content: ""; width: 0.55rem; height: 0.55rem; border-radius: 999px;
   background: var(--accent); display: inline-block;
 }
-#status { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.75rem; }
+#status { color: var(--muted); font-size: 0.85rem; margin: 0; }
 #status.ok { color: var(--ok); }
 #status.err { color: var(--danger); }
 

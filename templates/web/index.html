@@ -9,6 +9,7 @@
 </head>
 <body x-data="kbApp()" x-init="init()" x-on:keydown.window="onKeydown($event)" x-on:click.window.capture="handleMediaClick($event)">
 
+<header id="site-header">
 <div id="header-row">
   <h1>kb</h1>
   <span>
@@ -42,6 +43,7 @@
   </span>
 </div>
 <p id="status" :class="statusClass" x-text="statusText"></p>
+</header>
 
 <div id="admin-backdrop" :class="{ open: adminOpen }" @click="adminOpen = false"></div>
 <div id="admin-drawer" :class="{ open: adminOpen }" :aria-hidden="!adminOpen" :inert="!adminOpen">
