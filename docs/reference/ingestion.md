@@ -47,6 +47,14 @@ directly) and `sync_gitlab.py`/`sync_github.py` for the full shape.
 6. Exit non-zero with a clear message on auth/network failure; never
    partially advance the cursor on failure.
 
+**Read-only mirror convention.** Write `sources/<tool>/` files with
+`pc.write_entry_readonly` (mode 0444) and end the body with exactly one
+markdown link to the item's upstream home (e.g. `[Memo](https://…/memos/101)`).
+`kb` detects read-only mirrors from the file's permission bit, not from a list
+of sources, so any script following this convention gets edit protection in
+`kb tag`/`kb link`/`kb web` for free, and the trailing link becomes the "edit
+it there" pointer shown to the user.
+
 Runnable by hand, via a Claude Code slash command (`/sync`), or on a recurring
 schedule with `kb sync-service install` (a launchd LaunchAgent on macOS, a
 systemd --user timer on Linux; `--interval-minutes` sets the cadence, default

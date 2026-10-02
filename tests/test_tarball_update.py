@@ -57,8 +57,7 @@ class VersionMarkerTest(unittest.TestCase):
         self.assertIsNone(kb_cli._read_local_version())
 
     def test_empty_marker_reads_as_empty_string_not_none(self):
-        with open(kb_cli.VERSION_FILE, "w") as f:
-            pass  # empty file, e.g. an interrupted write
+        open(kb_cli.VERSION_FILE, "w").close()  # empty file, e.g. an interrupted write
         self.assertEqual(kb_cli._read_local_version(), "")
         self.assertIsNotNone(kb_cli._read_local_version())
 

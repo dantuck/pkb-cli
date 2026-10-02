@@ -1,0 +1,19 @@
+[project]
+name = "pkb-cli"
+description = "kb: CLI for a Diataxis-based personal knowledge base"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+extend-include = ["scripts/kb"]
+
+[tool.ruff.lint.per-file-ignores]
+# these scripts put their own directory on sys.path before importing siblings
+"scripts/*" = ["E402"]
+
+[tool.ruff.lint]
+# pyflakes + pycodestyle errors; style-only rules (E501, E70x) are left to taste
+select = ["F", "E"]
+ignore = ["E501", "E701", "E702", "E731", "E741"]

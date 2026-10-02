@@ -71,7 +71,9 @@ python3 -m unittest discover -s tests -v
 ```
 
 CI ([.github/workflows/test.yml](.github/workflows/test.yml)) runs the same
-command on Python 3.9 and 3.12 for every push/PR against `main`.
+command on Python 3.9 and 3.12, plus `ruff check .`, for every push/PR against
+`main`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the code map and how to add
+a sync source.
 
 ## License
 
