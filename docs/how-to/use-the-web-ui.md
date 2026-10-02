@@ -46,10 +46,15 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   type with the chips along the top (`tutorials`, `how-to`, `reference`,
   `explanation`, or All), or click any tag on an entry to filter by that tag
   (`clear` removes the filter). Click an entry to open it.
+- **Media** — synced posts with images or videos render them inline (videos
+  play in place; multiple attachments are laid out in a grid). Click any one
+  to open a lightbox with next/previous navigation across that post's media.
 - **Entry modal** — click any feed item to view it rendered as markdown; hit
   **edit** to change its title, body, tags, or links in place (tag/link
   inputs autocomplete against existing tags and entries). Corresponds to
   editing the file plus `kb tag`/`kb link` — never hand-edited frontmatter.
+  Entries mirrored from an external source (`sources/…`) are read-only: the
+  modal shows a banner linking to the origin instead of an edit button.
 - **New** (header button) — opens a modal to create an entry: pick a Diataxis
   type, title, markdown body (with a preview toggle), tags, and links, then
   **create**. Equivalent to `kb new <type> "<title>" --tags ... --links ...`.

@@ -13,7 +13,7 @@ notes, which live in a separate (typically private) data repo containing
   data repo, searching with no tooling at all, triaging the inbox, ingestion
   credentials, the Claude Code skill, the web UI.
 - Looking something up? See [reference](docs/reference/) — the full CLI
-  surface, repo layout, frontmatter schema, ingestion contract, journal
+  surface, `config.yml` keys, repo layout, frontmatter schema, ingestion contract, journal
   conventions.
 - Curious why it's built this way? See [explanation](docs/explanation/) — design
   principles and the search architecture.
@@ -50,8 +50,10 @@ repo](docs/how-to/use-a-data-repo.md), or walk through the full
 pkb-cli/
   scripts/      the kb CLI and everything it dispatches to
   skills/kb/    Claude Code skill (SKILL.md), `kb setup` offers to install it
-  templates/    schema.sql (loaded at runtime, never copied into a data repo)
-                and secrets.env.example (documentation only)
+  templates/    schema.sql (loaded at runtime, never copied into a data repo),
+                secrets.env.example (documentation only), and web/ (the
+                `kb web` front end: plain HTML/CSS/JS + vendored Alpine)
+  tests/        stdlib unittest suite
   docs/         tutorials/, how-to/, reference/, explanation/
   install.sh
 ```

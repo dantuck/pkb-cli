@@ -3081,7 +3081,7 @@ examples:
   kb new how-to "Tailscale sidecar config for Synology"
   kb search tailscale --type how-to
   kb sync all && kb triage
-  kb setup --install
+  kb setup --yes
   kb update
 
 kb operates on a data repo found by walking up from the current directory to a

@@ -10,7 +10,7 @@ writing for four different needs.
   inbox, setting up ingestion credentials, installing the Claude Code skill,
   using the web UI).
 - **[Reference](reference/)** — information-oriented lookup: the full CLI
-  command surface, the data repo layout, the frontmatter schema, the
+  command surface, the data repo layout, the frontmatter schema, `config.yml` keys, the
   ingestion contract, journal file conventions.
 - **[Explanation](explanation/)** — understanding-oriented discussion of why
   the tool is built this way, including the search architecture's tiering.

@@ -49,7 +49,9 @@ pkb/
 - `inbox/` — landing zone for anything not yet triaged. Nothing is permanent
   here — see [how-to: triage the inbox](../how-to/triage-the-inbox.md).
 - `sources/<tool>/` — raw, machine-written mirrors of external systems. Never
-  hand-edited. Safe to delete and re-sync from cursor 0 at any time (except
+  hand-edited — files are written read-only (mode 0444), and `kb tag`,
+  `kb link`, and the web UI refuse to modify them, since the next sync would
+  overwrite the change. Edit the entry at its origin instead. Safe to delete and re-sync from cursor 0 at any time (except
   for locally-added links).
 - `.pkb/` — all generated/config data. Databases are gitignored;
   `config.yml`, `cursors.json`, and `schema.sql` are committed so the repo is
