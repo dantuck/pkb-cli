@@ -15,6 +15,7 @@ SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__fil
 sys.path.insert(0, SCRIPT_DIR)
 
 import pkb_common as pc  # noqa: E402
+import pkb_entries  # noqa: E402
 
 
 def _load_kb_cli():
@@ -45,9 +46,9 @@ class EntryNewTest(unittest.TestCase):
         def fake_reindex_fast(root):
             self.reindex_calls += 1
 
-        self._orig_reindex_fast = kb_cli._reindex_fast
-        kb_cli._reindex_fast = fake_reindex_fast
-        self.addCleanup(lambda: setattr(kb_cli, "_reindex_fast", self._orig_reindex_fast))
+        self._orig_reindex_fast = pkb_entries._reindex_fast
+        pkb_entries._reindex_fast = fake_reindex_fast
+        self.addCleanup(lambda: setattr(pkb_entries, "_reindex_fast", self._orig_reindex_fast))
 
     def _make_existing(self, entry_id, entry_type="reference"):
         path = os.path.join(self.root, pc.TYPE_DIR[entry_type], f"{entry_id}-existing.md")
