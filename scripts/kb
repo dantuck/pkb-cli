@@ -3042,7 +3042,7 @@ def main():
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser(
-        "web", help="run the local web UI (feed + quick capture)",
+        "web", aliases=["open"], help="run the local web UI, or open it if already running",
         description="Run the local web UI: a browser-based feed + quick-capture "
                      "view over the same data repo the CLI operates on. Binds "
                      "127.0.0.1 only. Runs in the foreground until Ctrl-C.",

@@ -28,7 +28,9 @@ kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
 kb push                           push auto-commit's history to the data repo's upstream
-kb web [--port PORT] [--no-open]  local-only web UI (127.0.0.1, default port 4173)
+kb web [--port PORT] [--no-open]  local-only web UI (127.0.0.1, default port 4173);
+                                  if one is already running, just opens it
+kb open [--port PORT] [--no-open] alias for `kb web`
 kb service install|uninstall|status [--port PORT] [--repo DIR]
                                   run `kb web` as a login service (launchd/systemd --user)
 kb sync-service install|uninstall|status [--interval-minutes MIN] [--repo DIR]
