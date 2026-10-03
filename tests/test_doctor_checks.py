@@ -112,6 +112,9 @@ class ConfigProblemsTest(unittest.TestCase):
         self.assertEqual(pc.config_problems("inbox_triage_days: 7\nsync:\n  memos:\n    inbox_min_length: 100\n"), [])
 
     def test_flags_unknown_key_missing_colon_and_wrong_type(self):
+        # `null` is documented as "no inbox stubs" for this key, so it isn't a type error
+        self.assertEqual(pc.config_problems("sync:\n  memos:\n    inbox_min_length: null\n"), [])
+        self.assertTrue(pc.config_problems("inbox_triage_days: null\n"))
         problems = pc.config_problems("inbox_triage_dayz: 7\nauto_push: maybe\nbogus line\n")
         text = "\n".join(problems)
         self.assertIn("unknown key `inbox_triage_dayz`", text)

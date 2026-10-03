@@ -4,7 +4,6 @@ long as the browser tab needs it -- same one-shot-per-invocation spirit as every
 other kb command, just longer-lived. Binds 127.0.0.1 only; never listens on a
 network-reachable interface.
 """
-import contextlib
 import http.server
 import io
 import json
@@ -14,6 +13,7 @@ import re
 import sqlite3
 import stat
 import sys
+import threading
 import time
 import types
 import urllib.request
@@ -81,16 +81,55 @@ def _make_snippet(body, limit=600):
     return cut.rstrip() + "…"
 
 
+class _StdoutRouter:
+    """sys.stdout stand-in that sends each thread's prints to that thread's own
+    capture buffer, and everything else to the real stream. contextlib's
+    redirect_stdout swaps the one process-global sys.stdout, so on this
+    threading server two requests capturing at once would steal each other's
+    output. Installed only while at least one capture is running."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._depth = 0
+        self._real = None
+        self._local = threading.local()
+
+    def write(self, text):
+        buf = getattr(self._local, "buf", None)
+        return (self._real if buf is None else buf).write(text)
+
+    def __getattr__(self, name):  # flush, isatty, encoding, ... -> the real stream
+        return getattr(self._real, name)
+
+    def capture(self, fn, *a, **kw):
+        buf = io.StringIO()
+        with self._lock:
+            if self._depth == 0:
+                self._real = sys.stdout
+                sys.stdout = self
+            self._depth += 1
+        self._local.buf = buf
+        try:
+            rc = fn(*a, **kw)
+        finally:
+            self._local.buf = None
+            with self._lock:
+                self._depth -= 1
+                if self._depth == 0:
+                    sys.stdout = self._real
+        return rc, buf.getvalue().strip()
+
+
+_STDOUT = _StdoutRouter()
+
+
 def _capture_stdout(fn, *a, **kw):
     """Run `fn`, capturing whatever it prints instead of letting it hit kb
     web's own stdout. Several kb internals (inbox promote/redirect/discard)
     only communicate their result via a print() -- this lets the web layer
     reuse them as-is instead of duplicating their logic just to get a
     structured return value."""
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = fn(*a, **kw)
-    return rc, buf.getvalue().strip()
+    return _STDOUT.capture(fn, *a, **kw)
 
 
 @route("GET", "/api/health")
@@ -550,28 +589,56 @@ def api_todo_action(h, root, issue_id, action):
     h.send_json({"message": message})
 
 
-# ---------- admin: index / validate / sync / doctor ----------
-# These call straight through to the same cmd_* functions the CLI uses, via a
-# throwaway argparse.Namespace stand-in -- not custom subprocess plumbing --
-# so kb web can never drift from what `kb index`/`kb validate`/`kb sync`/`kb
-# doctor` actually do. cmd_index/validate/sync shell out to sibling scripts,
-# but capture+print their output (rather than inheriting stdio) specifically
-# so _capture_stdout can grab it here and return it in the JSON response --
-# otherwise it would only ever reach the terminal kb web happens to be
-# running in, which, launched from a launchd plist, has no terminal anyone
-# can see.
+# ---------- admin ----------
+# Everything here calls straight through to the same cmd_* functions the CLI
+# uses, via a throwaway argparse.Namespace stand-in -- not custom subprocess
+# plumbing -- so kb web can never drift from what `kb index`/`kb validate`/
+# `kb sync`/`kb doctor`/`kb update`/`kb setup`/... actually do. Those commands
+# shell out to sibling scripts, but capture+print their output (rather than
+# inheriting stdio) specifically so _capture_stdout can grab it here and return
+# it in the JSON response -- otherwise it would only ever reach the terminal kb
+# web happens to be running in, which, launched from a launchd plist, has no
+# terminal anyone can see.
+#
+# Admin tasks are heavy and touch shared state (the index, git, brew, the installed
+# kb), so only one runs at a time; a second request gets a 409 instead of racing it.
+
+_ADMIN_LOCK = threading.Lock()
+
+
+def _admin_task(h, fn, *args, extra=None):
+    """Run `fn(*args)` under the admin lock with its stdout captured, and send
+    {ok, output, **extra}. `fn` returns a returncode, or (returncode, info) --
+    `extra` may then be a callable taking `info` and returning more fields. SystemExit (e.g. pc.get_repo_root() finding no data
+    repo) is reported as an error instead of silently killing the handler thread."""
+    if not _ADMIN_LOCK.acquire(blocking=False):
+        h.send_json({"ok": False, "error": "another admin task is still running"}, status=409)
+        return None
+    try:
+        try:
+            result, output = _capture_stdout(fn, *args)
+        except SystemExit as e:
+            h.send_json({"ok": False, "error": str(e.code) if isinstance(e.code, str) else "command exited"},
+                        status=500)
+            return None
+        rc, info = result if isinstance(result, tuple) else (result, None)
+        payload = {"ok": rc in (0, None), "output": output}
+        payload.update(extra(info) if callable(extra) else (extra or {}))
+        h.send_json(payload)
+        return rc
+    finally:
+        _ADMIN_LOCK.release()
+
 
 @route("POST", "/api/index")
 def api_index(h, root):
     args = types.SimpleNamespace(full=bool((h.read_json() or {}).get("full")))
-    rc, output = _capture_stdout(_kb().cmd_index, args)
-    h.send_json({"ok": rc == 0, "output": output})
+    _admin_task(h, _kb().cmd_index, args)
 
 
 @route("POST", "/api/validate")
 def api_validate(h, root):
-    rc, output = _capture_stdout(_kb().cmd_validate, types.SimpleNamespace())
-    h.send_json({"ok": rc == 0, "output": output})
+    _admin_task(h, _kb().cmd_validate, types.SimpleNamespace())
 
 
 @route("POST", "/api/sync")
@@ -583,24 +650,143 @@ def api_sync(h, root):
         h.send_json({"error": f"unknown source '{source}'"}, status=400)
         return
     args = types.SimpleNamespace(source=None if source == "all" else source)
-    rc, output = _capture_stdout(_kb().cmd_sync, args)
-    h.send_json({"ok": rc == 0, "output": output})
+    _admin_task(h, _kb().cmd_sync, args)
 
 
 @route("GET", "/api/doctor")
 def api_doctor(h, root):
+    _admin_task(h, _kb().cmd_doctor, types.SimpleNamespace())
+
+
+@route("GET", "/api/admin/triage")
+def api_admin_triage(h, root):
+    _admin_task(h, _kb().cmd_triage, types.SimpleNamespace(json=False))
+
+
+@route("GET", "/api/admin/journal-months")
+def api_admin_journal_months(h, root):
+    h.send_json({"months": _kb().journal_months(root)})
+
+
+@route("POST", "/api/admin/rollup")
+def api_admin_rollup(h, root):
+    """`kb journal rollup [MONTH]` -- blank/absent month means last month."""
+    month = ((h.read_json() or {}).get("month") or "").strip() or None
+    if month and not re.fullmatch(r"\d{4}-\d{2}", month):
+        h.send_json({"error": "month must be YYYY-MM"}, status=400)
+        return
+    _admin_task(h, _kb()._journal_rollup, root, month)
+
+
+@route("POST", "/api/admin/setup")
+def api_admin_setup(h, root):
+    """`kb setup --yes` -- idempotent, so re-running it is how the pre-commit
+    hook, index, bd store and optional tools get repaired after an update."""
+    _admin_task(h, _kb().cmd_setup, types.SimpleNamespace(yes=True))
+
+
+@route("GET", "/api/admin/update")
+def api_admin_update_check(h, root):
+    """Whether a newer kb exists -- the one admin read that touches the network
+    (`kb update --check`'s structured form), so it's only called on demand."""
+    h.send_json(_kb().update_info())
+
+
+@route("POST", "/api/admin/update")
+def api_admin_update(h, root):
+    """`kb update`. Reinstalling kb under a running `kb web` service means the
+    service refresh would restart this very process mid-request, so it's
+    deferred (apply_update only reports that new code went in) and scheduled
+    after the response goes out; the client waits for the server to come back."""
     kb = _kb()
-    rc, output = _capture_stdout(kb.cmd_doctor, types.SimpleNamespace())
-    h.send_json({"ok": rc == 0, "output": output})
+
+    def schedule_refresh(updated):
+        services = kb.service_info() if updated else {"supported": False}
+        scheduled = services["supported"] and (services["web"]["installed"] or services["sync"]["installed"])
+        if scheduled:
+            kb.schedule_kb_command("service", "refresh")
+        return {"restart_scheduled": bool(scheduled)}
+
+    _admin_task(h, lambda: kb.apply_update(capture=True, defer_refresh=True), extra=schedule_refresh)
+
+
+@route("GET", "/api/admin/services")
+def api_admin_services(h, root):
+    h.send_json(_kb().service_info())
+
+
+@route("POST", "/api/admin/services/{name}/{action}")
+def api_admin_service_action(h, root, name, action):
+    """install/uninstall/refresh the login services behind `kb service` (web) and
+    `kb sync-service` (sync). Actions that would stop or restart the service kb
+    web is itself running under go through schedule_kb_command; installing the web
+    service is left to the CLI -- by the time this page is open it's already
+    running, and a second one would just fight it for the port."""
+    kb = _kb()
+    payload = h.read_json() or {}
+    if name not in ("web", "sync") or action not in ("install", "uninstall", "refresh"):
+        h.send_json({"error": f"no such service action: {name} {action}"}, status=404)
+        return
+    services = kb.service_info()
+    if not services["supported"]:
+        h.send_json({"error": f"services aren't supported on {sys.platform}"}, status=400)
+        return
+    if name == "web" and action == "install":
+        h.send_json({"error": "run `kb service install` from a terminal -- this server is already running"},
+                    status=400)
+        return
+    if name == "web":  # refresh / uninstall of the service this server runs under
+        if not services["web"]["installed"]:
+            h.send_json({"error": "the web service isn't installed"}, status=400)
+            return
+        kb.schedule_kb_command("service", action)
+        h.send_json({"ok": True, "output": "", "restart_scheduled": True})
+        return
+    if action == "refresh":
+        h.send_json({"error": "scheduled sync has nothing to refresh -- reinstall it instead"}, status=400)
+        return
+    interval = None
+    if action == "install":
+        try:
+            interval = int(payload.get("interval_minutes", 60))
+        except (TypeError, ValueError):
+            interval = 0
+        if not 1 <= interval <= 10080:
+            h.send_json({"error": "interval_minutes must be between 1 and 10080"}, status=400)
+            return
+    args = types.SimpleNamespace(action=action, interval_minutes=interval, repo=root)
+    _admin_task(h, kb.cmd_sync_service, args)
+
+
+def _editor_config():
+    editor, source = pc.resolve_editor()
+    return {"editor": editor, "saved": pc.load_kb_config().get("editor", ""), "source": source}
+
+
+@route("GET", "/api/admin/config")
+def api_admin_config(h, root):
+    h.send_json(_editor_config())
+
+
+@route("PATCH", "/api/admin/config")
+def api_admin_config_set(h, root):
+    """Set (or, with a blank value, clear) kb's machine-local editor preference --
+    the one key `kb config` has."""
+    editor = ((h.read_json() or {}).get("editor") or "").strip()
+    if not pc.set_editor(editor):
+        h.send_json({"error": f"'{editor}' doesn't look like a usable editor command"}, status=400)
+        return
+    h.send_json(_editor_config())
 
 
 @route("GET", "/api/admin/status")
 def api_admin_status(h, root):
     """Structured health snapshot -- the same read-only checks `kb doctor`
-    reports, as data instead of printed text, plus inbox/todo counts and
-    push status. Cheap enough (a few file/sqlite checks, no network) that the
-    web UI polls this on a timer to surface "needs attention" without anyone
-    opening Admin and clicking Doctor themselves."""
+    reports, as data instead of printed text, plus inbox/todo counts, push
+    status, version and the available sync sources. Cheap enough (a few
+    file/sqlite checks, no network) that the web UI polls this on a timer to
+    surface "needs attention" without anyone opening Admin and clicking Doctor
+    themselves."""
     kb = _kb()
     push = kb.push_status(root)
     ok, todo = kb.doctor_checks(root, push=push)
@@ -616,6 +802,10 @@ def api_admin_status(h, root):
         "inbox_count": inbox_count, "todo_open_count": todo_open_count,
         "needs_attention": bool(todo),
         "push": push,
+        "version": kb.__version__,
+        "root": root,
+        "sources": list(kb.discover_sync_sources().keys()),
+        "busy": _ADMIN_LOCK.locked(),
     })
 
 
@@ -724,6 +914,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = parsed.path
         self.query = parse_qs(parsed.query)
         self._response_started = False
+        if method != "GET" and not self._same_origin():
+            self.send_json({"error": "cross-origin request refused"}, status=403)
+            return
         for route_method, pattern, handler in ROUTES:
             if route_method != method:
                 continue
@@ -740,6 +933,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_static(path)
             return
         self.send_json({"error": f"no route for {method} {path}"}, status=404)
+
+    def _same_origin(self):
+        """Refuse a state-changing request that a *web page* sent: a plain form
+        POST (text/plain body) skips CORS preflight, and read_json() ignores
+        Content-Type, so without this any site open in the same browser could
+        POST to 127.0.0.1 -- now including `kb update`/`kb setup`. Browsers
+        always send Origin on cross-origin POSTs; non-browser clients (curl,
+        the tests) send none and pass. The Host check also blocks DNS rebinding."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or urlsplit(origin).netloc == self.headers.get("Host")
 
     def _serve_static(self, path):
         # Decode and normalize *before* the prefix check: otherwise

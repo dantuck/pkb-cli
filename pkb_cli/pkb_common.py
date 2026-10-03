@@ -538,6 +538,11 @@ def _parse_simple_config(text):
     return result
 
 
+# Keys where `null` is a meaningful value (not a type error): sync_memos.py
+# documents `inbox_min_length: null` as "never generate an inbox stub".
+NULLABLE_CONFIG_KEYS = {"sync.memos.inbox_min_length"}
+
+
 def config_problems(text):
     """Human-readable problems found in a config.yml's text, [] if it looks fine.
 
@@ -569,6 +574,8 @@ def config_problems(text):
                     walk(value, want, path + [key])
                 else:
                     problems.append(f"`{where}` should be a section, got {value!r} (ignored)")
+            elif value is None and where in NULLABLE_CONFIG_KEYS:
+                continue
             elif isinstance(want, bool) != isinstance(value, bool) or (
                     not isinstance(want, bool) and isinstance(want, int) != isinstance(value, int)):
                 problems.append(f"`{where}` should be {type(want).__name__}, got {value!r}")
@@ -709,19 +716,40 @@ def resolve_editor_argv(editor):
     return parts
 
 
+def resolve_editor():
+    """(editor, source): $EDITOR ("env"), else the saved preference ("saved"),
+    else ("", None). Never prompts -- get_editor() builds on this."""
+    env_editor = os.environ.get("EDITOR")
+    if env_editor:
+        return env_editor, "env"
+    saved = load_kb_config().get("editor")
+    return (saved, "saved") if saved else ("", None)
+
+
+def set_editor(value):
+    """Save `value` as the editor preference, or clear it when blank. Returns
+    False (saving nothing) if it can't be parsed as a command."""
+    value = (value or "").strip()
+    cfg = load_kb_config()
+    if value:
+        if split_editor(value) is None:
+            return False
+        cfg["editor"] = value
+    else:
+        cfg.pop("editor", None)
+    save_kb_config(cfg)
+    return True
+
+
 def get_editor(prompt_if_missing=True):
     """Resolve the editor kb should spawn: $EDITOR, then the persisted
     preference in kb_config_path(), then -- only in a real terminal -- prompt
     for one and save it so this only has to happen once. Returns None if
     nothing is configured and prompting isn't possible or is declined.
     """
-    editor = os.environ.get("EDITOR")
+    editor, _source = resolve_editor()
     if editor:
         return editor
-
-    cfg = load_kb_config()
-    if cfg.get("editor"):
-        return cfg["editor"]
 
     if not prompt_if_missing or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return None
@@ -735,12 +763,10 @@ def get_editor(prompt_if_missing=True):
         return None
     if not editor:
         return None
-    if split_editor(editor) is None:
+    if not set_editor(editor):
         print(f"'{editor}' doesn't look like a valid editor command -- not saved.")
         return None
 
-    cfg["editor"] = editor
-    save_kb_config(cfg)
     print(f"saved to {kb_config_path()} -- change it any time with `kb config editor <cmd>`.")
     warn_if_editor_missing(editor)
     return editor

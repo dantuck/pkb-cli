@@ -77,19 +77,32 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   labels), and open one to change priority/type/assignee/labels/description,
   manage `blocked by`/`blocks` dependencies, add comments, and close, reopen,
   or permanently delete it.
-- **Admin** (header button) — **Reindex** (`kb index`), **Validate**
-  (`kb validate`), **Doctor** (`kb doctor`), and **Sync** against a chosen
-  source (`kb sync [memos|gitlab|github|beads|all]`), with command output shown
-  inline. The same read-only checks `kb doctor` reports (frontmatter,
-  pre-commit hook, index freshness, whether the data repo is a git repo and
-  actually clean, bd/secrets/tool setup, ...) also run automatically: they're
-  polled every couple of minutes for as long as the tab is open, shown as a
-  live ok/todo list in the drawer, and surfaced as a red count on the Admin
-  button itself the moment something needs attention — no need to open the
-  drawer and click Doctor to find out. A **Push** button also appears in the
-  drawer whenever there are unpushed commits (`kb push`'s web equivalent),
-  showing how many and to which upstream — see [how to use a data
-  repo](use-a-data-repo.md) for the push flow, including auto-push.
+- **Admin** (header button) — a tabbed panel that can run nearly everything
+  `kb` can manage, with command output shown inline. Only one task runs at a
+  time; a second request is refused until the first finishes.
+  - **Overview** — kb's version with **Check for updates** / **Update now**
+    (`kb update`; the login services are restarted afterwards and the page
+    reloads once the server is back), a **Push** button when there are
+    unpushed commits (see [how to use a data repo](use-a-data-repo.md)), and
+    the same read-only checks `kb doctor` reports. Those are polled every
+    couple of minutes while the tab is open and surfaced as a red count on the
+    Admin button itself, so you don't need to click Doctor to find out;
+    **Fix with setup** appears when something needs attention.
+  - **Maintenance** — **Reindex** (with a full-rebuild option), **Sync**
+    against a chosen source (`kb sync [memos|gitlab|github|beads|all]`),
+    **Validate**, **Doctor**, **Triage report**, **Journal rollup**
+    (`kb journal rollup [YYYY-MM]`: collects a month's daily entries into one page under `reference/journal-summaries/`; pick from the months that have entries), and **Run setup** (`kb setup --yes`).
+  - **Services** — status of the login services behind `kb service` and
+    `kb sync-service`. Install, change, or remove the scheduled sync; refresh
+    or uninstall the web service. Installing the web service itself stays a
+    CLI step (`kb service install`), since this page is already running.
+  - **Settings** — the editor preference (`kb config editor`; blank clears
+    it) and which data repo is being served. Encrypted credentials are still
+    edited with `kb secrets` in a terminal — they never pass through the browser.
+
+  Update, setup, and service removal/restart ask for a second click to confirm.
+  State-changing requests are also refused unless they come from this page
+  itself (same-origin), so another site open in your browser can't trigger them.
 - **Theme toggle** — light / dark / system, in the header.
 
 ## When to reach for it instead of the CLI
