@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/dantuck/pkb-cli/compare/v0.2.0...v0.3.0) (2026-10-03)
+
+
+### Features
+
+* **web:** rebuild admin panel to manage kb end to end ([b70f880](https://github.com/dantuck/pkb-cli/commit/b70f880171430dec7f37b374fc0dbb3be5765a93))
+
 ## [0.2.0](https://github.com/dantuck/pkb-cli/compare/v0.1.2...v0.2.0) (2026-10-03)
 
 
