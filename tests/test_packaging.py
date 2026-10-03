@@ -9,7 +9,9 @@ import sys
 import tempfile
 import unittest
 
-from pkb_cli import __version__, pkb_common as pc, pkb_entries
+from unittest import mock
+
+from pkb_cli import __version__, cli, pkb_common as pc, pkb_entries
 
 
 class PackagingTest(unittest.TestCase):
@@ -46,6 +48,18 @@ class PackagingTest(unittest.TestCase):
             out = subprocess.run([sys.executable, "-m", "pkb_cli.index_fts"], cwd=root, env=env,
                                  capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_update_reinstalls_by_tag_with_whichever_tool_owns_the_venv(self):
+        # `uv/pipx upgrade` never moves a pinned git ref, so kb update must reinstall by tag
+        with tempfile.TemporaryDirectory() as prefix, mock.patch.object(sys, "prefix", prefix):
+            self.assertIsNone(cli._installer())
+            for marker, tool in (("uv-receipt.toml", "uv"), ("pipx_metadata.json", "pipx")):
+                open(os.path.join(prefix, marker), "w").close()
+                self.assertEqual(cli._installer(), tool)
+                os.remove(os.path.join(prefix, marker))
+        self.assertEqual(cli._install_command("uv", "v1.2.3")[:3], ["uv", "tool", "install"])
+        self.assertEqual(cli._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
+        self.assertTrue(cli._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
 
 
 if __name__ == "__main__":
