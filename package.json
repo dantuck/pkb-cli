@@ -1,0 +1,14 @@
+{
+  "name": "pkb-cli-dev",
+  "private": true,
+  "description": "pnpm shortcuts for local development. pkb-cli itself is a Python package; nothing here is published or required to use kb.",
+  "scripts": {
+    "dev": "scripts/dev-web.sh",
+    "test": "python3 -m unittest discover -s tests",
+    "test:web": "python3 -m unittest tests.test_kb_web",
+    "check:js": "node --check pkb_cli/templates/web/app.js",
+    "check": "pnpm check:js && pnpm test",
+    "dev:install": "uv tool install --force --editable .",
+    "dev:restart-service": "kb service refresh"
+  }
+}
