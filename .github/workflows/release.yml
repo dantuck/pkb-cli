@@ -1,0 +1,51 @@
+name: release
+
+# Versioning and releases are driven by conventional commits on main:
+#  - release-please keeps a "release PR" open that bumps pyproject.toml's version
+#    and CHANGELOG.md from the commits since the last release.
+#  - merging that PR tags vX.Y.Z and creates the GitHub release (which is what
+#    `kb update` and install.sh look for); the publish job then attaches the
+#    built sdist/wheel to it.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # PRs opened with the default token don't trigger other workflows, so
+          # the release PR would never get its test checks. Set this secret to a
+          # PAT (or GitHub App token) if main requires checks to pass.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: Attach the build to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
