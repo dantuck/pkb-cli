@@ -3,7 +3,6 @@ and kb web's POST /api/entries. Runs against a throwaway
 repo dir so nothing here touches a real .pkb.
 """
 import os
-import sys
 import tempfile
 import threading
 import unittest

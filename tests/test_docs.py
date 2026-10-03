@@ -3,7 +3,6 @@ CLI reference, every config key is in the config reference, and every
 relative markdown link in the repo resolves."""
 import os
 import re
-import sys
 import unittest
 
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))

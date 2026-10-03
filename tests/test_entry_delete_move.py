@@ -2,7 +2,6 @@
 `kb rm` and `kb mv`. Runs against a throwaway repo dir so nothing here touches a real .pkb.
 """
 import os
-import sys
 import tempfile
 import unittest
 

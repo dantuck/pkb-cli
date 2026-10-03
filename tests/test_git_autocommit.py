@@ -5,7 +5,6 @@ action away from being in git history without anyone remembering to commit.
 """
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import unittest

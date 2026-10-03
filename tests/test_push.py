@@ -4,7 +4,6 @@ auto_push wiring through git_autocommit. Uses a local bare repo as the
 """
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 
