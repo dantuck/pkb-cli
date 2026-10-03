@@ -20,9 +20,11 @@
   --shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.05), 0 1px 1px rgba(20, 20, 30, 0.03);
   --shadow-md: 0 6px 20px rgba(20, 20, 30, 0.08), 0 2px 6px rgba(20, 20, 30, 0.05);
   --shadow-lg: 0 20px 60px rgba(10, 10, 20, 0.22), 0 4px 16px rgba(10, 10, 20, 0.1);
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xs: 4px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
   --glass-bg: rgba(255, 255, 255, 0.6);
   --glass-border: rgba(255, 255, 255, 0.5);
   --glass-highlight: rgba(255, 255, 255, 0.8);
@@ -76,6 +78,7 @@
 * { box-sizing: border-box; }
 html {
   background: var(--bg);
+  scrollbar-gutter: stable; /* no layout shift when drawers/modals lock page scroll */
   /* Firefox's scrollbar theming -- the page is taller than the viewport, and
      without this the browser falls back to a plain light-gray scrollbar that
      reads as a bright stripe against the dark theme. */
@@ -86,6 +89,13 @@ body {
   max-width: 700px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
   background: var(--bg); color: var(--text);
   transition: background 0.15s ease, color 0.15s ease;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  text-wrap: pretty; accent-color: var(--accent);
+}
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
 /* Chromium/WebKit scrollbar theming -- same intent as the scrollbar-color
    rule above, for browsers that don't support that property. */
@@ -99,16 +109,29 @@ body {
 /* Pinned to the top so the feed scrolls underneath. Negative margins let the
    opaque background span body's side padding; the top padding replaces body's. */
 #site-header {
-  position: sticky; top: 0; z-index: 20; background: var(--bg);
-  margin: -2.5rem -1.25rem 1.25rem; padding: 1.5rem 1.25rem 0.5rem;
-  transition: background 0.15s ease;
+  --p: 0;
+  position: sticky; top: 0; z-index: 20;
+  margin: -2.5rem -1.25rem 1.25rem; padding: 1.5rem 1.25rem 0.75rem;
+  /* Layout height never changes with scroll (the capture slot below is a
+     fixed size) -- otherwise shrinking the header shrinks the document and
+     can clamp scrollY back, locking scrolling on short pages. Instead the
+     header is click-through and only its painted background shrinks. */
+  pointer-events: none;
+}
+#site-header > * { pointer-events: auto; }
+#site-header::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; z-index: -1;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid color-mix(in srgb, var(--divider) calc(var(--p) * 100%), transparent);
+  height: calc(100% - var(--p) * 6.8rem); /* 6.8rem = how much the capture box shrinks */
 }
 #header-row {
   display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.4rem;
 }
 #header-row > span { display: flex; align-items: center; gap: 0.4rem; }
 h1 {
-  font-size: 1.2rem; margin: 0; font-weight: 700; letter-spacing: -0.02em;
+  font-size: 1.2rem; margin: 0; font-weight: 700; letter-spacing: -0.025em; text-wrap: balance;
   display: flex; align-items: center; gap: 0.45rem; color: var(--heading);
 }
 h1::before {
@@ -121,7 +144,7 @@ h1::before {
 
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 2rem; height: 2rem; padding: 0; border-radius: 999px; border: none;
+  width: 2rem; height: 2rem; padding: 0; border-radius: var(--radius-sm); border: none;
   background: transparent; color: var(--muted); cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -130,7 +153,7 @@ h1::before {
 
 .pill-btn {
   display: inline-flex; align-items: center; gap: 0.35rem; font: inherit; font-size: 0.82rem;
-  padding: 0.35rem 0.75rem; border-radius: 999px; border: 1px solid var(--border);
+  padding: 0.35rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface); color: var(--muted); cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
@@ -139,7 +162,7 @@ h1::before {
 .pill-count {
   display: inline-block; min-width: 1.35rem; box-sizing: border-box; text-align: center;
   font-size: 0.7rem; font-weight: 600; background: var(--accent-soft); color: var(--accent-text);
-  padding: 0.05rem 0.4rem; border-radius: 999px;
+  padding: 0.05rem 0.4rem; border-radius: var(--radius-xs); font-variant-numeric: tabular-nums;
 }
 /* visibility, not x-show/display:none -- so the badge keeps reserving its
    width and the pill button doesn't jump wider the moment the count loads. */
@@ -151,16 +174,40 @@ h1::before {
    when doctor-style checks actually found something. */
 .pill-count-warn { background: var(--danger-soft); color: var(--danger-text); }
 
+/* --p is 0 (fully expanded) .. 1 (compact), set from the scroll position in
+   app.js; every size below is derived from it so the box tracks the scroll. */
+/* Fixed-size slot = the fully expanded box's height; the box inside shrinks. */
+#capture-slot { height: calc(9.4rem + 2px); pointer-events: none; }
 #capture {
-  display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.75rem;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-  padding: 1rem; box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  display: flex; flex-direction: column; margin-top: 0.9rem;
+  background: var(--surface); border-radius: var(--radius-sm);
+  /* border firms up as it collapses so the bar still reads as an input */
+  border: 1px solid color-mix(in srgb, var(--border-strong) calc(var(--p) * 100%), var(--border));
+  padding: calc(0.5rem + (1 - var(--p)) * 0.5rem) calc(0.8rem + (1 - var(--p)) * 0.2rem);
+  box-shadow: var(--shadow-sm);
 }
 #capture textarea {
-  font: inherit; padding: 0.4rem 0.2rem; border: none; resize: vertical; min-height: 3.2rem;
+  font: inherit; padding: calc((1 - var(--p)) * 0.4rem) 0.2rem; border: none; resize: none;
+  height: calc(1.6rem + (1 - var(--p)) * 2.9rem);
   background: transparent; color: inherit;
 }
-#capture textarea:focus { outline: none; }
+.capture-controls-wrap {
+  height: calc((1 - var(--p)) * 2.9rem); overflow: hidden;
+  opacity: clamp(0, calc(1 - var(--p) * 1.8), 1);
+}
+.capture-controls {
+  height: 2.9rem; padding-top: 0.6rem;
+  display: flex; justify-content: space-between; align-items: center;
+}
+/* Only while focus/click opens or closes the box (see app.js) */
+#site-header.snap::before, #site-header.snap #capture, #site-header.snap textarea, #site-header.snap .capture-controls-wrap {
+  transition: padding 0.25s ease, height 0.25s ease, opacity 0.2s ease;
+}
+#capture.compact { cursor: text; }
+#capture.compact textarea { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: text; }
+/* The global textarea:focus ring is an accent glow -- none wanted here. */
+#capture textarea:focus { outline: none; box-shadow: none; border-color: transparent; }
 #capture-msg { font-size: 0.82rem; color: var(--muted); min-height: 1.2em; }
 
 .btn {
@@ -169,11 +216,12 @@ h1::before {
   transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.06s ease;
 }
 .btn:hover { background: var(--border-strong); }
-.btn:active { transform: translateY(1px); }
+.btn:active { transform: translateY(1px); box-shadow: none; }
 .btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 
 .btn-primary {
-  border-color: transparent; background: var(--accent); color: #fff;
+  border-color: transparent; background: var(--accent); color: #fff; font-weight: 500;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 2px rgba(166, 83, 0, 0.35);
 }
 .btn-primary:hover { background: var(--accent-hover); }
 
@@ -210,7 +258,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #inbox-list .row1 { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
 .row-badge {
   font-size: 0.72rem; color: var(--muted); white-space: nowrap; background: var(--surface-2);
-  padding: 0.1rem 0.5rem; border-radius: 999px;
+  padding: 0.1rem 0.5rem; border-radius: var(--radius-xs);
 }
 #todo-list .row-badge { cursor: pointer; transition: background 0.1s ease, color 0.1s ease; }
 #todo-list .row-badge.active { background: var(--accent-soft); color: var(--accent-text); }
@@ -218,7 +266,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #todo-chip-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0 1.1rem 0.6rem; }
 .chip-filter {
   font: inherit; font-size: 0.72rem; color: var(--muted); background: var(--surface-2);
-  border: 1px solid transparent; padding: 0.1rem 0.55rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid transparent; padding: 0.1rem 0.55rem; border-radius: var(--radius-xs); cursor: pointer;
 }
 .chip-filter:hover { border-color: var(--border-strong); }
 .chip-filter.active { background: var(--accent-soft); color: var(--accent-text); }
@@ -274,7 +322,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 
 #type-row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
 .type-chip {
-  font: inherit; font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+  font: inherit; font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
@@ -293,9 +341,10 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #feed > li {
   padding: 1rem 1.1rem; border-radius: var(--radius-lg); background: var(--surface);
   border: 1px solid var(--border); box-shadow: var(--shadow-sm); cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), border-color 0.12s ease;
 }
-#feed > li:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); transform: translateY(-1px); }
+#feed > li:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); transform: translateY(-2px); }
+#feed > li:active { transform: translateY(0); box-shadow: var(--shadow-sm); }
 #feed > li .meta { font-size: 0.76rem; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
 #feed > li .meta .stamp { white-space: nowrap; }
 #feed > li .title { margin-top: 0.3rem; font-weight: 600; font-size: 1rem; letter-spacing: -0.01em; color: var(--heading); }
@@ -312,7 +361,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 
 .tag {
   display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; font-weight: 500;
-  padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--accent-soft);
+  padding: 0.15rem 0.55rem; border-radius: var(--radius-xs); background: var(--accent-soft);
   cursor: pointer; color: var(--accent-text);
 }
 .tag:hover { filter: brightness(1.08); }

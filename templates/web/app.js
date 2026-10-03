@@ -217,6 +217,22 @@ document.addEventListener("alpine:init", () => {
     captureText: "",
     captureMsg: "",
     captureBusy: false,
+    // The capture box lives in the pinned header and shrinks as the page
+    // scrolls: scroll position drives a 0..1 CSS variable (--p) so the box
+    // tracks the scroll one-to-one. Focusing it (captureOpen) pins it open.
+    captureProgress: 0,
+    captureOpen: false,
+    captureCompact: false,
+    updateCaptureProgress() {
+      const p = this.captureOpen ? 0 : this.captureProgress;
+      document.getElementById("site-header")?.style.setProperty("--p", p);
+      const compact = p > 0.5;
+      if (compact !== this.captureCompact) this.captureCompact = compact;
+    },
+    captureFocusOut(e) {
+      if (e.currentTarget.contains(e.relatedTarget)) return;
+      if (!this.captureText.trim() && !this.captureBusy) this.captureOpen = false;
+    },
     async capture() {
       const text = this.captureText.trim();
       if (!text) return;
@@ -227,6 +243,8 @@ document.addEventListener("alpine:init", () => {
         if (!ok) throw new Error();
         this.captureText = "";
         this.captureMsg = `added -> ${data.path}`;
+        this.captureOpen = false;
+        document.activeElement?.blur();
         // Reload rather than insert a synthetic card: today's capture lands
         // in the same journal entry as any earlier capture from today (see
         // journal_append in scripts/kb), so the feed needs the merged entry
@@ -1134,6 +1152,25 @@ document.addEventListener("alpine:init", () => {
       try { this.theme = localStorage.getItem(THEME_KEY) || "system"; } catch {}
       this.applyThemeAttr(this.theme);
       this.$watch("theme", (mode) => this.applyThemeAttr(mode));
+
+      const CAPTURE_SCROLL_RANGE = 100; // px of scroll over which the box collapses
+      window.addEventListener("scroll", () => {
+        this.captureProgress = Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
+        this.updateCaptureProgress();
+      }, { passive: true });
+      // Scroll-driven changes must not be eased (they'd lag the scroll), but a
+      // click/focus-driven open or close should glide -- so transitions are
+      // only switched on briefly around that change.
+      this.$watch("captureOpen", () => {
+        const el = document.getElementById("site-header");
+        el?.classList.add("snap");
+        this.updateCaptureProgress();
+        setTimeout(() => el?.classList.remove("snap"), 300);
+      });
+      this.$nextTick(() => {
+        this.captureProgress = Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
+        this.updateCaptureProgress();
+      });
 
       // Lock the page's own scroll behind whichever modal or drawer is open
       // so dragging the feed underneath doesn't fight with scrolling the

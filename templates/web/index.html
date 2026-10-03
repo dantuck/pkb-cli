@@ -43,6 +43,19 @@
   </span>
 </div>
 <p id="status" :class="statusClass" x-text="statusText"></p>
+<div id="capture-slot">
+<div id="capture" :class="{ compact: captureCompact }"
+     @focusout="captureFocusOut($event)">
+  <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."
+            x-model="captureText" @focus="captureOpen = true" @keydown="captureKeydown($event)"></textarea>
+  <div class="capture-controls-wrap" :inert="captureCompact">
+    <div class="capture-controls">
+      <span id="capture-msg" x-text="captureMsg"></span>
+      <button class="btn btn-primary" @click="capture()" :disabled="captureBusy">Add</button>
+    </div>
+  </div>
+</div>
+</div>
 </header>
 
 <div id="admin-backdrop" :class="{ open: adminOpen }" @click="adminOpen = false"></div>
@@ -370,15 +383,6 @@
   <p class="palette-msg" x-show="!paletteResults.length && (paletteMsg || paletteLoading)"
      x-text="paletteLoading ? 'searching…' : paletteMsg"></p>
   <p class="palette-msg" x-show="!paletteQuery.trim() && !paletteResults.length">Type to search entries by title or content.</p>
-</div>
-
-<div id="capture">
-  <textarea id="capture-text" placeholder="Jot something down -- goes into today's journal..."
-            x-model="captureText" @keydown="captureKeydown($event)"></textarea>
-  <div style="display:flex; justify-content:space-between; align-items:center;">
-    <span id="capture-msg" x-text="captureMsg"></span>
-    <button class="btn btn-primary" @click="capture()" :disabled="captureBusy">Add</button>
-  </div>
 </div>
 
 <div class="modal-backdrop" :class="{ open: todoModalOpen }" @click="closeTodoModal()"></div>
