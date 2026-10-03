@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/dantuck/pkb-cli/compare/v0.1.2...v0.2.0) (2026-10-03)
+
+
+### Features
+
+* **update:** refresh installed services after a reinstall ([5cc5cbe](https://github.com/dantuck/pkb-cli/commit/5cc5cbe8b6abcf87e84fd7e5cd8c505dfccd12bc))
+
 ## [0.1.2](https://github.com/dantuck/pkb-cli/compare/v0.1.1...v0.1.2) (2026-10-03)
 
 
