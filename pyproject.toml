@@ -28,7 +28,7 @@ kb = "pkb_cli.cli:main"
 packages = ["pkb_cli"]
 
 [tool.setuptools.package-data]
-pkb_cli = ["templates/*", "templates/web/*", "templates/web/vendor/*", "skills/kb/*"]
+pkb_cli = ["templates/**/*", "skills/**/*"]
 
 [tool.ruff]
 target-version = "py39"

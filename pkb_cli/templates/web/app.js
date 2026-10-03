@@ -247,7 +247,7 @@ document.addEventListener("alpine:init", () => {
         document.activeElement?.blur();
         // Reload rather than insert a synthetic card: today's capture lands
         // in the same journal entry as any earlier capture from today (see
-        // journal_append in scripts/kb), so the feed needs the merged entry
+        // journal_append in cli.py), so the feed needs the merged entry
         // the server now has, not a second one-off card standing in for it.
         if (!this.activeTag) this.loadFeed(false);
       } catch {
