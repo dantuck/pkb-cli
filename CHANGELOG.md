@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/dantuck/pkb-cli/compare/v0.1.1...v0.1.2) (2026-10-03)
+
+
+### Bug Fixes
+
+* **update:** reinstall by tag instead of running upgrade ([05de5f1](https://github.com/dantuck/pkb-cli/commit/05de5f18ccec6dfde248f5bae5af5bbab129422c))
+
 ## [0.1.1](https://github.com/dantuck/pkb-cli/compare/v0.1.0...v0.1.1) (2026-10-03)
 
 
