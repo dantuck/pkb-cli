@@ -3,7 +3,6 @@ handling, attachment markdown, and write_memo's add/update/unchanged paths.
 Network access (attachment downloads) is stubbed out."""
 import os
 import stat
-import sys
 import tempfile
 import unittest
 from unittest import mock

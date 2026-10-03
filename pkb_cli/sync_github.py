@@ -7,7 +7,6 @@ source_id, cursor advances only after a fully successful write pass.
 import json
 import os
 import subprocess
-import sys
 
 from . import pkb_common as pc
 

@@ -21,8 +21,9 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "web")
 from . import pkb_common as pc
+
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "web")
 
 # Top-level dirs kb web is willing to serve raw files from at a root-relative
 # path (e.g. /sources/memos/assets/<id>/photo.jpg, written by sync_memos.py's

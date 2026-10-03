@@ -36,7 +36,6 @@ set, is used directly (no Bearer auth -- it's not this instance's API).
 import json
 import os
 import re
-import sys
 import urllib.parse
 import urllib.request
 import urllib.error

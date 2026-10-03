@@ -6,7 +6,6 @@ import argparse
 import calendar
 import difflib
 import importlib
-import io
 import json
 import os
 import re
@@ -20,8 +19,6 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 
-PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-TOOL_ROOT = os.path.dirname(PKG_DIR)  # the source checkout, when running from one (has .git)
 from . import pkb_common as pc
 from . import __version__
 from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
@@ -30,6 +27,9 @@ from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via
     entry_move, entry_new, entry_set_links, entry_set_tags, entry_update_content,
     inbox_list,
 )
+
+PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+TOOL_ROOT = os.path.dirname(PKG_DIR)  # the source checkout, when running from one (has .git)
 
 # Where kb itself is published, for `kb update`'s release check.
 LEGACY_VERSION_FILE = ".pkb-cli-version"  # marker left by the old tarball installer
@@ -2656,8 +2656,8 @@ def _cmd_update_release(args):
         print(f"run `{' '.join(upgrade)}` to upgrade" if upgrade else "run `kb update` to upgrade")
         return 1
     if upgrade is None:
-        print(f"error: can't tell how kb was installed -- upgrade it with the tool you used "
-              f"(e.g. `pipx upgrade pkb-cli`)", file=sys.stderr)
+        print("error: can't tell how kb was installed -- upgrade it with the tool you used "
+              "(e.g. `pipx upgrade pkb-cli`)", file=sys.stderr)
         return 1
     rc = subprocess.run(upgrade).returncode
     if rc == 0:

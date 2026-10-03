@@ -9,7 +9,6 @@ created_at/updated_at (RFC3339, UTC). No pagination cursor beyond --updated-afte
 import json
 import os
 import subprocess
-import sys
 
 from . import pkb_common as pc
 

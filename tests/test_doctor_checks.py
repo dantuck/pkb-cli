@@ -6,7 +6,6 @@ of doctor_checks is exercised end-to-end by `kb doctor` itself.
 """
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 
