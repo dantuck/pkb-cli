@@ -60,6 +60,31 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(cli._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
         self.assertTrue(cli._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
 
+    def test_service_refresh_repoints_stale_units_and_keeps_their_args(self):
+        import plistlib
+        old_launchers = {
+            "dev.pkb-cli.web": ["/usr/bin/python3", "/old/checkout/scripts/kb", "web", "--port", "4173", "--no-open"],
+            "dev.pkb-cli.sync": [sys.executable, "-m", "pkb_cli", "sync"],
+        }
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
+                mock.patch.object(cli, "_service_kind", return_value="launchd"), \
+                mock.patch.object(cli, "_launchd_load", return_value=None) as load:
+            agents = os.path.join(home, "Library", "LaunchAgents")
+            os.makedirs(agents)
+            for label, argv in old_launchers.items():
+                with open(os.path.join(agents, f"{label}.plist"), "wb") as f:
+                    plistlib.dump({"Label": label, "ProgramArguments": argv, "WorkingDirectory": "/data"}, f)
+            self.assertEqual(cli._service_refresh("launchd"), 0)
+            got = {}
+            for label in old_launchers:
+                with open(os.path.join(agents, f"{label}.plist"), "rb") as f:
+                    got[label] = plistlib.load(f)
+        self.assertEqual(got["dev.pkb-cli.web"]["ProgramArguments"],
+                         cli._kb_cmd("web", "--port", "4173", "--no-open"))
+        self.assertEqual(got["dev.pkb-cli.sync"]["ProgramArguments"], cli._kb_cmd("sync"))
+        self.assertEqual(got["dev.pkb-cli.web"]["WorkingDirectory"], "/data")
+        self.assertEqual(load.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

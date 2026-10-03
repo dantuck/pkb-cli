@@ -2088,6 +2088,8 @@ def cmd_service(args):
         return _service_install(kind, args)
     if args.action == "uninstall":
         return _service_uninstall(kind, "web")
+    if args.action == "refresh":
+        return _service_refresh(kind)
     return _service_status(kind, "web")
 
 
@@ -2205,6 +2207,53 @@ def _service_status(kind, agent_name):
     state = _systemd_active_state(agent["systemd_unit"])
     print(f"installed ({unit_path}), {state}")
     return 0 if state == "active" else 1
+
+
+def _unit_args(argv):
+    """The kb subcommand + args from an installed unit's command line, whichever
+    launcher it was written with (`python -m pkb_cli ...`, or the pre-package
+    `python <checkout>/scripts/kb ...`)."""
+    return argv[3:] if argv[1:3] == ["-m", __package__] else argv[2:]
+
+
+def _service_refresh(kind):
+    """Repoint each installed kb service unit at this install and restart it, keeping
+    its repo/port/interval. Run after an update so units written by an older install
+    (a stale launcher path) work again and a long-running `kb web` picks up the new
+    code. Units that aren't installed are skipped."""
+    import plistlib
+    for name, agent in AGENTS.items():
+        if kind == "launchd":
+            path = _agent_launchd_plist_path(name)
+            if not os.path.exists(path):
+                continue
+            with open(path, "rb") as f:
+                plist = plistlib.load(f)
+            plist["ProgramArguments"] = _kb_cmd(*_unit_args(plist["ProgramArguments"]))
+            with open(path, "wb") as f:
+                plistlib.dump(plist, f)
+            error = _launchd_load(agent["launchd_label"], path)
+            label = agent["launchd_label"]
+        else:
+            path = _agent_systemd_unit_path(name)
+            if not os.path.exists(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                unit = f.read()
+            unit = re.sub(r"^ExecStart=(.*)$",
+                          lambda m: "ExecStart=" + shlex.join(_kb_cmd(*_unit_args(shlex.split(m.group(1))))),
+                          unit, count=1, flags=re.M)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(unit)
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+            error = None
+            if name == "web":  # the sync service is timer-driven: it picks up the new unit next run
+                result = subprocess.run(["systemctl", "--user", "restart", agent["systemd_unit"]],
+                                        capture_output=True, text=True)
+                error = result.stderr.strip() if result.returncode != 0 else None
+            label = agent["systemd_unit"]
+        print(f"refreshed {label}" if error is None else f"error: couldn't restart {label}: {error}")
+    return 0
 
 
 # --- `kb sync-service` -- runs `kb sync` on a recurring interval via launchd
@@ -2615,6 +2664,15 @@ def cmd_update(args):
     return 0
 
 
+def _refresh_services_after_update():
+    """Run `kb service refresh` from the freshly installed kb -- this process is still
+    the old code (and possibly the old interpreter), so it can't write units that
+    point at the new install itself."""
+    kb = shutil.which("kb")
+    if kb and _service_kind():
+        subprocess.run([kb, "service", "refresh"])
+
+
 def _cmd_update_legacy(args):
     """`kb update` for an install made by the old tarball installer (a ~/pkb-cli
     snapshot with a version marker, reaching us via the scripts/kb shim): migrate
@@ -2636,6 +2694,7 @@ def _cmd_update_legacy(args):
         return 1
     rc = subprocess.run(cmd).returncode
     if rc == 0:
+        _refresh_services_after_update()
         print(f"migrated. future `kb update`s use {installer}; run `kb setup` to refresh the hook and "
               f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
     return rc
@@ -2670,6 +2729,7 @@ def _cmd_update_release(args):
         return 1
     rc = subprocess.run(upgrade).returncode
     if rc == 0:
+        _refresh_services_after_update()
         print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
     return rc
 
@@ -3015,11 +3075,12 @@ def main():
             "  kb service install --port 8080\n"
             "  kb service install --repo ~/notes   point the service at a specific data repo\n"
             "  kb service status\n"
+            "  kb service refresh                  repoint installed web/sync services at this install and restart them\n"
             "  kb service uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("action", choices=["install", "uninstall", "status", "refresh"])
     p.add_argument("--port", type=int, default=4173, metavar="PORT",
                     help="port to bind (default: 4173; install only)")
     p.add_argument("--repo", metavar="DIR",
