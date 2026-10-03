@@ -2,7 +2,7 @@
 
 > **Implementation note (2026-09-01):** two things below have diverged from
 > the original spec, documented here rather than by rewriting history: the
-> `scripts/` (and `schema.sql`) now live in this separate tool repo
+> `pkb_cli/` (and `schema.sql`) now live in this separate tool repo
 > (`pkb-cli`), not inside `.pkb/` in the data repo — see the top-level
 > [README](../../README.md). And the default data repo location is `~/.pkb`
 > itself (the central kb), not an arbitrarily-named `pkb/` directory

@@ -20,25 +20,24 @@ notes, which live in a separate (typically private) data repo containing
 
 ## Install
 
+Requires Python 3.9+ and [uv](https://docs.astral.sh/uv/) or
+[pipx](https://pipx.pypa.io/):
+
+```bash
+uv tool install git+https://github.com/dantuck/pkb-cli     # or: pipx install git+https://github.com/dantuck/pkb-cli
+kb setup
+```
+
+or, in one step (installs the latest release, then runs `kb setup --yes`):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | bash
 ```
 
-Downloads a tarball snapshot of this repo to `~/pkb-cli` (override with
-`$PKB_CLI_HOME`) and symlinks `kb` onto your PATH. Safe to re-run — updates in
-place and re-runs setup idempotently. **`python3` is the only requirement** —
-no `git`, `curl`, or `tar` needed; the installer's own download/extract and
-`kb update` both use Python's stdlib `urllib`/`tarfile` against the GitHub API,
-not a git checkout. (If `$PKB_CLI_HOME` already happens to be a git checkout —
-e.g. you cloned it yourself to contribute — the installer detects that and
-runs `git pull` there instead, so that workflow isn't disrupted.)
-
-The symlink target is the first of `~/.local/bin`, `/opt/homebrew/bin`, or
-`/usr/local/bin` that already exists **and** is already on your `PATH` (in that
-order), so it can install without editing your shell profile. On most Macs
-with Homebrew that's `/opt/homebrew/bin`; on a bare-bones machine with none of
-those set up yet, it creates `~/.local/bin` and prints the `export PATH=...`
-line to add.
+`kb` has no Python dependencies. Update with `kb update` (it checks the latest
+GitHub release and runs `uv tool upgrade` / `pipx upgrade` for you). To hack on
+it, `git clone` the repo and `pip install -e .`; `kb update` then does a
+`git pull` instead.
 
 Next: point it at a data repo — see [how-to: use a data
 repo](docs/how-to/use-a-data-repo.md), or walk through the full
@@ -48,13 +47,15 @@ repo](docs/how-to/use-a-data-repo.md), or walk through the full
 
 ```
 pkb-cli/
-  scripts/      the kb CLI and everything it dispatches to
-  skills/kb/    Claude Code skill (SKILL.md), `kb setup` offers to install it
-  templates/    schema.sql (loaded at runtime, never copied into a data repo),
-                secrets.env.example (documentation only), and web/ (the
-                `kb web` front end: plain HTML/CSS/JS + vendored Alpine)
-  tests/        stdlib unittest suite
-  docs/         tutorials/, how-to/, reference/, explanation/
+  pkb_cli/              the installable package (the `kb` command)
+    cli.py              argparse wiring and command handlers
+    sync_*.py, ...      ingestion, indexing, validation, `kb web` server
+    skills/kb/          Claude Code skill (SKILL.md), `kb setup` offers to install it
+    templates/          schema.sql (loaded at runtime, never copied into a data repo),
+                        secrets.env.example (documentation only), and web/ (the
+                        `kb web` front end: plain HTML/CSS/JS + vendored Alpine)
+  tests/                stdlib unittest suite
+  docs/                 tutorials/, how-to/, reference/, explanation/
   install.sh
 ```
 

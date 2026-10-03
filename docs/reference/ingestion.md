@@ -1,7 +1,7 @@
 # Ingestion pipeline contract
 
 One script per source, all following the same contract. `kb` auto-discovers
-any `sync_<name>.py` script dropped into `scripts/` — it becomes `kb sync
+any `sync_<name>.py` script dropped into `pkb_cli/` — it becomes `kb sync
 <name>` (and joins `kb sync all`) with no other file needing an edit. To also
 plug into `kb doctor`/`kb setup`'s health checks, the sops-injection decision,
 and frontmatter's `source` field validation, the script declares a
