@@ -1635,9 +1635,10 @@ def _github_request(url):
 
 
 def _latest_release_version():
-    """Tag of the latest GitHub release, minus any leading "v"."""
+    """Version of the latest GitHub release, from a tag like "v1.2.3" (or the
+    component-prefixed "pkb-cli-v1.2.3" that 0.1.0 was tagged with)."""
     data = json.loads(_github_request(f"https://api.github.com/repos/{TOOL_REPO_SLUG}/releases/latest"))
-    return data["tag_name"].lstrip("v")
+    return re.sub(r"^(?:pkb-cli-)?v", "", data["tag_name"])
 
 
 def _version_tuple(version):
