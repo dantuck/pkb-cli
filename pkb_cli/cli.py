@@ -1645,15 +1645,23 @@ def _version_tuple(version):
     return tuple(int(n) for n in re.findall(r"\d+", version.split("+")[0]))
 
 
-def _upgrade_command():
-    """The command that upgrades this install, based on which tool owns its venv;
-    None if we can't tell (e.g. a plain pip install into some other environment)."""
-    prefix = sys.prefix.replace(os.sep, "/")
-    if "/pipx/venvs/" in prefix:
-        return ["pipx", "upgrade", "pkb-cli"]
-    if "/uv/tools/" in prefix:
-        return ["uv", "tool", "upgrade", "pkb-cli"]
+def _installer():
+    """"uv" or "pipx", whichever tool owns this install's venv (each drops a marker
+    file in it, wherever its home is configured); None if we can't tell (e.g. a
+    plain pip install into some other environment)."""
+    if os.path.exists(os.path.join(sys.prefix, "uv-receipt.toml")):
+        return "uv"
+    if os.path.exists(os.path.join(sys.prefix, "pipx_metadata.json")):
+        return "pipx"
     return None
+
+
+def _install_command(installer, ref):
+    """Install pkb-cli at `ref` (a tag or branch) with `installer`. Reinstalling by
+    ref rather than running `upgrade`: installs are pinned to the tag they were made
+    from (see install.sh), and uv/pipx `upgrade` never moves a pinned ref."""
+    base = [installer, "tool", "install"] if installer == "uv" else [installer, "install"]
+    return base + ["--force", f"git+https://github.com/{TOOL_REPO_SLUG}@{ref}"]
 
 
 def update_status(fetch=False):
@@ -2622,8 +2630,7 @@ def _cmd_update_legacy(args):
         ref = f"v{_latest_release_version()}"
     except (urllib.error.URLError, OSError, ValueError, KeyError):
         ref = "main"  # no release yet (or GitHub unreachable) -- fall back to the branch
-    cmd = ([installer, "tool", "install"] if installer == "uv" else [installer, "install"]) + \
-        ["--force", f"git+https://github.com/{TOOL_REPO_SLUG}@{ref}"]
+    cmd = _install_command(installer, ref)
     print(f"migrating this old-style install to {installer}: {' '.join(cmd)}")
     if args.check:
         return 1
@@ -2652,13 +2659,15 @@ def _cmd_update_release(args):
         return 0
 
     print(f"kb {latest} is available (you have {__version__})")
-    upgrade = _upgrade_command()
+    installer = _installer()
+    upgrade = _install_command(installer, f"v{latest}") if installer else None
     if args.check:
         print(f"run `{' '.join(upgrade)}` to upgrade" if upgrade else "run `kb update` to upgrade")
         return 1
     if upgrade is None:
-        print("error: can't tell how kb was installed -- upgrade it with the tool you used "
-              "(e.g. `pipx upgrade pkb-cli`)", file=sys.stderr)
+        print("error: can't tell how kb was installed -- reinstall it with the tool you used "
+              f"(e.g. `pipx install --force git+https://github.com/{TOOL_REPO_SLUG}@v{latest}`)",
+              file=sys.stderr)
         return 1
     rc = subprocess.run(upgrade).returncode
     if rc == 0:
