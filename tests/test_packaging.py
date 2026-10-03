@@ -67,7 +67,6 @@ class PackagingTest(unittest.TestCase):
             "dev.pkb-cli.sync": [sys.executable, "-m", "pkb_cli", "sync"],
         }
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
-                mock.patch.object(cli, "_service_kind", return_value="launchd"), \
                 mock.patch.object(cli, "_launchd_load", return_value=None) as load:
             agents = os.path.join(home, "Library", "LaunchAgents")
             os.makedirs(agents)
