@@ -6,8 +6,6 @@ network-reachable interface.
 """
 import contextlib
 import http.server
-import importlib.machinery
-import importlib.util
 import io
 import json
 import mimetypes
@@ -23,12 +21,8 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
 
-WEB_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "web")
-)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SCRIPT_DIR)
-import pkb_common as pc
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "web")
+from . import pkb_common as pc
 
 # Top-level dirs kb web is willing to serve raw files from at a root-relative
 # path (e.g. /sources/memos/assets/<id>/photo.jpg, written by sync_memos.py's
@@ -43,24 +37,12 @@ _CONTENT_DIR_PREFIXES = tuple(f"/{d}/" for d in pc.CONTENT_DIRS)
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _RANGE_COPY_BLOCK_SIZE = 64 * 1024
 
-_kb_module = None
-
-
 def _kb():
-    """Lazily load scripts/kb (extensionless, so it isn't import-able by name)
-    as a module, to reuse its logic (journal_append, etc.) instead of duplicating
-    it here. Safe to load repeatedly -- kb's own `if __name__ == "__main__"`
-    guard means importing it never runs main()."""
-    global _kb_module
-    if _kb_module is None:
-        # kb has no .py suffix, so spec_from_file_location can't infer a loader
-        # for it on its own -- build one explicitly instead.
-        loader = importlib.machinery.SourceFileLoader("kb_cli", os.path.join(SCRIPT_DIR, "kb"))
-        spec = importlib.util.spec_from_loader("kb_cli", loader)
-        mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
-        _kb_module = mod
-    return _kb_module
+    """The cli module, imported lazily (it imports this one) to reuse its logic
+    (journal_append, etc.) instead of duplicating it here."""
+    from . import cli
+    return cli
+
 
 # [(method, compiled_path_regex, handler), ...]; handler(h, root, *path_params)
 # writes its own response via h.send_json(...). Routes are added with @route as

@@ -8,8 +8,7 @@ changed/new files are re-indexed; files removed from disk are pruned.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-import pkb_common as pc
+from . import pkb_common as pc
 import sqlite3
 
 
@@ -18,7 +17,7 @@ def get_db(root):
     conn = sqlite3.connect(db_path)
     # schema.sql is tool-owned, not data-repo-owned -- ships in templates/ next to
     # scripts/ in the pkb-cli repo, not copied into every data repo that uses it.
-    schema_path = os.path.join(os.path.dirname(__file__), "..", "templates", "schema.sql")
+    schema_path = os.path.join(os.path.dirname(__file__), "templates", "schema.sql")
     with open(schema_path, "r", encoding="utf-8") as f:
         conn.executescript(f.read())
     return conn

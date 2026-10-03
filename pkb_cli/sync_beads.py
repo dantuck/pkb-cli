@@ -11,8 +11,7 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-import pkb_common as pc
+from . import pkb_common as pc
 
 # Read by kb's discover_sync_sources() -- see docs/reference/ingestion.md for
 # the SOURCE_META contract. No auth_check/hints/env_keys/uses_sops: beads is

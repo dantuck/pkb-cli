@@ -6,8 +6,7 @@ Run in CI / as a pre-commit hook (installed by `kb setup`).
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-import pkb_common as pc
+from . import pkb_common as pc
 
 
 def relpath(root, path):

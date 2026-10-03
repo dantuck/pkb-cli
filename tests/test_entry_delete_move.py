@@ -1,30 +1,17 @@
-"""Tests for scripts/kb's entry_delete and entry_move -- the write paths behind
-`kb rm` and `kb mv`. Loads scripts/kb the same way test_entry_new.py does,
-against a throwaway repo dir so nothing here touches a real .pkb.
+"""Tests for pkb_cli/cli.py's entry_delete and entry_move -- the write paths behind
+`kb rm` and `kb mv`. Runs against a throwaway repo dir so nothing here touches a real .pkb.
 """
-import importlib.machinery
-import importlib.util
 import os
 import sys
 import tempfile
 import unittest
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
-import pkb_entries  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_entries  # noqa: E402
 
 
-def _load_kb_cli():
-    loader = importlib.machinery.SourceFileLoader("kb_cli", os.path.join(SCRIPT_DIR, "kb"))
-    spec = importlib.util.spec_from_loader("kb_cli", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-kb_cli = _load_kb_cli()
+from pkb_cli import cli as kb_cli  # noqa: E402
 
 
 class EntryDeleteMoveTest(unittest.TestCase):

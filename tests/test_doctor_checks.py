@@ -1,4 +1,4 @@
-"""Tests for scripts/kb's doctor_checks -- the read-only health-check logic
+"""Tests for pkb_cli/cli.py's doctor_checks -- the read-only health-check logic
 behind `kb doctor`, factored out so kb web's GET /api/admin/status can return
 it as data (for the Admin panel's badge/auto-status) instead of parsing
 printed output. Only covers the checks that matter to that panel; the rest
@@ -10,23 +10,11 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-def _load_kb_cli():
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("kb_cli", os.path.join(SCRIPT_DIR, "kb"))
-    spec = importlib.util.spec_from_loader("kb_cli", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-kb_cli = _load_kb_cli()
+from pkb_cli import cli as kb_cli  # noqa: E402
 
 
 def _git(root, *args):

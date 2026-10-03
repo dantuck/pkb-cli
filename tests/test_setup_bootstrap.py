@@ -14,23 +14,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-def _load_kb_cli():
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("kb_cli", os.path.join(SCRIPT_DIR, "kb"))
-    spec = importlib.util.spec_from_loader("kb_cli", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-kb_cli = _load_kb_cli()
+from pkb_cli import cli as kb_cli  # noqa: E402
 
 
 @unittest.skipUnless(shutil.which("git"), "git required for setup bootstrap")
@@ -59,19 +47,13 @@ class SetupBootstrapTest(unittest.TestCase):
         self.addCleanup(restore)
 
     def _run_setup(self):
-        # cmd_setup's PATH-install and optional-deps steps are guided but
-        # otherwise unconditional now, so with --yes they'd act for real:
-        # find_install_dir()'s non-~/.local/bin candidates are absolute
-        # (/opt/homebrew/bin, /usr/local/bin) and don't respect the fake
-        # HOME above, and a real `brew` on the test machine would actually
-        # get shelled out to. Sandbox both so this test can't touch the
-        # real machine.
+        # cmd_setup's optional-deps step is guided but unconditional with --yes,
+        # so a real `brew` on the test machine would actually get shelled out
+        # to. Hide it so this test can't touch the real machine.
         args = argparse.Namespace(yes=True)
         buf = io.StringIO()
-        fake_bin = os.path.join(self._home.name, "bin")
         real_which = shutil.which
         with contextlib.redirect_stdout(buf), \
-                mock.patch.object(kb_cli, "find_install_dir", return_value=(fake_bin, True)), \
                 mock.patch.object(kb_cli.shutil, "which", side_effect=lambda name: None if name == "brew" else real_which(name)):
             kb_cli.cmd_setup(args)
         return buf.getvalue()
