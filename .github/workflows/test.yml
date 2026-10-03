@@ -26,3 +26,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python3 -m unittest discover -s tests -v
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from a built wheel and smoke-test the entry point
+        run: |
+          pip install build
+          python -m build --wheel
+          pip install dist/*.whl
+          cd "$(mktemp -d)"
+          kb --version
+          kb help
+          python -c "import importlib.resources as r; assert r.files('pkb_cli').joinpath('templates/schema.sql').is_file(); assert r.files('pkb_cli').joinpath('templates/web/vendor/alpine.min.js').is_file()"
