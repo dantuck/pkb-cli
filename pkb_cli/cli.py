@@ -31,8 +31,8 @@ from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 TOOL_ROOT = os.path.dirname(PKG_DIR)  # the source checkout, when running from one (has .git)
 
+LEGACY_VERSION_PATH = os.path.join(TOOL_ROOT, ".pkb-cli-version")  # marker left by the old tarball installer
 # Where kb itself is published, for `kb update`'s release check.
-LEGACY_VERSION_FILE = ".pkb-cli-version"  # marker left by the old tarball installer
 TOOL_REPO_SLUG = os.environ.get("PKB_CLI_REPO", "dantuck/pkb-cli")
 
 
@@ -2533,7 +2533,7 @@ def doctor_checks(root, push=None):
                             f"fetch -- run `kb update` to check for real and pull")
             else:
                 ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
-    elif os.path.exists(os.path.join(TOOL_ROOT, LEGACY_VERSION_FILE)):
+    elif os.path.exists(LEGACY_VERSION_PATH):
         todo.append("pkb-cli is an old tarball-style install that can no longer self-update -- "
                     "run `kb update` to migrate it to uv/pipx")
     else:
@@ -2567,7 +2567,7 @@ def cmd_update(args):
     fetch/pull; a normal install compares its version against the latest GitHub
     release and runs the upgrade command for whichever tool installed it (pipx
     or uv). The only kb command besides `kb sync` that touches the network."""
-    if os.path.exists(os.path.join(TOOL_ROOT, LEGACY_VERSION_FILE)):
+    if os.path.exists(LEGACY_VERSION_PATH):
         return _cmd_update_legacy(args)
     if not os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
         return _cmd_update_release(args)

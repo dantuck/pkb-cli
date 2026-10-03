@@ -116,7 +116,7 @@ def api_capture(h, root):
 
 @route("GET", "/api/search")
 def api_search(h, root):
-    """Relevance-ranked search, reusing scripts/kb's search_entries() -- the same
+    """Relevance-ranked search, reusing cli.py's search_entries() -- the same
     query `kb search --json` runs. ?q= is required; ?type=, ?tag=, ?all=1 mirror
     the CLI's --type/--tag/--all flags."""
     query = (h.query.get("q", [""])[0] or "").strip()

@@ -6,17 +6,17 @@ doesn't preserve) against the value stored at last index time. Only
 changed/new files are re-indexed; files removed from disk are pruned.
 """
 import os
+import sqlite3
 import sys
 
 from . import pkb_common as pc
-import sqlite3
 
 
 def get_db(root):
     db_path = os.path.join(root, ".pkb", "fts.db")
     conn = sqlite3.connect(db_path)
-    # schema.sql is tool-owned, not data-repo-owned -- ships in templates/ next to
-    # scripts/ in the pkb-cli repo, not copied into every data repo that uses it.
+    # schema.sql is tool-owned, not data-repo-owned -- ships inside the package
+    # (templates/), not copied into every data repo that uses it.
     schema_path = os.path.join(os.path.dirname(__file__), "templates", "schema.sql")
     with open(schema_path, "r", encoding="utf-8") as f:
         conn.executescript(f.read())
