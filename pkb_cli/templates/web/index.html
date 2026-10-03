@@ -66,36 +66,167 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
-  <div id="admin-bar">
-    <button class="btn" @click="adminReindex()">Reindex</button>
-    <button class="btn" @click="adminValidate()">Validate</button>
-    <button class="btn" @click="adminDoctor()">Doctor</button>
-    <select x-model="adminSyncSource">
-      <option value="all">all</option><option value="memos">memos</option>
-      <option value="gitlab">gitlab</option><option value="github">github</option>
-      <option value="beads">beads</option>
-    </select>
-    <button class="btn btn-primary" @click="adminSync()">Sync</button>
-    <button class="btn" x-show="adminStatus.push.upstream && adminStatus.push.ahead"
-            @click="adminPush()">
-      Push <span x-text="adminStatus.push.ahead"></span> commit(s) to <span x-text="adminStatus.push.upstream"></span>
-    </button>
-    <span id="admin-msg" x-text="adminMsg"></span>
+  <div id="admin-tabs" role="tablist">
+    <template x-for="tab in [['overview', 'Overview'], ['maintenance', 'Maintenance'], ['services', 'Services'], ['settings', 'Settings']]" :key="tab[0]">
+      <button role="tab" class="admin-tab" :class="{ active: adminTab === tab[0] }" :aria-selected="adminTab === tab[0]"
+              @click="adminSetTab(tab[0])" x-text="tab[1]"></button>
+    </template>
   </div>
-  <pre id="admin-output" x-show="adminOutput" x-text="adminOutput"></pre>
 
-  <div id="admin-status" x-show="adminStatusLoaded">
-    <p id="admin-status-summary" :class="{ warn: adminStatus.needs_attention }"
-       x-text="adminStatus.needs_attention ? `${adminStatus.todo.length} thing(s) need attention` : 'all clear'"></p>
-    <ul id="admin-check-list">
-      <template x-for="line in adminStatus.todo" :key="'todo:' + line">
-        <li class="todo" x-text="line"></li>
-      </template>
-      <template x-for="line in adminStatus.ok" :key="'ok:' + line">
-        <li class="ok" x-text="line"></li>
-      </template>
-    </ul>
+  <div class="admin-section" x-show="adminTab === 'overview'">
+    <div class="admin-card">
+      <div class="admin-card-head">
+        <strong>kb <span x-text="adminStatus.version"></span></strong>
+        <button class="btn" @click="checkAdminUpdate()" :disabled="adminUpdateChecking || adminBusy"
+                x-text="adminUpdateChecking ? 'Checking...' : 'Check for updates'"></button>
+      </div>
+      <p class="admin-hint" x-show="adminUpdate && adminUpdate.detail" x-text="adminUpdate && adminUpdate.detail"></p>
+      <p class="admin-hint warn" x-show="adminUpdate && adminUpdate.error" x-text="adminUpdate && adminUpdate.error"></p>
+      <button class="btn btn-primary" x-show="adminUpdate && adminUpdate.update_available && adminUpdate.can_update"
+              @click="adminApplyUpdate()" :disabled="adminBusy"
+              x-text="adminConfirm === 'update' ? 'Click again to confirm update' : 'Update now'"></button>
+      <p class="admin-hint" x-show="adminUpdate && adminUpdate.update_available && adminUpdate.can_update">
+        Reinstalls kb, then restarts the login services so they pick up the new code.
+      </p>
+    </div>
+
+    <div class="admin-card" x-show="adminStatus.push.upstream">
+      <div class="admin-card-head">
+        <strong>Data repo</strong>
+        <button class="btn" x-show="adminStatus.push.ahead" @click="adminPush()" :disabled="adminBusy">
+          Push <span x-text="adminStatus.push.ahead"></span> commit(s)
+        </button>
+      </div>
+      <p class="admin-hint">
+        <span x-text="adminStatus.push.ahead ? `${adminStatus.push.ahead} ahead of` : 'up to date with'"></span>
+        <span x-text="adminStatus.push.upstream"></span><span x-show="adminStatus.push.behind"
+          x-text="`, ${adminStatus.push.behind} behind`"></span>
+      </p>
+    </div>
+
+    <div id="admin-status" x-show="adminStatusLoaded">
+      <p id="admin-status-summary" :class="{ warn: adminStatus.needs_attention }"
+         x-text="adminStatus.needs_attention ? `${adminStatus.todo.length} thing(s) need attention` : 'all clear'"></p>
+      <ul id="admin-check-list">
+        <template x-for="line in adminStatus.todo" :key="'todo:' + line">
+          <li class="todo" x-text="line"></li>
+        </template>
+        <template x-for="line in adminStatus.ok" :key="'ok:' + line">
+          <li class="ok" x-text="line"></li>
+        </template>
+      </ul>
+      <button class="btn" x-show="adminStatus.needs_attention" @click="adminSetup()" :disabled="adminBusy"
+              x-text="adminConfirm === 'setup' ? 'Click again to run setup' : 'Fix with setup'"></button>
+    </div>
   </div>
+
+  <div class="admin-section" x-show="adminTab === 'maintenance'">
+    <div class="admin-card">
+      <strong>Search index</strong>
+      <div class="admin-row">
+        <button class="btn" @click="adminReindex()" :disabled="adminBusy">Reindex</button>
+        <label class="admin-check"><input type="checkbox" x-model="adminIndexFull"> full rebuild</label>
+      </div>
+    </div>
+    <div class="admin-card">
+      <strong>Sync</strong>
+      <div class="admin-row">
+        <select x-model="adminSyncSource">
+          <option value="all">all</option>
+          <template x-for="src in adminStatus.sources" :key="src"><option :value="src" x-text="src"></option></template>
+        </select>
+        <button class="btn btn-primary" @click="adminSync()" :disabled="adminBusy">Sync</button>
+      </div>
+    </div>
+    <div class="admin-card">
+      <strong>Checks</strong>
+      <div class="admin-row">
+        <button class="btn" @click="adminValidate()" :disabled="adminBusy">Validate</button>
+        <button class="btn" @click="adminDoctor()" :disabled="adminBusy">Doctor</button>
+        <button class="btn" @click="adminTriage()" :disabled="adminBusy">Triage report</button>
+      </div>
+    </div>
+    <div class="admin-card">
+      <strong>Journal rollup</strong>
+      <p class="admin-hint">Gathers every day's journal entry for a month into one browsable page, with a tag-frequency line, at
+        <code>reference/journal-summaries/YYYY-MM.md</code>. It's the raw entries assembled in one place, not an AI summary.
+        Running it again refreshes the page.</p>
+      <div class="admin-row">
+        <select x-model="adminRollupMonth" aria-label="Month to roll up">
+          <option value="">last month</option>
+          <template x-for="m in adminJournalMonths" :key="m"><option :value="m" x-text="m"></option></template>
+        </select>
+        <button class="btn" @click="adminRollup()" :disabled="adminBusy">Generate</button>
+      </div>
+    </div>
+    <div class="admin-card">
+      <strong>Setup</strong>
+      <p class="admin-hint">Re-runs <code>kb setup --yes</code>: the pre-commit hook, index, bd store, and any missing optional tools (via brew). Safe to repeat.</p>
+      <button class="btn" @click="adminSetup()" :disabled="adminBusy"
+              x-text="adminConfirm === 'setup' ? 'Click again to run setup' : 'Run setup'"></button>
+    </div>
+  </div>
+
+  <div class="admin-section" x-show="adminTab === 'services'">
+    <p class="admin-hint" x-show="adminServices && !adminServices.supported">Login services need macOS (launchd) or Linux (systemd --user).</p>
+    <template x-if="adminServices && adminServices.supported">
+      <div>
+        <div class="admin-card">
+          <div class="admin-card-head">
+            <strong>Web UI service</strong>
+            <span class="admin-badge" :class="adminServices.web.running ? 'ok' : 'off'"
+                  x-text="adminServices.web.installed ? (adminServices.web.running ? 'running' : 'not running') : 'not installed'"></span>
+          </div>
+          <p class="admin-hint" x-show="adminServices.web.detail" x-text="adminServices.web.detail"></p>
+          <p class="admin-hint" x-show="!adminServices.web.installed">Install from a terminal with <code>kb service install</code>.</p>
+          <div class="admin-row" x-show="adminServices.web.installed">
+            <button class="btn" @click="adminService('web', 'refresh')" :disabled="adminBusy"
+                    x-text="adminConfirm === 'web:refresh' ? 'Click again to restart' : 'Refresh &amp; restart'"></button>
+            <button class="btn btn-danger" @click="adminService('web', 'uninstall')" :disabled="adminBusy"
+                    x-text="adminConfirm === 'web:uninstall' ? 'Click again to remove' : 'Uninstall'"></button>
+          </div>
+        </div>
+        <div class="admin-card">
+          <div class="admin-card-head">
+            <strong>Scheduled sync</strong>
+            <span class="admin-badge" :class="adminServices.sync.installed && !adminServices.sync.detail ? 'ok' : 'off'"
+                  x-text="adminServices.sync.installed ? (adminServices.sync.interval_minutes ? `every ${adminServices.sync.interval_minutes}m` : 'scheduled') : 'not installed'"></span>
+          </div>
+          <p class="admin-hint" x-show="adminServices.sync.detail" x-text="adminServices.sync.detail"></p>
+          <div class="admin-row">
+            <label class="admin-check">every <input type="number" min="1" max="10080" x-model="adminSyncInterval" class="admin-num"> min</label>
+            <button class="btn btn-primary" @click="adminService('sync', 'install')" :disabled="adminBusy"
+                    x-text="adminServices.sync.installed ? 'Update schedule' : 'Install'"></button>
+            <button class="btn btn-danger" x-show="adminServices.sync.installed" @click="adminService('sync', 'uninstall')" :disabled="adminBusy"
+                    x-text="adminConfirm === 'sync:uninstall' ? 'Click again to remove' : 'Uninstall'"></button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div class="admin-section" x-show="adminTab === 'settings'">
+    <div class="admin-card">
+      <strong>Editor</strong>
+      <p class="admin-hint">Used by <code>kb new</code>, <code>kb journal</code> and friends when <code>$EDITOR</code> isn't set.
+        <span x-show="adminConfig.source === 'env'">Currently overridden by <code>$EDITOR</code> (<span x-text="adminConfig.editor"></span>) in the environment kb web runs in.</span></p>
+      <div class="admin-row">
+        <input type="text" x-model="adminEditor" placeholder="e.g. code --wait" @keydown.enter="adminSaveEditor()">
+        <button class="btn" @click="adminSaveEditor()">Save</button>
+      </div>
+    </div>
+    <div class="admin-card">
+      <strong>Data repo</strong>
+      <p class="admin-hint"><code x-text="adminStatus.root"></code></p>
+    </div>
+    <div class="admin-card">
+      <strong>Credentials</strong>
+      <p class="admin-hint">Encrypted sync credentials are edited with <code>kb secrets</code> in a terminal -- they never pass through the browser.</p>
+    </div>
+  </div>
+
+  <p id="admin-msg" :class="{ warn: adminMsgErr }" x-show="adminMsg" x-text="adminMsg" role="status"></p>
+  <pre id="admin-output" x-show="adminOutput" x-text="adminOutput"></pre>
 </div>
 
 <div class="drawer-backdrop" :class="{ open: inboxDrawerOpen }" @click="inboxDrawerOpen = false"></div>

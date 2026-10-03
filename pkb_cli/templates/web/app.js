@@ -1028,13 +1028,26 @@ document.addEventListener("alpine:init", () => {
 
     // ---------- admin ----------
     adminOpen: false,
+    adminTab: "overview",
     adminMsg: "",
+    adminMsgErr: false,
     adminOutput: "",
+    adminBusy: false,
+    adminConfirm: "", // key of the destructive/heavy action awaiting its second click
     adminSyncSource: "all",
+    adminIndexFull: false,
+    adminRollupMonth: "", // "" = last month, which the server resolves
+    adminJournalMonths: [],
+    adminSyncInterval: 60,
+    adminEditor: "",
+    adminConfig: { editor: "", saved: "", source: null },
+    adminUpdate: null, // /api/admin/update result; null until checked
+    adminUpdateChecking: false,
+    adminServices: null, // /api/admin/services result; null until loaded
     // Populated by /api/admin/status -- the same read-only checks `kb doctor`
     // reports, polled on a timer so the Admin badge and drawer reflect what
     // needs attention without anyone clicking "Doctor" themselves.
-    adminStatus: { ok: [], todo: [], needs_attention: false, push: { is_git: false, upstream: null, ahead: null, behind: null } },
+    adminStatus: { ok: [], todo: [], needs_attention: false, version: "", root: "", sources: [], push: { is_git: false, upstream: null, ahead: null, behind: null } },
     adminStatusLoaded: false,
 
     async loadAdminStatus() {
@@ -1042,42 +1055,154 @@ document.addEventListener("alpine:init", () => {
       if (ok) this.adminStatus = data;
       this.adminStatusLoaded = true;
     },
-    async adminRun(label, fn) {
-      this.adminMsg = `${label}...`;
-      this.adminOutput = "";
+    async loadAdminServices() {
+      const { ok, data } = await apiFetch("/api/admin/services", "GET");
+      if (ok) this.adminServices = data;
+    },
+    async loadAdminJournalMonths() {
+      const { ok, data } = await apiFetch("/api/admin/journal-months", "GET");
+      if (ok) this.adminJournalMonths = data.months;
+    },
+    async loadAdminConfig() {
+      const { ok, data } = await apiFetch("/api/admin/config", "GET");
+      if (!ok) return;
+      this.adminConfig = data;
+      this.adminEditor = data.saved;
+    },
+    async checkAdminUpdate() {
+      this.adminUpdateChecking = true;
       try {
-        const data = await fn();
-        this.adminMsg = data.ok === false ? `${label}: issues found` : `${label}: done`;
-        if (data.output) {
-          this.adminOutput = data.output;
-        } else if (data.note) {
-          this.adminMsg += ` -- ${data.note}`;
-        } else if (data.error) {
-          this.adminMsg = `${label}: ${data.error}`;
-        }
+        const { ok, data } = await apiFetch("/api/admin/update", "GET");
+        this.adminUpdate = ok ? data : { error: (data && data.error) || "update check failed" };
       } catch {
-        this.adminMsg = `${label} failed`;
+        this.adminUpdate = { error: "update check failed" };
       }
+      this.adminUpdateChecking = false;
+    },
+    // Called when the drawer opens, and when switching tabs: refreshes just what
+    // the visible tab shows, so opening Admin doesn't fire every request at once.
+    adminTabOpened() {
+      if (this.adminTab === "overview" && !this.adminUpdate && !this.adminUpdateChecking) this.checkAdminUpdate();
+      if (this.adminTab === "maintenance") this.loadAdminJournalMonths();
+      if (this.adminTab === "services") this.loadAdminServices();
+      if (this.adminTab === "settings") this.loadAdminConfig();
+    },
+    adminSay(msg, err = false) {
+      this.adminMsg = msg;
+      this.adminMsgErr = err;
+    },
+    adminSetTab(tab) {
+      this.adminTab = tab;
+      this.adminConfirm = "";
+      this.adminTabOpened();
+    },
+    // Heavy or hard-to-undo actions (update, setup, removing a service) need a
+    // second click on the same button -- inline, since a browser confirm() dialog
+    // would block the page and can't be styled to match.
+    adminNeedsConfirm(key) {
+      if (this.adminConfirm === key) { this.adminConfirm = ""; return false; }
+      this.adminConfirm = key;
+      setTimeout(() => { if (this.adminConfirm === key) this.adminConfirm = ""; }, 5000);
+      return true;
+    },
+    // Runs one admin request. `fn` resolves to the endpoint's {ok, data}; a
+    // non-2xx (409 busy, 400 bad input, 500) shows data.error rather than output.
+    async adminRun(label, fn) {
+      if (this.adminBusy) return null;
+      this.adminBusy = true;
+      this.adminSay(`${label}...`);
+      this.adminOutput = "";
+      let data = null;
+      try {
+        const res = await fn();
+        data = res.data || {};
+        if (!res.ok || data.error) {
+          this.adminSay(`${label}: ${data.error || "failed"}`, true);
+        } else {
+          this.adminSay(`${label}: ${data.ok === false ? "issues found" : "done"}${data.note ? ` -- ${data.note}` : ""}`,
+            data.ok === false);
+        }
+        if (data.output) this.adminOutput = data.output;
+      } catch {
+        this.adminSay(`${label} failed`, true);
+      }
+      this.adminBusy = false;
       this.loadAdminStatus();
+      return data;
     },
     adminReindex() {
-      this.adminRun("reindex", () => apiFetch("/api/index", "POST", { full: false }).then((r) => r.data));
+      this.adminRun(this.adminIndexFull ? "full reindex" : "reindex",
+        () => apiFetch("/api/index", "POST", { full: this.adminIndexFull }));
     },
     adminValidate() {
-      this.adminRun("validate", () => apiFetch("/api/validate", "POST").then((r) => r.data));
+      this.adminRun("validate", () => apiFetch("/api/validate", "POST"));
     },
     adminDoctor() {
-      this.adminRun("doctor", () => apiFetch("/api/doctor", "GET").then((r) => r.data));
+      this.adminRun("doctor", () => apiFetch("/api/doctor", "GET"));
+    },
+    adminTriage() {
+      this.adminRun("triage", () => apiFetch("/api/admin/triage", "GET"));
+    },
+    adminRollup() {
+      this.adminRun("journal rollup", () => apiFetch("/api/admin/rollup", "POST", { month: this.adminRollupMonth }))
+        .then(() => { this.loadTagIndex(); this.loadEntryIndex(); });
     },
     adminSync() {
-      this.adminRun("sync", () => apiFetch("/api/sync", "POST", { source: this.adminSyncSource }).then((r) => r.data))
+      this.adminRun("sync", () => apiFetch("/api/sync", "POST", { source: this.adminSyncSource }))
         .then(() => { this.loadTagIndex(); this.loadEntryIndex(); });
     },
     adminPush() {
       this.adminRun("push", () => apiFetch("/api/push", "POST").then((r) => {
         const { ok, message } = r.data;
-        return ok ? { ok, note: `pushed -> ${message}` } : { ok, error: message };
+        return { ok: r.ok, data: ok ? { ok, note: `pushed -> ${message}` } : { ok, error: message } };
       }));
+    },
+    adminSetup() {
+      if (this.adminNeedsConfirm("setup")) return;
+      this.adminRun("setup", () => apiFetch("/api/admin/setup", "POST"));
+    },
+    async adminApplyUpdate() {
+      if (this.adminNeedsConfirm("update")) return;
+      const data = await this.adminRun("update", () => apiFetch("/api/admin/update", "POST"));
+      if (data && data.ok && data.restart_scheduled) this.adminAwaitRestart("update");
+      else if (data && data.ok) this.checkAdminUpdate();
+    },
+    // Poll /api/health until the (restarted) server answers again, then reload so
+    // the page runs the new frontend. The restart is scheduled ~1s after the
+    // response, so wait that out first -- otherwise the old process answers.
+    async adminAwaitRestart(label) {
+      this.adminBusy = true;
+      this.adminSay(`${label}: restarting kb web...`);
+      await new Promise((r) => setTimeout(r, 3000));
+      for (let i = 0; i < 40; i++) {
+        try {
+          const res = await fetch("/api/health");
+          if (res.ok) { location.reload(); return; }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      this.adminBusy = false;
+      this.adminSay(`${label}: kb web didn't come back -- check the service logs`, true);
+    },
+    async adminService(name, action) {
+      if ((action === "uninstall" || (name === "web" && action === "refresh")) && this.adminNeedsConfirm(`${name}:${action}`)) return;
+      const body = action === "install" ? { interval_minutes: Number(this.adminSyncInterval) } : {};
+      const data = await this.adminRun(`${name} service ${action}`,
+        () => apiFetch(`/api/admin/services/${name}/${action}`, "POST", body));
+      if (data && data.ok && data.restart_scheduled) {
+        if (name === "web" && action === "uninstall") {
+          this.adminSay("web service removed -- this page stops working once kb web exits");
+        } else {
+          this.adminAwaitRestart(`${name} service ${action}`);
+        }
+      }
+      this.loadAdminServices();
+    },
+    async adminSaveEditor() {
+      const { ok, data } = await apiFetch("/api/admin/config", "PATCH", { editor: this.adminEditor });
+      this.adminSay(ok ? (this.adminEditor.trim() ? "editor saved" : "editor preference cleared")
+        : (data && data.error) || "couldn't save", !ok);
+      if (ok) { this.adminConfig = data; this.adminEditor = data.saved; }
     },
 
     // ---------- lightbox ----------
@@ -1179,6 +1304,9 @@ document.addEventListener("alpine:init", () => {
       this.$watch("newEntryOpen", updateBodyScrollLock);
       this.$watch("todoModalOpen", updateBodyScrollLock);
       this.$watch("adminOpen", updateBodyScrollLock);
+      this.$watch("adminOpen", (open) => {
+        if (open) { this.loadAdminStatus(); this.adminTabOpened(); } else this.adminConfirm = "";
+      });
       this.$watch("inboxDrawerOpen", updateBodyScrollLock);
       this.$watch("todoDrawerOpen", updateBodyScrollLock);
       this.$watch("paletteOpen", updateBodyScrollLock);

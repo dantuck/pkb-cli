@@ -15,6 +15,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+import typing
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
@@ -630,6 +632,12 @@ def _journal_by_tag(root, tag):
     for date_str, path in matches:
         print(f"{date_str}  {os.path.relpath(path, root)}")
     return 0
+
+
+def journal_months(root):
+    """YYYY-MM for every month with at least one journal entry, newest first --
+    the months `kb journal rollup` has something to roll up."""
+    return list(dict.fromkeys(date[:7] for date, _path in list_journal_entries(root)))
 
 
 def _rollup_month(month_arg):
@@ -1474,22 +1482,18 @@ def cmd_secrets(args):
 
 def cmd_config(args):
     if args.value is None:
-        env_editor = os.environ.get("EDITOR")
-        if env_editor:
-            print(f"editor: {env_editor}  (from $EDITOR)")
+        editor, source = pc.resolve_editor()
+        if source == "env":
+            print(f"editor: {editor}  (from $EDITOR)")
         else:
-            saved = pc.load_kb_config().get("editor")
-            print(f"editor: {saved}  (saved in {pc.kb_config_path()})" if saved else "editor: not set")
+            print(f"editor: {editor}  (saved in {pc.kb_config_path()})" if editor else "editor: not set")
         return 0
 
-    if pc.split_editor(args.value) is None:
+    if not args.value.strip() or not pc.set_editor(args.value):
         print(f"error: '{args.value}' doesn't look like a usable editor command "
               f"(empty, or can't be parsed -- check quoting)", file=sys.stderr)
         return 1
 
-    cfg = pc.load_kb_config()
-    cfg["editor"] = args.value
-    pc.save_kb_config(cfg)
     print(f"saved -- kb will use '{args.value}' whenever $EDITOR isn't set")
     pc.warn_if_editor_missing(args.value)
     return 0
@@ -2186,27 +2190,67 @@ def _service_uninstall(kind, agent_name):
     return 0
 
 
-def _service_status(kind, agent_name):
-    agent = AGENTS[agent_name]
+def _service_state(kind, name):
+    """{installed, running, detail} for one installed-or-not service --
+    what `kb service status`, `kb sync-service status` and kb web's Admin panel
+    all report, so they can't disagree. `detail` is a human string for the
+    not-installed / not-loaded / not-active cases; On systemd it's the unit's active state ("inactive", "failed", ...)."""
+    agent = AGENTS[name]
     if kind == "launchd":
-        plist_path = _agent_launchd_plist_path(agent_name)
-        installed, running, detail = _launchd_status(agent["launchd_label"], plist_path)
-        if not installed:
-            print(detail)
-            return 1
-        if detail:
-            print(detail)
-            return 1
-        print(f"installed and {'running' if running else 'loaded but not running'} ({plist_path})")
-        return 0 if running else 1
+        installed, running, detail = _launchd_status(agent["launchd_label"], _agent_launchd_plist_path(name))
+        return {"installed": installed, "running": bool(running), "detail": detail}
+    # the sync service is driven by its timer unit, not the oneshot service
+    path, unit = ((_agent_systemd_timer_path(name), agent["systemd_timer"]) if name == "sync"
+                  else (_agent_systemd_unit_path(name), agent["systemd_unit"]))
+    if not os.path.exists(path):
+        return {"installed": False, "running": False, "detail": "not installed"}
+    state = _systemd_active_state(unit)
+    return {"installed": True, "running": state == "active", "detail": None if state == "active" else state}
 
-    unit_path = _agent_systemd_unit_path(agent_name)
-    if not os.path.exists(unit_path):
-        print("not installed")
+
+def _service_status(kind, agent_name):
+    info = _service_state(kind, agent_name)
+    if not info["installed"]:
+        print(info["detail"])
         return 1
-    state = _systemd_active_state(agent["systemd_unit"])
-    print(f"installed ({unit_path}), {state}")
-    return 0 if state == "active" else 1
+    if kind == "launchd":
+        path = _agent_launchd_plist_path(agent_name)
+        if info["detail"]:
+            print(info["detail"])
+            return 1
+        print(f"installed and {'running' if info['running'] else 'loaded but not running'} ({path})")
+        return 0 if info["running"] else 1
+    print(f"installed ({_agent_systemd_unit_path(agent_name)}), {info['detail'] or 'active'}")
+    return 0 if info["running"] else 1
+
+
+def _sync_interval_minutes(kind):
+    """Minutes between runs of an installed sync service, or None if it can't be read."""
+    try:
+        if kind == "launchd":
+            import plistlib
+            with open(_agent_launchd_plist_path("sync"), "rb") as f:
+                return plistlib.load(f).get("StartInterval", 0) // 60 or None
+        with open(_agent_systemd_timer_path("sync"), encoding="utf-8") as f:
+            m = re.search(r"^OnUnitActiveSec=(\d+)min", f.read(), re.M)
+        return int(m.group(1)) if m else None
+    except (OSError, ValueError):
+        return None
+
+
+def service_info():
+    """Structured `kb service status` / `kb sync-service status` for kb web's Admin
+    panel: {supported, kind, web: {...}, sync: {...}}, each service reporting
+    {installed, running, detail}. Never writes anything."""
+    kind = _service_kind()
+    if kind is None:
+        return {"supported": False, "kind": None}
+    out = {"supported": True, "kind": kind}
+    for name in AGENTS:
+        out[name] = _service_state(kind, name)
+    if out["sync"]["installed"]:
+        out["sync"]["interval_minutes"] = _sync_interval_minutes(kind)
+    return out
 
 
 def _unit_args(argv):
@@ -2377,26 +2421,19 @@ def _sync_service_uninstall(kind):
 
 
 def _sync_service_status(kind):
-    agent = AGENTS["sync"]
-    if kind == "launchd":
-        plist_path = _agent_launchd_plist_path("sync")
-        installed, _running, detail = _launchd_status(agent["launchd_label"], plist_path)
-        if not installed:
-            print(detail)
-            return 1
-        if detail:
-            print(detail.replace("`install`", "`kb sync-service install`"))
-            return 1
-        print(f"installed and scheduled ({plist_path})")
-        return 0
-
-    timer_path = _agent_systemd_timer_path("sync")
-    if not os.path.exists(timer_path):
-        print("not installed")
+    info = _service_state(kind, "sync")
+    if not info["installed"]:
+        print(info["detail"])
         return 1
-    state = _systemd_active_state(agent["systemd_timer"])
-    print(f"installed ({timer_path}), timer {state}")
-    return 0 if state == "active" else 1
+    if kind == "launchd":
+        if info["detail"]:
+            print(info["detail"].replace("`install`", "`kb sync-service install`"))
+            return 1
+        # an interval job is only "running" while it's actually firing, so scheduled is healthy
+        print(f"installed and scheduled ({_agent_launchd_plist_path('sync')})")
+        return 0
+    print(f"installed ({_agent_systemd_timer_path('sync')}), timer {info['detail'] or 'active'}")
+    return 0 if info["running"] else 1
 
 
 def doctor_checks(root, push=None):
@@ -2619,119 +2656,194 @@ def cmd_doctor(args):
     return 1 if todo else 0
 
 
-def cmd_update(args):
-    """Check this pkb-cli install against upstream; update if behind. A source
-    checkout (e.g. a contributor's `git clone` + `pip install -e .`) uses git
-    fetch/pull; a normal install compares its version against the latest GitHub
-    release and runs the upgrade command for whichever tool installed it (pipx
-    or uv). The only kb command besides `kb sync` that touches the network."""
+def plan_update():
+    """Decide what `kb update` would do, without doing it -- the single source of
+    truth for `kb update`, `kb update --check` and kb web's Admin panel, so they
+    can't disagree about whether an update is available or allowed. Touches the
+    network (git fetch / GitHub releases API) but never writes to the install.
+
+    Returns {mode, current, latest, update_available, can_update, command,
+    installer, detail, error}. `mode` is "git" (source checkout), "release"
+    (uv/pipx/pip install) or "legacy" (old tarball installer). `detail` is the
+    status line to show; `error` is why it can't proceed (or couldn't check);
+    `command` is the argv that installs the update (release/legacy modes)."""
+    plan = {"mode": "release", "current": __version__, "latest": None, "update_available": False,
+            "can_update": False, "command": None, "installer": None, "detail": None, "error": None}
+
     if os.path.exists(LEGACY_VERSION_PATH):
-        return _cmd_update_legacy(args)
-    if not os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
-        return _cmd_update_release(args)
+        plan["mode"] = "legacy"
+        plan["update_available"] = True
+        installer = next((t for t in ("uv", "pipx") if shutil.which(t)), None)
+        if installer is None:
+            plan["error"] = ("kb was installed by the old tarball installer, which can't update itself any "
+                             "more.\ninstall uv (https://docs.astral.sh/uv/) or pipx, then re-run the "
+                             f"installer:\n  curl -fsSL https://raw.githubusercontent.com/{TOOL_REPO_SLUG}/main/install.sh | bash")
+            return plan
+        try:
+            ref = f"v{_latest_release_version()}"
+        except (urllib.error.URLError, OSError, ValueError, KeyError):
+            ref = "main"  # no release yet (or GitHub unreachable) -- fall back to the branch
+        plan.update(installer=installer, can_update=True, command=_install_command(installer, ref))
+        plan["detail"] = f"migrating this old-style install to {installer}: {' '.join(plan['command'])}"
+        return plan
 
-    fetch = _git("fetch", "--quiet", "origin")
-    if fetch.returncode != 0:
-        print(f"error: git fetch failed: {fetch.stderr.strip()}", file=sys.stderr)
-        return 1
+    if os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
+        plan["mode"] = "git"
+        fetch = _git("fetch", "--quiet", "origin")
+        if fetch.returncode != 0:
+            plan["error"] = f"git fetch failed: {fetch.stderr.strip()}"
+            return plan
+        status = update_status(fetch=False)  # already fetched above, no need to do it twice
+        if not status["upstream"]:
+            plan["error"] = f"no upstream branch configured for {TOOL_ROOT}"
+            return plan
+        local, remote = status["local"][:8], status["remote"][:8]
+        plan.update(current=local, latest=remote, update_available=bool(status["behind"]))
+        if not status["behind"]:
+            plan["detail"] = f"kb is up to date with {status['upstream']} ({local})"
+        else:
+            plan["detail"] = f"kb is {status['behind']} commit(s) behind {status['upstream']} ({local} -> {remote})"
+            if status["dirty"]:
+                plan["error"] = f"{TOOL_ROOT} has local changes -- commit or stash them before updating"
+            else:
+                plan["can_update"] = True
+        return plan
 
-    status = update_status(fetch=False)  # already fetched above, no need to do it twice
-    if not status["upstream"]:
-        print(f"error: no upstream branch configured for {TOOL_ROOT}", file=sys.stderr)
-        return 1
-
-    if not status["behind"]:
-        print(f"kb is up to date with {status['upstream']} ({status['local'][:8]})")
-        return 0
-
-    print(f"kb is {status['behind']} commit(s) behind {status['upstream']} "
-          f"({status['local'][:8]} -> {status['remote'][:8]})")
-
-    if args.check:
-        print("run `kb update` (without --check) to pull")
-        return 1
-
-    if status["dirty"]:
-        print(f"error: {TOOL_ROOT} has local changes -- commit or stash them before updating", file=sys.stderr)
-        return 1
-
-    pull = _git("pull", "--ff-only")
-    if pull.returncode != 0:
-        print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
-        return 1
-    print(pull.stdout.strip())
-    print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
-    return 0
-
-
-def _refresh_services_after_update():
-    """Run `kb service refresh` from the freshly installed kb -- this process is still
-    the old code (and possibly the old interpreter), so it can't write units that
-    point at the new install itself."""
-    kb = shutil.which("kb")
-    if kb and _service_kind():
-        subprocess.run([kb, "service", "refresh"])
-
-
-def _cmd_update_legacy(args):
-    """`kb update` for an install made by the old tarball installer (a ~/pkb-cli
-    snapshot with a version marker, reaching us via the scripts/kb shim): migrate
-    it to a uv/pipx-managed install, which replaces the old `kb` symlink."""
-    installer = next((t for t in ("uv", "pipx") if shutil.which(t)), None)
-    if installer is None:
-        print("kb was installed by the old tarball installer, which can't update itself any more.\n"
-              "install uv (https://docs.astral.sh/uv/) or pipx, then re-run the installer:\n"
-              f"  curl -fsSL https://raw.githubusercontent.com/{TOOL_REPO_SLUG}/main/install.sh | bash",
-              file=sys.stderr)
-        return 1
-    try:
-        ref = f"v{_latest_release_version()}"
-    except (urllib.error.URLError, OSError, ValueError, KeyError):
-        ref = "main"  # no release yet (or GitHub unreachable) -- fall back to the branch
-    cmd = _install_command(installer, ref)
-    print(f"migrating this old-style install to {installer}: {' '.join(cmd)}")
-    if args.check:
-        return 1
-    rc = subprocess.run(cmd).returncode
-    if rc == 0:
-        _refresh_services_after_update()
-        print(f"migrated. future `kb update`s use {installer}; run `kb setup` to refresh the hook and "
-              f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
-    return rc
-
-
-def _cmd_update_release(args):
     try:
         latest = _latest_release_version()
     except urllib.error.HTTPError as e:
         if e.code == 404:  # no release has been published yet
-            print(f"kb {__version__}: no releases published for {TOOL_REPO_SLUG} yet")
-            return 0
-        print(f"error: couldn't check for updates: {e}", file=sys.stderr)
-        return 1
+            plan["detail"] = f"kb {__version__}: no releases published for {TOOL_REPO_SLUG} yet"
+        else:
+            plan["error"] = f"couldn't check for updates: {e}"
+        return plan
     except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        print(f"error: couldn't check for updates: {e}", file=sys.stderr)
-        return 1
+        plan["error"] = f"couldn't check for updates: {e}"
+        return plan
 
+    plan["latest"] = latest
     if _version_tuple(latest) <= _version_tuple(__version__):
-        print(f"kb is up to date ({__version__})")
-        return 0
+        plan["detail"] = f"kb is up to date ({__version__})"
+        return plan
+    plan["update_available"] = True
+    plan["detail"] = f"kb {latest} is available (you have {__version__})"
+    plan["installer"] = _installer()
+    if plan["installer"]:
+        plan.update(can_update=True, command=_install_command(plan["installer"], f"v{latest}"))
+    else:
+        plan["error"] = ("can't tell how kb was installed -- reinstall it with the tool you used "
+                         f"(e.g. `{' '.join(_install_command('pipx', f'v{latest}'))}`)")
+    return plan
 
-    print(f"kb {latest} is available (you have {__version__})")
-    installer = _installer()
-    upgrade = _install_command(installer, f"v{latest}") if installer else None
-    if args.check:
-        print(f"run `{' '.join(upgrade)}` to upgrade" if upgrade else "run `kb update` to upgrade")
-        return 1
-    if upgrade is None:
-        print("error: can't tell how kb was installed -- reinstall it with the tool you used "
-              f"(e.g. `{' '.join(_install_command('pipx', f'v{latest}'))}`)", file=sys.stderr)
-        return 1
-    rc = subprocess.run(upgrade).returncode
-    if rc == 0:
-        _refresh_services_after_update()
+
+def update_info():
+    """plan_update() as JSON-friendly data for kb web (the command as one string)."""
+    info = plan_update()
+    info["command"] = " ".join(info["command"]) if info["command"] else None
+    return info
+
+
+class _UpdateOpts(typing.NamedTuple):
+    check: bool = False
+    # print the installer's output (so a caller can capture it) instead of letting
+    # it stream straight to the terminal -- see _run_captured
+    capture: bool = False
+    # leave restarting the login services to the caller: kb web's Admin panel
+    # can't have its own service restarted underneath an in-flight request
+    defer_refresh: bool = False
+
+
+def cmd_update(args):
+    return apply_update(check=args.check)[0]
+
+
+def apply_update(check=False, capture=False, defer_refresh=False):
+    """Update this pkb-cli install if plan_update() says it's behind. Returns
+    (returncode, updated) -- `updated` is True when new code was installed, which
+    with `defer_refresh` is the caller's cue to refresh the services itself.
+
+    A source checkout (e.g. a contributor's `git clone` + `pip install -e .`) uses
+    git pull; a normal install runs the upgrade command for whichever tool
+    installed it (pipx or uv). The only kb command besides `kb sync` that touches
+    the network."""
+    opts = _UpdateOpts(check, capture, defer_refresh)
+    plan = plan_update()
+    if plan["detail"]:
+        print(plan["detail"])
+    if plan["update_available"] and opts.check:
+        if plan["mode"] == "git":
+            print("run `kb update` (without --check) to pull")
+        elif plan["mode"] == "release":
+            print(f"run `{' '.join(plan['command'])}` to upgrade" if plan["command"] else "run `kb update` to upgrade")
+        return 1, False
+    if plan["error"]:
+        print(f"error: {plan['error']}", file=sys.stderr)
+        return 1, False
+    if not plan["update_available"]:
+        return 0, False
+
+    if plan["mode"] == "git":
+        pull = _git("pull", "--ff-only")
+        if pull.returncode != 0:
+            print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
+            return 1, False
+        print(pull.stdout.strip())
         print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
-    return rc
+        return 0, True
+
+    rc = _run_update_step(plan["command"], opts)
+    if rc != 0:
+        return rc, False
+    _refresh_services_after_update(opts)
+    if plan["mode"] == "legacy":
+        print(f"migrated. future `kb update`s use {plan['installer']}; run `kb setup` to refresh the hook and "
+              f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
+    else:
+        print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
+    return 0, True
+
+
+def _run_update_step(cmd, opts):
+    """Run an install/refresh command for `kb update`, streaming its output to
+    the terminal unless `opts.capture`."""
+    if opts.capture:
+        return _run_captured(cmd)
+    return subprocess.run(cmd).returncode
+
+
+def _refresh_services_after_update(opts):
+    """Run `kb service refresh` from the freshly installed kb -- this process is still
+    the old code (and possibly the old interpreter), so it can't write units that
+    point at the new install itself."""
+    if not opts.defer_refresh and _service_kind():
+        _run_update_step(installed_kb_argv("service", "refresh"), opts)
+
+
+def installed_kb_argv(*args):
+    """argv for the `kb` on PATH -- the freshly reinstalled one, after an update --
+    falling back to this interpreter's `python -m pkb_cli`."""
+    exe = shutil.which("kb")
+    return [exe, *args] if exe else _kb_cmd(*args)
+
+
+def schedule_kb_command(*args, delay=1):
+    """Run `kb <args>` as a separate one-shot job after `delay` seconds, outside the
+    caller's own process tree. For anything that restarts or removes the service kb
+    web itself runs under: a plain child would be killed with it before finishing,
+    and the delay lets the HTTP response that scheduled it flush first. launchd/
+    systemd run it as their own job; elsewhere a new session is the best available."""
+    wrapped = ["sh", "-c", f'sleep {int(delay)}; exec "$@"', "sh", *installed_kb_argv(*args)]
+    if sys.platform == "darwin" and shutil.which("launchctl"):
+        label = f"dev.pkb-cli.admin-{os.getpid()}-{int(time.time())}"
+        attempt = ["launchctl", "submit", "-l", label, "--", *wrapped]
+    elif sys.platform.startswith("linux") and shutil.which("systemd-run"):
+        attempt = ["systemd-run", "--user", "--quiet", "--collect", *wrapped]
+    else:
+        attempt = None
+    if attempt and subprocess.run(attempt, capture_output=True).returncode == 0:
+        return
+    subprocess.Popen(wrapped, start_new_session=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 EPILOG = """\
