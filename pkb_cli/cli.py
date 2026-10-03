@@ -2666,8 +2666,7 @@ def _cmd_update_release(args):
         return 1
     if upgrade is None:
         print("error: can't tell how kb was installed -- reinstall it with the tool you used "
-              f"(e.g. `pipx install --force git+https://github.com/{TOOL_REPO_SLUG}@v{latest}`)",
-              file=sys.stderr)
+              f"(e.g. `{' '.join(_install_command('pipx', f'v{latest}'))}`)", file=sys.stderr)
         return 1
     rc = subprocess.run(upgrade).returncode
     if rc == 0:
