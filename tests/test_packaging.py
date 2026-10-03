@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-
 from unittest import mock
 
 from pkb_cli import __version__, cli, pkb_common as pc, pkb_entries
