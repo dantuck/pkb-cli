@@ -31,7 +31,7 @@ kb push                           push auto-commit's history to the data repo's 
 kb web [--port PORT] [--no-open]  local-only web UI (127.0.0.1, default port 4173);
                                   if one is already running, just opens it
 kb open [--port PORT] [--no-open] alias for `kb web`
-kb service install|uninstall|status [--port PORT] [--repo DIR]
+kb service install|uninstall|status|refresh [--port PORT] [--repo DIR]
                                   run `kb web` as a login service (launchd/systemd --user)
 kb sync-service install|uninstall|status [--interval-minutes MIN] [--repo DIR]
                                   run `kb sync` on a recurring interval (launchd/systemd --user)
@@ -39,7 +39,7 @@ kb setup [--yes]                # guided onboarding: PATH, Claude Code skill, op
                                  # deps (asks before each), hook, index, bd store.
                                  # --yes skips prompts and accepts defaults (scripted installs)
 kb doctor                       # diagnose issues -- read-only, never writes anything
-kb update [--check]             # upgrade to the latest release (via uv/pipx), or git pull
+kb update [--check]             # reinstall the latest release (via uv/pipx), refresh installed services, or git pull
                                  # for a source checkout; --check reports without upgrading
 ```
 
@@ -79,7 +79,9 @@ is a one-shot script run.
 systemd `--user` unit (Linux) that runs `kb web --no-open` at login, so the
 web UI is always reachable without running `kb web` by hand. It still binds
 127.0.0.1 only and needs no root/admin privileges. Not supported on other
-platforms.
+platforms. `kb service refresh` repoints any installed `kb service` / `kb sync-service`
+unit at the current install (keeping its repo, port, and interval) and restarts it; `kb update`
+runs it after a successful reinstall so a long-running `kb web` picks up the new code.
 
 `kb sync-service` is the same idea for `kb sync`: a launchd LaunchAgent with
 `StartInterval` (macOS) or a systemd `--user` timer + oneshot service (Linux)
