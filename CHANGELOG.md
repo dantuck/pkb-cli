@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/dantuck/pkb-cli/compare/v0.1.0...v0.1.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* drop component prefix from release tags ([3c21c95](https://github.com/dantuck/pkb-cli/commit/3c21c95a9c356f2a157d92e6cc6a103f7ff8974e))
+
 ## 0.1.0 (2026-10-03)
 
 
