@@ -39,8 +39,8 @@ kb setup [--yes]                # guided onboarding: PATH, Claude Code skill, op
                                  # deps (asks before each), hook, index, bd store.
                                  # --yes skips prompts and accepts defaults (scripted installs)
 kb doctor                       # diagnose issues -- read-only, never writes anything
-kb update [--check]             # pull tool updates (git pull, or tarball refresh if
-                                 # installed via install.sh); --check reports without pulling
+kb update [--check]             # upgrade to the latest release (via uv/pipx), or git pull
+                                 # for a source checkout; --check reports without upgrading
 ```
 
 Run `kb <command> -h` for full flag details on any of these, or `kb help` for
@@ -70,7 +70,7 @@ stays local. `kb push` is what sends that history to a remote — but if
 commands (`kb new`, `kb journal`, `kb tag`, ...) pushes too, so "fully
 offline" no longer holds once that's turned on.
 
-Implementation: a thin Python wrapper (`scripts/kb`) dispatching to helper
+Implementation: a thin Python wrapper (`pkb_cli/cli.py`) dispatching to helper
 scripts and modules alongside it (e.g. `kb_web.py` for `kb web`). No
 daemon/server process for any other command — every invocation but `kb web`
 is a one-shot script run.

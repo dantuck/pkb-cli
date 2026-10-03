@@ -10,11 +10,12 @@ and a feel for the core loop: write, search, journal.
 curl -fsSL https://raw.githubusercontent.com/dantuck/pkb-cli/main/install.sh | bash
 ```
 
-This downloads a snapshot of the tool to `~/pkb-cli` and symlinks `kb` onto
-your `PATH`. The only requirement is `python3`. If the installer can't find a
-writable directory already on your `PATH`, it creates `~/.local/bin` and
-prints an `export PATH=...` line — add that to your shell profile before
-continuing.
+This needs [uv](https://docs.astral.sh/uv/) or [pipx](https://pipx.pypa.io/)
+and installs the latest release of the tool with `kb` on your `PATH`. (Prefer
+no script? Run `uv tool install git+https://github.com/dantuck/pkb-cli` or
+`pipx install git+https://github.com/dantuck/pkb-cli`, then `kb setup`.) If `kb`
+isn't found afterwards, run `uv tool update-shell` or `pipx ensurepath` and
+open a new shell.
 
 Check it worked:
 

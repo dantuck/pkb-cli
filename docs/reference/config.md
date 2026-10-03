@@ -2,7 +2,7 @@
 
 Per-data-repo settings live in `.pkb/config.yml` (committed, so they apply to
 every clone). Every key is optional; anything omitted falls back to the
-defaults below (`DEFAULT_CONFIG` in `scripts/pkb_common.py`). Nested
+defaults below (`DEFAULT_CONFIG` in `pkb_cli/pkb_common.py`). Nested
 sections are merged key by key, so overriding one `sync.memos` key keeps the
 rest.
 

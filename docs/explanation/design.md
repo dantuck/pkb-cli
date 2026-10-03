@@ -37,8 +37,8 @@ framework itself.
 
 ## Explicit non-goals (v1)
 
-- No web UI or server process — CLI/file-based only, per the portability
-  requirement.
+- No required server process — the CLI is file-based and one-shot. `kb web`
+  is an optional local UI that runs only while you want it.
 - No real-time sync/webhooks from usememos/GitLab/GitHub/beads — polling/cursor-based
   batch sync only.
 - No automatic Diataxis classification of inbox content — triage is

@@ -26,7 +26,7 @@ sops exec-env .pkb/secrets.enc.env 'kb sync memos'  # runs a sync with decrypted
 
 `kb secrets` is resolved-repo-aware, like every other `kb` command — no need
 to remember the path. See
-[templates/secrets.env.example](../../templates/secrets.env.example) for the
+[pkb_cli/templates/secrets.env.example](../../pkb_cli/templates/secrets.env.example) for the
 expected keys.
 
 ## beads
