@@ -190,6 +190,8 @@ function newEntryDefaults() {
   };
 }
 
+const CAPTURE_SCROLL_RANGE = 100; // px of scroll over which the capture box collapses
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("kbApp", () => ({
     CORE_TYPES,
@@ -220,14 +222,12 @@ document.addEventListener("alpine:init", () => {
     // The capture box lives in the pinned header and shrinks as the page
     // scrolls: scroll position drives a 0..1 CSS variable (--p) so the box
     // tracks the scroll one-to-one. Focusing it (captureOpen) pins it open.
-    captureProgress: 0,
     captureOpen: false,
     captureCompact: false,
     updateCaptureProgress() {
-      const p = this.captureOpen ? 0 : this.captureProgress;
+      const p = this.captureOpen ? 0 : Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
       document.getElementById("site-header")?.style.setProperty("--p", p);
-      const compact = p > 0.5;
-      if (compact !== this.captureCompact) this.captureCompact = compact;
+      this.captureCompact = p > 0.5;
     },
     captureFocusOut(e) {
       if (e.currentTarget.contains(e.relatedTarget)) return;
@@ -1153,11 +1153,7 @@ document.addEventListener("alpine:init", () => {
       this.applyThemeAttr(this.theme);
       this.$watch("theme", (mode) => this.applyThemeAttr(mode));
 
-      const CAPTURE_SCROLL_RANGE = 100; // px of scroll over which the box collapses
-      window.addEventListener("scroll", () => {
-        this.captureProgress = Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
-        this.updateCaptureProgress();
-      }, { passive: true });
+      window.addEventListener("scroll", () => this.updateCaptureProgress(), { passive: true });
       // Scroll-driven changes must not be eased (they'd lag the scroll), but a
       // click/focus-driven open or close should glide -- so transitions are
       // only switched on briefly around that change.
@@ -1167,10 +1163,7 @@ document.addEventListener("alpine:init", () => {
         this.updateCaptureProgress();
         setTimeout(() => el?.classList.remove("snap"), 300);
       });
-      this.$nextTick(() => {
-        this.captureProgress = Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
-        this.updateCaptureProgress();
-      });
+      this.$nextTick(() => this.updateCaptureProgress());
 
       // Lock the page's own scroll behind whichever modal or drawer is open
       // so dragging the feed underneath doesn't fight with scrolling the

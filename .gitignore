@@ -4,4 +4,6 @@ __pycache__/
 .venv/
 .idea/
 .vscode/
-.pkb-cli-version
+dist/
+build/
+*.egg-info/

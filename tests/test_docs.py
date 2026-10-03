@@ -7,9 +7,8 @@ import sys
 import unittest
 
 REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-sys.path.insert(0, os.path.join(REPO, "scripts"))
 
-import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
 
 
 def _read(*parts):
@@ -19,7 +18,7 @@ def _read(*parts):
 
 class DocsTest(unittest.TestCase):
     def test_every_subcommand_is_in_cli_reference(self):
-        commands = set(re.findall(r'sub\.add_parser\(\s*"([a-z-]+)"', _read("scripts", "kb")))
+        commands = set(re.findall(r'sub\.add_parser\(\s*"([a-z-]+)"', _read("pkb_cli", "cli.py")))
         self.assertGreater(len(commands), 10)
         reference = _read("docs", "reference", "cli.md")
         missing = sorted(c for c in commands - {"help"} if not re.search(rf"^kb {re.escape(c)}\b", reference, re.M))

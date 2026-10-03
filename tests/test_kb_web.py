@@ -9,12 +9,10 @@ import threading
 import unittest
 from unittest import mock
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import kb_web  # noqa: E402
-import pkb_common as pc  # noqa: E402
-import pkb_entries  # noqa: E402
+from pkb_cli import kb_web  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_entries  # noqa: E402
 
 
 class KbWebTest(unittest.TestCase):

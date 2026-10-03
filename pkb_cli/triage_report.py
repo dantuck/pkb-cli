@@ -6,8 +6,7 @@ import os
 import sys
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(__file__))
-import pkb_common as pc
+from . import pkb_common as pc
 
 
 def scan_inbox(root):

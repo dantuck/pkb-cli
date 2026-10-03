@@ -1,30 +1,18 @@
-"""Tests for the push flow: pkb_common.git_push, scripts/kb's push_status, and
+"""Tests for the push flow: pkb_common.git_push, pkb_cli/cli.py's push_status, and
 auto_push wiring through git_autocommit. Uses a local bare repo as the
 "remote" so nothing here touches the network.
 """
-import importlib.machinery
-import importlib.util
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-def _load_kb_cli():
-    loader = importlib.machinery.SourceFileLoader("kb_cli", os.path.join(SCRIPT_DIR, "kb"))
-    spec = importlib.util.spec_from_loader("kb_cli", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-kb_cli = _load_kb_cli()
+from pkb_cli import cli as kb_cli  # noqa: E402
 
 
 def _git(root, *args):

@@ -1,4 +1,4 @@
-"""Tests for scripts/sync_memos.py's pure/offline logic: id and filename
+"""Tests for pkb_cli/sync_memos.py's pure/offline logic: id and filename
 handling, attachment markdown, and write_memo's add/update/unchanged paths.
 Network access (attachment downloads) is stubbed out."""
 import os
@@ -8,11 +8,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
-import sync_memos  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
+from pkb_cli import sync_memos  # noqa: E402
 
 
 class HelpersTest(unittest.TestCase):

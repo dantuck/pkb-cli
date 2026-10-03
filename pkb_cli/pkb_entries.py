@@ -9,17 +9,17 @@ import os
 import re
 from datetime import datetime
 
-import pkb_common as pc
+from . import pkb_common as pc
 
 
 def _reindex_fast(root):
-    """In-process incremental reindex -- same work as `run_script("index_fts.py")`
+    """In-process incremental reindex -- same work as `run_script("index_fts")`
     but without paying for a fresh interpreter + subprocess on every call.
     Used by entry_set_tags/entry_set_links/entry_update_content, which kb
     web's edit panel can trigger repeatedly in quick succession; other
     callers keep using run_script for output capture / exit-code parity with
     `kb reindex`."""
-    import index_fts
+    from . import index_fts
     index_fts.index_repo(root)
 
 

@@ -10,10 +10,8 @@ import tempfile
 import threading
 import unittest
 
-SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-sys.path.insert(0, SCRIPT_DIR)
 
-import pkb_common as pc  # noqa: E402
+from pkb_cli import pkb_common as pc  # noqa: E402
 
 
 def _git(root, *args):
