@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/dantuck/pkb-cli/compare/v0.4.0...v0.5.0) (2026-10-21)
+
+
+### Features
+
+* **web:** confirm before closing a todo from its row X ([5d3e97b](https://github.com/dantuck/pkb-cli/commit/5d3e97b445c12f4f2b03de8a2d01c86253fe80ae))
+
 ## [0.4.0](https://github.com/dantuck/pkb-cli/compare/v0.3.0...v0.4.0) (2026-10-21)
 
 
