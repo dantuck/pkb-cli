@@ -2314,11 +2314,18 @@ def _launchd_load(label, plist_path):
     erroring "already loaded". Returns an error string, or None on success."""
     uid = os.getuid()
     subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
-    result = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
-                             capture_output=True, text=True)
-    if result.returncode != 0:
-        return result.stderr.strip()
-    return None
+    # bootout returns before launchd has finished tearing the old job down, so an
+    # immediate bootstrap can fail with "Input/output error" (exit 5) -- retry briefly.
+    error = None
+    for attempt in range(5):
+        if attempt:
+            time.sleep(0.5)
+        result = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
+                                 capture_output=True, text=True)
+        if result.returncode == 0:
+            return None
+        error = result.stderr.strip()
+    return error
 
 
 def _launchd_unload_and_remove(label, plist_path):
