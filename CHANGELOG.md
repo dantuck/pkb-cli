@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/dantuck/pkb-cli/compare/v0.5.0...v0.6.0) (2026-10-21)
+
+
+### Features
+
+* **search:** add optional semantic search and --json output ([5c0ea1b](https://github.com/dantuck/pkb-cli/commit/5c0ea1b997c27393295e341d6eb11e32e3d575ae))
+
 ## [0.5.0](https://github.com/dantuck/pkb-cli/compare/v0.4.0...v0.5.0) (2026-10-21)
 
 

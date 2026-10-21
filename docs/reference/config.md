@@ -11,6 +11,8 @@ rest.
 | `inbox_triage_days` | `14` | Age in days after which `kb triage` flags an inbox item as overdue. |
 | `fts_default_scope` | `core` | Which content `kb search` covers by default (`--all` widens it). |
 | `auto_push` | `false` | Push after every auto-commit. See [how-to: use a data repo](../how-to/use-a-data-repo.md). |
+| `semantic.enabled` | `true` | Use meaning-based search when the optional `semantic` extra is installed. Inert otherwise. See [how-to: search by meaning](../how-to/search-by-meaning.md). |
+| `semantic.model` | `minishlab/potion-base-8M` | Embedding model: a Hugging Face id or a local directory. `$PKB_SEMANTIC_MODEL` overrides it per machine. |
 | `sync.memos.base_url_env` / `token_env` | `PKB_MEMOS_URL` / `PKB_MEMOS_TOKEN` | Names of the env vars holding the usememos URL and token. |
 | `sync.memos.inbox_min_length` | `280` | Memos at least this long land in the inbox; shorter ones stay in `sources/`. `null` disables inbox stubs entirely. |
 | `sync.gitlab.project_env` | `PKB_GITLAB_PROJECT` | Env var naming the GitLab project. |

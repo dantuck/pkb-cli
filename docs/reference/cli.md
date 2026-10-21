@@ -1,29 +1,29 @@
 # CLI command reference
 
 ```
-kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT]
+kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT] [--json]
                                   type: tutorial|how-to|reference|explanation
-kb journal [<date>] [-m [TEXT]]  today (default) or YYYY-MM-DD; -m TEXT quick-adds a
+kb journal [<date>] [-m [TEXT]] [--json]  today (default) or YYYY-MM-DD; -m TEXT quick-adds a
                                   timestamped line, bare -m opens $EDITOR for multiline input
 kb journal --tag <tag>            past entries carrying <tag>, newest first
-kb journal rollup [YYYY-MM]       generate/refresh that month's summary page (default: last month)
-kb search "<query>" [--type T] [--tag TAG] [--all] [--plain] [--json]
-kb inbox [--plain]                interactive triage: promote / redirect / discard
-kb inbox <id> promote <type>|redirect|discard   non-interactive triage (no terminal needed)
+kb journal rollup [YYYY-MM] [--json]       generate/refresh that month's summary page (default: last month)
+kb search "<query>" [--type T] [--tag TAG] [--all] [--keyword|--semantic] [--plain] [--json]
+kb inbox [--plain] [--json]                interactive triage: promote / redirect / discard
+kb inbox <id> promote <type>|redirect|discard [--json]   non-interactive triage (no terminal needed)
 kb triage [--json]                read-only overdue-inbox report
 kb links <id> [--json]            forward links + backlinks
 kb show <id> [--json]             print an entry's full content by id
-kb tag <id> [add|rm <tag>...]     view/add/remove tags (never hand-edit frontmatter)
-kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
-kb rm <id> [--force]              delete an entry (refuses if other entries link to it,
+kb tag <id> [add|rm <tag>...] [--json]     view/add/remove tags (never hand-edit frontmatter)
+kb link <id> [add|rm <id>...] [--json]     view/add/remove links, same reasoning
+kb rm <id> [--force] [--json]              delete an entry (refuses if other entries link to it,
                                   unless --force, which also cleans up those links)
-kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
+kb mv <id> [--type T] [--title "<title>"] [--json]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
-kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
+kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN] [--json]
                                   quick-add a TODO; bare -a opens bd's interactive form
-kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
-kb todo unsnooze <id>             end a snooze early
-kb todo due <id> <when>|none      set or clear a TODO's reminder time
+kb todo snooze <id> <when> [--json]        hide a TODO until <when>, then remind again
+kb todo unsnooze <id> [--json]             end a snooze early
+kb todo due <id> <when>|none [--json]      set or clear a TODO's reminder time
 kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
@@ -52,6 +52,16 @@ kb update [--check]             # reinstall the latest release (via uv/pipx), re
 
 Run `kb <command> -h` for full flag details on any of these, or `kb help` for
 the top-level list.
+
+## Machine-readable output
+
+Every command that writes (`new`, `journal -m`/`rollup`, `inbox <id> ...`, `tag`,
+`link`, `rm`, `mv`, `todo -a`/`snooze`/`unsnooze`/`due`) and every read command
+that has one (`search`, `show`, `links`, `triage`, `inbox`, `todo`) accepts
+`--json`. On success stdout is exactly one JSON value, with no other text. On
+failure the exit code is 1 and stderr is `{"error": "..."}`. The shape of each
+result is tabulated in the [Claude Code skill](../../pkb_cli/skills/kb/SKILL.md),
+which is what an agent driving `kb` reads.
 
 `kb doctor` and `kb setup` share the same detection logic (hook state, index
 freshness, tool presence) — `setup` acts on it, `doctor` only reports, plus a

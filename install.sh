@@ -14,7 +14,9 @@
 #   pipx install git+https://github.com/dantuck/pkb-cli
 #
 # Installs the latest tagged release (falling back to $PKB_CLI_REF, default
-# main, if there is none). Override the source with $PKB_CLI_REPO (an
+# main, if there is none). Set PKB_CLI_SEMANTIC=1 to also install the optional
+# `semantic` extra (meaning-based search; fetches a ~30 MB model once).
+# Override the source with $PKB_CLI_REPO (an
 # "owner/repo" GitHub slug) and the version with $PKB_CLI_REF (a tag or
 # branch). Safe to re-run: reinstalls in place, and `kb setup --yes` is
 # idempotent. Update later with `kb update`.
@@ -29,6 +31,9 @@ if [ -z "$REF" ]; then
   REF="${REF:-main}"
 fi
 SPEC="git+https://github.com/$REPO_SLUG@$REF"
+if [ -n "${PKB_CLI_SEMANTIC:-}" ]; then
+  SPEC="pkb-cli[semantic] @ $SPEC"
+fi
 
 if command -v uv >/dev/null 2>&1; then
   echo "installing pkb-cli ($REPO_SLUG@$REF) with uv"

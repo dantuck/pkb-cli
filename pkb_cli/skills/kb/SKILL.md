@@ -17,7 +17,12 @@ the data repo.
 - **Look something up**: `kb search "<query>"` (add `--type how-to` etc. to
   narrow to one Diataxis type, `--all` to also include journal/inbox/sources).
   Opens an interactive picker if fzf + a real terminal are available; add
-  `--plain` for script-parseable output.
+  `--plain` for script-parseable output. If the `semantic` extra is installed
+  the default ranking also matches by *meaning* (so a query can use different
+  words than the note); `--keyword` forces exact FTS5 matching, `--semantic`
+  meaning only. When a search comes back empty, rephrase it with synonyms
+  before concluding the note doesn't exist. Notes on stderr (e.g. "semantic
+  search unavailable, using keyword only") are informational, not errors.
 - **Log that something happened**: `kb journal -m "<note>"` appends a
   timestamped line to today's entry, creating it first if needed -- no
   frontmatter to touch. `kb journal <date> -m "<note>"` backfills a specific
@@ -73,9 +78,67 @@ the data repo.
 - **Pull in external sources**: `kb sync all` (or `memos` / `gitlab` /
   `github` / `beads`) ingests into `sources/`, stubbing anything notable into `inbox/`
   for triage.
+- **Push to the remote**: `kb push` pushes the data repo's auto-commits to its
+  configured upstream (it never guesses a remote).
+- **Web UI / background services**: `kb web [--port N] [--no-open]` runs the
+  local UI in the foreground until Ctrl-C (don't start it unless asked --
+  it blocks). `kb service install|uninstall|status|refresh` runs it as a login
+  service; `kb sync-service install|uninstall|status [--interval-minutes MIN]`
+  runs `kb sync` on a timer; `kb remind install|uninstall|status` schedules
+  due-TODO notifications. All take `--repo DIR` to pin the data repo.
+- **Credentials**: `kb secrets` manages the sops-encrypted ingestion
+  credentials -- run it only when the user asks to set up sync sources, never
+  read or print the values.
+- **Preferences, install, upgrade**: `kb config editor [<cmd>]`, `kb setup
+  [--yes]` (idempotent onboarding), `kb update [--check]`, `kb help`.
 - **Something seems broken**: `kb doctor` is read-only -- reports on
   frontmatter validity, search-index freshness, pre-commit hook state, and
   tool availability. `kb setup` acts on the same checks.
+
+## Driving kb from an agent (no terminal)
+
+You never get a TTY, so the fzf pickers never open. Rules of thumb:
+
+- **Always pass the id and every argument explicitly.** A command that would
+  open a picker (`kb tag`/`kb link` with the id or values left out, bare
+  `kb todo -a`, bare `kb journal -m`) either errors or blocks -- don't use
+  those forms.
+- **Add `--json` to every write command and parse the result** instead of
+  scraping text. Each prints exactly one JSON line on stdout:
+
+  | command | `--json` output |
+  |---|---|
+  | `kb new` | `{id, path, type, title}` (`path` is absolute) |
+  | `kb journal -m` | `{added, date, path, time}` (`{added: false}` if the text was empty) |
+  | `kb journal rollup` | `{id, path, month, entries}` |
+  | `kb tag <id>` | `{id, tags}` |
+  | `kb tag <id> add\|rm ...` | `{id, tags, changed}` (`changed: false` = no-op) |
+  | `kb link <id> add\|rm ...` | `{id, links, changed}` |
+  | `kb link <id>` / `kb links <id>` | `{id, path, forward, backlinks}` |
+  | `kb rm` | `{id, path, backlinks_cleared}` |
+  | `kb mv` | `{id, path}` |
+  | `kb inbox` | `[{id, name, title, age_days, created}, ...]` |
+  | `kb inbox <id> promote <type>` | `{action, id, type, path}` |
+  | `kb inbox <id> redirect` | `{action, id, path}` |
+  | `kb inbox <id> discard` | `{action, name}` |
+  | `kb todo -a "<title>"` | bd's issue JSON for the new TODO |
+  | `kb todo snooze\|unsnooze\|due ...` | `{action, id, until\|due}` |
+  | `kb search` / `kb show` / `kb todo` / `kb triage` | read-only; they take `--json` too |
+
+  Paths other than `kb new`'s and `kb journal rollup`'s are relative to the data repo.
+- **Errors**: exit code 1, and with `--json` stderr is `{"error": "..."}`
+  (otherwise `error: ...`). Exit 2 is a usage error from argparse. A
+  read-only entry (synced from GitLab/GitHub/usememos/beads) refuses
+  `tag`/`link` edits -- change it at the source instead.
+- **Every write is auto-committed** to the data repo and reindexed. Nothing
+  is pushed unless `auto_push: true` is set -- run `kb push` when asked to
+  publish.
+- **Find before you create.** `kb search "<topic>" --json` first; extend or
+  link an existing entry rather than adding a near-duplicate. `kb show <id>
+  --json` reads one in full.
+- **Tag what you write** with the project's tag (see the project's
+  CLAUDE.md) so it's filterable later: `kb new ... --tags a,b` /
+  `kb journal -m` then `kb tag <id> add <tag>`.
 
 ## Conventions to respect
 
@@ -104,38 +167,45 @@ the data repo.
 ## Command reference
 
 ```
-kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT]
+kb new <type> "<title>" [--tags a,b] [--links id,id] [--body TEXT] [--json]
                                   type: tutorial|how-to|reference|explanation
-kb journal [<date>] [-m [TEXT]]  today (default) or YYYY-MM-DD; -m TEXT quick-adds,
+kb journal [<date>] [-m [TEXT]] [--json]  today (default) or YYYY-MM-DD; -m TEXT quick-adds,
                                   bare -m opens $EDITOR for multiline input
-kb journal --tag <tag>            past entries carrying <tag>, newest first
-kb journal rollup [YYYY-MM]       generate/refresh that month's summary page (default: last month)
-kb search "<query>" [--type T] [--tag TAG] [--all] [--plain] [--json]
-kb inbox [--plain]                interactive triage: promote / redirect / discard
-kb inbox <id> promote <type>|redirect|discard   non-interactive triage (no terminal needed)
+kb journal --tag <tag> [--plain]  past entries carrying <tag>, newest first
+kb journal rollup [YYYY-MM] [--json]  generate/refresh that month's summary page (default: last month)
+kb search "<query>" [--type T] [--tag TAG] [--all] [--keyword|--semantic] [--plain] [--json]
+kb inbox [--plain] [--json]       interactive triage: promote / redirect / discard
+kb inbox <id> promote <type>|redirect|discard [--json]   non-interactive triage (no terminal needed)
 kb triage [--json]                read-only overdue-inbox report
 kb links <id> [--json]            forward links + backlinks
 kb show <id> [--json]             print an entry's full content by id
-kb tag <id> [add|rm <tag>...]     view/add/remove tags (never hand-edit frontmatter)
-kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
-kb rm <id> [--force]              delete an entry (--force also cleans up backlinks)
-kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
+kb tag <id> [add|rm <tag>...] [--json]   view/add/remove tags (never hand-edit frontmatter)
+kb link <id> [add|rm <id>...] [--json]   view/add/remove links, same reasoning
+kb rm <id> [--force] [--json]     delete an entry (--force also cleans up backlinks)
+kb mv <id> [--type T] [--title "<title>"] [--json]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
-kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
+kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN] [--json]
                                   quick-add a TODO; bare -a opens bd's interactive form
-kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
-kb todo unsnooze <id>             end a snooze early
-kb todo due <id> <when>|none      set or clear a TODO's reminder time
-kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
+kb todo snooze <id> <when> [--json]   hide a TODO until <when>, then remind again
+kb todo unsnooze <id> [--json]    end a snooze early
+kb todo due <id> <when>|none [--json]   set or clear a TODO's reminder time
+kb remind [list|check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb validate                       frontmatter/id/link integrity check
 kb index [--full]                 rebuild/refresh the search index
+kb push                           push the data repo's auto-commits to its upstream
+kb web [--port N] [--no-open]     local web UI (foreground; blocks)
+kb service install|uninstall|status|refresh [--port N] [--repo DIR]   kb web as a login service
+kb sync-service install|uninstall|status [--interval-minutes MIN] [--repo DIR]   kb sync on a timer
+kb secrets                        manage ingestion credentials (sops)
 kb doctor                         read-only health check
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
-kb setup [--yes]                 guided onboarding, asks before each optional step
+kb setup [--yes]                  guided onboarding, asks before each optional step
+kb update [--check]               upgrade kb (--check: only look)
+kb help                           top-level command list
 ```
 
 Run `kb <command> -h` for full flag details on any of these, or `kb help` for

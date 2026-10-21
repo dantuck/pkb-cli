@@ -84,7 +84,7 @@ def _authed_get(req, timeout, what):
     catching URLError first would silently swallow it before this branch ever
     ran, losing the HTTP status code from the message."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=pc.ssl_context()) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"{what} auth/HTTP error ({e.code}): {e}")
