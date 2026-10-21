@@ -60,6 +60,24 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(cli._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
         self.assertTrue(cli._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
 
+    def test_launchd_load_retries_a_bootstrap_that_races_the_bootout(self):
+        # launchctl bootout returns before the old job is gone; bootstrap then fails with exit 5
+        results = [mock.Mock(returncode=0, stderr="")]                       # bootout
+        results += [mock.Mock(returncode=5, stderr="Input/output error")] * 2  # raced twice
+        results += [mock.Mock(returncode=0, stderr="")]                       # then fine
+        with mock.patch.object(cli.subprocess, "run", side_effect=results) as run, \
+                mock.patch.object(cli.time, "sleep") as sleep:
+            self.assertIsNone(cli._launchd_load("dev.pkb-cli.web", "/p.plist"))
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_launchd_load_gives_up_with_the_error_after_repeated_failures(self):
+        failing = mock.Mock(returncode=5, stderr="Input/output error")
+        with mock.patch.object(cli.subprocess, "run", side_effect=[mock.Mock(returncode=0)] + [failing] * 5) as run, \
+                mock.patch.object(cli.time, "sleep"):
+            self.assertEqual(cli._launchd_load("dev.pkb-cli.web", "/p.plist"), "Input/output error")
+        self.assertEqual(run.call_count, 6)
+
     def test_service_refresh_repoints_stale_units_and_keeps_their_args(self):
         import plistlib
         old_launchers = {
