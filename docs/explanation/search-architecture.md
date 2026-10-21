@@ -28,13 +28,24 @@ CLI](../how-to/search-without-the-cli.md) for usage.
 This is what most day-to-day use runs on once `kb setup` has built the index:
 relevance ranking and faceted queries that plain `rg` can't give you.
 
-## Tier 3 — embeddings (deferred, not built up front)
+## Tier 3 — semantic (optional)
 
-- Add only once FTS5 relevance measurably degrades (large corpus of
-  similar-topic notes).
-- `sqlite-vec` extension keeps it a single-file, offline, no-API-call
-  solution.
-- Same incremental-update pattern as FTS5.
+Keyword search misses a note that says "VPN mesh" when you search "remote
+access". Tier 3 adds one embedding per entry, stored in the same `fts.db`
+(`embeddings` table), and `kb search` fuses the two rankings with reciprocal
+rank fusion.
 
-Deferring this tier is deliberate: it's real added complexity that most
-corpora never need, so it isn't built until FTS5 actually falls short.
+- **Opt-in by installing an extra** (`pkb-cli[semantic]`): the base install
+  keeps its no-dependencies promise, and without the extra nothing changes.
+- **A static model (model2vec) run in-process**, not a server such as Ollama:
+  no daemon or open port to be blocked, ~30 MB, milliseconds per entry on
+  CPU. A brute-force cosine scan over a personal KB's few thousand vectors
+  needs no vector database.
+- **Offline-first still holds.** The model is fetched at most once, and only by
+  `kb index` / `kb setup`; search never touches the network, and
+  `$PKB_SEMANTIC_MODEL` can point at a side-loaded local copy.
+- **The same incremental rule as Tier 2**, keyed on a hash of each entry's text
+  rather than `updated` (so a hand-edited body is noticed). A different
+  model invalidates all vectors. A missing extra or model degrades to Tier 2.
+
+See [how-to: search by meaning](../how-to/search-by-meaning.md).

@@ -26,6 +26,20 @@ CREATE TABLE IF NOT EXISTS files (
     indexed_updated TEXT NOT NULL
 );
 
+-- Optional semantic layer (see semantic.py): one unit-length float32 vector per entry,
+-- hash = sha1 of the text it was computed from, so only changed entries get re-embedded.
+-- `meta.embed_model` records which model produced them; a different model wipes the table.
+CREATE TABLE IF NOT EXISTS embeddings (
+    id TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    vec BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_type ON files(type);
 CREATE INDEX IF NOT EXISTS idx_files_source ON files(source);
 CREATE INDEX IF NOT EXISTS idx_files_created ON files(created);

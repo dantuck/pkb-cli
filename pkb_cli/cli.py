@@ -24,9 +24,11 @@ import urllib.request
 from datetime import datetime, timedelta
 
 from . import pkb_common as pc
+from . import index_fts
+from . import semantic
 from . import __version__
 from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
-    _all_tags, _apply_tag_changes, _clean_list, _find_entry, _iter_all_entries,
+    _all_tags, _apply_tag_changes, _clean_list, _find_entry, _iter_all_entries, _reindex_fast,
     _readonly_error, _readonly_guard, _readonly_source_info, entry_delete,
     entry_move, entry_new, entry_set_links, entry_set_tags, entry_update_content,
     inbox_list,
@@ -185,20 +187,58 @@ def _fts_autoprefix(query):
     return " ".join(out)
 
 
-def search_entries(root, query, entry_type=None, tag=None, include_all=False, limit=50):
-    """Run an FTS5 search over the index, returning (id, title, type, path, rank)
-    rows ordered by relevance -- the core of `kb search`, factored out so both
-    the CLI and `kb web`'s /api/search can call the same query instead of
-    duplicating the SQL. Raises sqlite3.OperationalError on a bad FTS5 query
-    (e.g. unbalanced quotes) so callers can report it however fits their
-    context (stderr print vs. a JSON error response)."""
+def search_entries(root, query, entry_type=None, tag=None, include_all=False, limit=50,
+                   mode="auto", notes=None):
+    """Search the index, returning (id, title, type, path, rank) rows best first --
+    the core of `kb search`, factored out so both the CLI and `kb web`'s
+    /api/search can call the same query. Returns None if there's no index (distinct
+    from "no results", an empty list). Raises sqlite3.OperationalError on a bad FTS5
+    query (e.g. unbalanced quotes) so callers can report it however fits their
+    context (stderr print vs. a JSON error response).
+
+    `mode`: "keyword" (FTS5 only), "semantic" (embeddings only; raises
+    semantic.SemanticUnavailable if they can't be used), or "auto" -- keyword and
+    semantic fused when the semantic index is usable, plain keyword otherwise.
+    Anything worth telling the user (an index being built, a model that's
+    missing) is appended to `notes` rather than printed, so --json stays clean."""
     db_path = os.path.join(root, ".pkb", "fts.db")
     if not os.path.exists(db_path):
-        return None  # no index -- distinct from "no results" (empty list)
+        return None
 
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
+    conn = index_fts.get_db(root)  # one connection for the whole search; applies any newer tables
+    try:
+        model_ref = None
+        if mode != "keyword":
+            notes = notes if notes is not None else []
+            try:
+                model_ref = _semantic_ready(root, conn, notes)
+            except semantic.SemanticUnavailable as e:
+                if mode == "semantic":
+                    raise
+                if not e.expected:
+                    notes.append(f"semantic search unavailable, using keyword only: {e}")
+        if model_ref is None:
+            return _fts_rows(conn, query, entry_type, tag, include_all, limit)
 
+        allow_types = {entry_type} if entry_type else None if include_all else set(pc.CORE_TYPES)
+        ranked = semantic.rank(conn, model_ref, query, allow_types=allow_types, tag=tag, limit=limit)
+        by_id = {}
+        if mode != "semantic":
+            try:
+                kw_rows = _fts_rows(conn, query, entry_type, tag, include_all, limit)
+            except sqlite3.OperationalError:
+                if not ranked:
+                    raise
+                kw_rows = []  # a query that isn't valid FTS5 can still be a fine semantic one
+            ranked = semantic.fuse([r[0] for r in kw_rows], [i for i, _ in ranked])[:limit]
+            by_id = {r[0]: r[:4] for r in kw_rows}
+        by_id.update(_file_rows(conn, [i for i, _ in ranked if i not in by_id]))
+        return [(*by_id[i], score) for i, score in ranked if i in by_id]
+    finally:
+        conn.close()
+
+
+def _fts_rows(conn, query, entry_type, tag, include_all, limit):
     where = ["fts MATCH ?"]
     params = [_fts_autoprefix(query)]
     if not include_all:
@@ -218,21 +258,51 @@ def search_entries(root, query, entry_type=None, tag=None, include_all=False, li
         WHERE {' AND '.join(where)}
         ORDER BY rank LIMIT ?
     """
-    try:
-        rows = cur.execute(sql, params + [limit]).fetchall()
-    finally:
-        conn.close()
-    return rows
+    return conn.execute(sql, params + [limit]).fetchall()
+
+
+def _file_rows(conn, ids):
+    """{id: (id, title, type, path)} for the given ids."""
+    out = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        sql = f"SELECT id, title, type, path FROM files WHERE id IN ({','.join('?' for _ in chunk)})"
+        for row in conn.execute(sql, chunk):
+            out[row[0]] = row
+    return out
+
+
+def _semantic_ready(root, conn, notes):
+    """The model ref if embeddings can be used right now; raises SemanticUnavailable
+    (with `expected` set for a plain "not set up") if not. Builds any missing vectors
+    first, offline: a model not already on disk is reported, never downloaded."""
+    enabled, model_ref = semantic.config(root)
+    if not enabled:
+        raise semantic.SemanticUnavailable("it's switched off (`semantic.enabled: false` in .pkb/config.yml)",
+                                           expected=True)
+    semantic.check_model(model_ref)  # fail fast and cheap: extra installed, model on disk
+    embedded, total, current = semantic.index_state(conn, model_ref)
+    if not current:
+        notes.append(f"building the semantic index ({total} entries)...")
+        index_fts.index_repo(root, quiet=True)
+    return model_ref
 
 
 def cmd_search(args):
     root = pc.get_repo_root()
+    notes = []
+    mode = "keyword" if args.keyword else "semantic" if args.semantic else "auto"
     try:
         rows = search_entries(root, args.query, entry_type=args.type, tag=args.tag,
-                               include_all=args.all)
+                               include_all=args.all, mode=mode, notes=notes)
     except sqlite3.OperationalError as e:
         print(f"search error: {e}")
         return 1
+    except semantic.SemanticUnavailable as e:
+        return _fail(f"semantic search unavailable: {e}", args.json)
+    finally:
+        for note in notes:
+            print(note, file=sys.stderr)
     if rows is None:
         print("no FTS index found. Run `kb index` first, or use ripgrep directly:")
         print(f"  rg --heading -n {args.query!r} tutorials how-to reference explanation")
@@ -332,15 +402,27 @@ def _search_interactive(root, rows):
     return 0
 
 
+def _fail(message, json_out=False, code=1):
+    """Report an error on stderr -- as {"error": ...} JSON under --json, so a caller
+    parsing the output gets one shape on both success and failure -- and return `code`."""
+    print(json.dumps({"error": message}) if json_out else f"error: {message}", file=sys.stderr)
+    return code
+
+
+def _emit(json_out, payload, text):
+    """Print `payload` as one JSON line under --json, else the human `text`."""
+    print(json.dumps(payload) if json_out else text)
+
+
 def cmd_new(args):
     root = pc.get_repo_root()
     tags = args.tags.split(",") if args.tags else []
     links = args.links.split(",") if args.links else []
     result = entry_new(root, args.type, args.title, tags=tags, links=links, body=args.body)
     if "error" in result:
-        print(f"error: {result['error']}", file=sys.stderr)
-        return 1
-    print(result["path"])
+        return _fail(result["error"], args.json)
+    _emit(args.json, {"id": result["id"], "path": result["path"], "type": args.type,
+                      "title": args.title}, result["path"])
     return 0
 
 
@@ -484,21 +566,21 @@ def journal_append(root, target, text):
     body = body.rstrip("\n") + f"\n\n{block}"
     fm["updated"] = pc.now_iso()
     pc.write_entry(file_path, fm, body)
-    run_script("index_fts")
+    _reindex_fast(root)
     pc.git_autocommit(root, f"journal: {target.isoformat()}")
     return {"path": os.path.relpath(file_path, root), "time": stamp}
 
 
-def _journal_add(root, target, text):
+def _journal_add(root, target, text, json_out=False):
     result = journal_append(root, target, text)
     if result is None:
-        print("empty -- nothing added")
+        _emit(json_out, {"added": False}, "empty -- nothing added")
         return 0
-    print(f"added -> {result['path']}")
+    _emit(json_out, {"added": True, "date": target.isoformat(), **result}, f"added -> {result['path']}")
     return 0
 
 
-def _journal_add_editor(root, target):
+def _journal_add_editor(root, target, json_out=False):
     """Open a blank scratch buffer in $EDITOR for multiline input, then append
     whatever was written to target's journal entry -- like `git commit` with no
     -m, but scoped to a throwaway temp file so the entry's frontmatter (and any
@@ -526,14 +608,14 @@ def _journal_add_editor(root, target):
     finally:
         os.remove(tmp_path)
 
-    return _journal_add(root, target, text)
+    return _journal_add(root, target, text, json_out)
 
 
 def cmd_journal(args):
     root = pc.get_repo_root()
 
     if args.date == "rollup":
-        return _journal_rollup(root, args.month)
+        return _journal_rollup(root, args.month, args.json)
     if args.tag:
         return _journal_by_tag(root, args.tag)
 
@@ -543,17 +625,16 @@ def cmd_journal(args):
 
     if args.add is not None:
         if args.add == "":  # -m/--add with no TEXT: open a scratch buffer instead
-            return _journal_add_editor(root, target)
+            return _journal_add_editor(root, target, args.json)
         if args.date is None and _looks_like_date(args.add):
             # `-m` typed before DATE: argparse's nargs='?' greedily consumes the
             # date token as -m's own TEXT instead of leaving it for the `date`
             # positional. Silently writing to today under those circumstances
             # would put the note on the wrong day with no indication anything
             # went wrong -- refuse instead, and say what order actually works.
-            print(f"error: `-m {args.add}` was parsed as the note text, not a date -- "
-                  f"put the date first: `kb journal {args.add} -m ...`", file=sys.stderr)
-            return 1
-        return _journal_add(root, target, args.add)
+            return _fail(f"`-m {args.add}` was parsed as the note text, not a date -- "
+                         f"put the date first: `kb journal {args.add} -m ...`", args.json)
+        return _journal_add(root, target, args.add, args.json)
 
     if not explicit_date:
         # only the default "today" invocation gets the interactive picker -- an
@@ -659,7 +740,7 @@ def _rollup_month(month_arg):
     return year, month
 
 
-def _journal_rollup(root, month_arg):
+def _journal_rollup(root, month_arg, json_out=False):
     """Generate/refresh reference/journal-summaries/YYYY-MM.md: every day's
     entry in the month concatenated under a heading, plus a tag-frequency line,
     so a month of daily files can be browsed as one page instead of opened one
@@ -667,15 +748,13 @@ def _journal_rollup(root, month_arg):
     in one place; the point is browsability, not compression."""
     parsed = _rollup_month(month_arg)
     if parsed is None:
-        print(f"error: invalid month '{month_arg}' -- expected YYYY-MM", file=sys.stderr)
-        return 1
+        return _fail(f"invalid month '{month_arg}' -- expected YYYY-MM", json_out)
     year, month = parsed
     month_label = f"{year:04d}-{month:02d}"
 
     month_dir = os.path.join(root, "journal", f"{year:04d}", f"{month:02d}")
     if not os.path.isdir(month_dir):
-        print(f"no journal entries found for {month_label}")
-        return 1
+        return _fail(f"no journal entries found for {month_label}", json_out)
 
     days = []
     for name in sorted(os.listdir(month_dir)):
@@ -684,8 +763,7 @@ def _journal_rollup(root, month_arg):
         fm, body = pc.read_entry(os.path.join(month_dir, name))
         days.append((name[:-3], fm, body))
     if not days:
-        print(f"no journal entries found for {month_label}")
-        return 1
+        return _fail(f"no journal entries found for {month_label}", json_out)
 
     tag_counts, day_ids, sections = {}, [], []
     for date_str, fm, body in days:
@@ -729,8 +807,8 @@ def _journal_rollup(root, month_arg):
     body += "\n---\n\n" + "\n".join(sections)
 
     pc.write_entry(out_path, fm, body)
-    run_script("index_fts")
-    print(out_path)
+    _reindex_fast(root)
+    _emit(json_out, {"id": entry_id, "path": out_path, "month": month_label, "entries": len(days)}, out_path)
     return 0
 
 
@@ -740,6 +818,10 @@ def cmd_inbox(args):
 
     if args.id is not None:
         return _inbox_act(root, inbox_dir, args)
+
+    if args.json:
+        print(json.dumps(inbox_list(root)))
+        return 0
 
     now = datetime.now().astimezone()
     files = sorted(
@@ -780,28 +862,24 @@ def _inbox_act(root, inbox_dir, args):
     available -- e.g. scripted use or an AI agent driving kb, neither of which
     ever gets the interactive picker."""
     if args.action is None:
-        print(f"error: `kb inbox {args.id}` needs an action: promote <type> | redirect | discard",
-              file=sys.stderr)
-        return 1
+        return _fail(f"`kb inbox {args.id}` needs an action: promote <type> | redirect | discard", args.json)
     found = _inbox_find(inbox_dir, args.id)
     if found is None:
-        print(f"error: no inbox item with id '{args.id}'", file=sys.stderr)
-        return 1
+        return _fail(f"no inbox item with id '{args.id}'", args.json)
     path, fm, body = found
 
     if args.action == "promote":
         if not args.type:
-            print(f"error: `kb inbox {args.id} promote` needs a Diataxis type: {', '.join(pc.CORE_TYPES)}",
-                  file=sys.stderr)
-            return 1
-        return _inbox_promote(root, path, fm, body, args.type)
+            return _fail(f"`kb inbox {args.id} promote` needs a Diataxis type: {', '.join(pc.CORE_TYPES)}",
+                         args.json)
+        return _inbox_promote(root, path, fm, body, args.type, args.json)
     elif args.action == "redirect":
-        return _inbox_redirect(root, path, fm, body)
+        return _inbox_redirect(root, path, fm, body, args.json)
     else:
-        return _inbox_discard(root, path)
+        return _inbox_discard(root, path, args.json)
 
 
-def _inbox_promote(root, path, fm, body, target_type):
+def _inbox_promote(root, path, fm, body, target_type, json_out=False):
     """Move an inbox item into core content as `target_type`, clearing
     `extension`. Shared by the interactive picker and non-interactive
     `kb inbox <id> promote <type>`."""
@@ -812,13 +890,15 @@ def _inbox_promote(root, path, fm, body, target_type):
     new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{fm['id']}-{pc.slugify(title)}.md")
     pc.write_entry(new_path, fm, body)
     os.remove(path)
-    print(f"promoted -> {os.path.relpath(new_path, root)}")
-    run_script("index_fts")
+    rel = os.path.relpath(new_path, root)
+    _emit(json_out, {"action": "promote", "id": fm["id"], "type": target_type, "path": rel},
+          f"promoted -> {rel}")
+    _reindex_fast(root)
     pc.git_autocommit(root, f"inbox promote: {title} -> {target_type}")
     return 0
 
 
-def _inbox_redirect(root, path, fm, body):
+def _inbox_redirect(root, path, fm, body, json_out=False):
     """Append an inbox item into its created-date's journal entry (creating
     that entry first if needed) and remove it from inbox/. Shared by the
     interactive picker and non-interactive `kb inbox <id> redirect`."""
@@ -842,17 +922,18 @@ def _inbox_redirect(root, path, fm, body):
     with open(journal_path, "w", encoding="utf-8") as f:
         f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
     os.remove(path)
-    print(f"redirected -> {os.path.relpath(journal_path, root)}")
-    run_script("index_fts")
+    rel = os.path.relpath(journal_path, root)
+    _emit(json_out, {"action": "redirect", "id": fm.get("id"), "path": rel}, f"redirected -> {rel}")
+    _reindex_fast(root)
     pc.git_autocommit(root, f"inbox redirect: {title}")
     return 0
 
 
-def _inbox_discard(root, path):
+def _inbox_discard(root, path, json_out=False):
     name = os.path.basename(path)
     os.remove(path)
-    print(f"discarded {name}")
-    run_script("index_fts")
+    _emit(json_out, {"action": "discard", "name": name}, f"discarded {name}")
+    _reindex_fast(root)
     pc.git_autocommit(root, f"inbox discard: {name}")
     return 0
 
@@ -1016,30 +1097,26 @@ def cmd_tag(args):
     entry_id = args.id
     if entry_id is None:
         if not interactive:
-            print("error: `kb tag` needs an entry id (install fzf and run from a "
-                  "terminal for a picker)", file=sys.stderr)
-            return 1
+            return _fail("`kb tag` needs an entry id (install fzf and run from a "
+                         "terminal for a picker)", args.json)
         entry_id = _pick_entry(root, "tag> ", "select an entry to tag")
         if entry_id is None:
             return 0  # cancelled, or nothing to pick from
 
     found = _find_entry(root, entry_id)
     if found is None:
-        print(f"error: no entry with id '{entry_id}'", file=sys.stderr)
-        return 1
+        return _fail(f"no entry with id '{entry_id}'", args.json)
     path, fm, body = found
     tags = list(fm.get("tags") or [])
 
     if args.action is None:
-        print(", ".join(tags) if tags else "(no tags)")
+        _emit(args.json, {"id": entry_id, "tags": tags}, ", ".join(tags) if tags else "(no tags)")
         return 0
 
     values = args.values
     if not values:
         if not interactive:
-            print(f"error: `kb tag {entry_id} {args.action}` needs at least one tag",
-                  file=sys.stderr)
-            return 1
+            return _fail(f"`kb tag {entry_id} {args.action}` needs at least one tag", args.json)
         if args.action == "add":
             values = _pick_tags_to_add(
                 root, "add tag> ",
@@ -1055,11 +1132,11 @@ def cmd_tag(args):
     result = entry_set_tags(root, entry_id, add=values if args.action == "add" else None,
                              rm=values if args.action == "rm" else None)
     if isinstance(result, dict):  # {"error": "...", "readonly": True, ...}
-        print(f"error: {result['error']}", file=sys.stderr)
-        return 1
+        return _fail(result["error"], args.json)
     changed = result != (fm.get("tags") or [])
     prefix = "" if changed else "no change -- "
-    print(f"{prefix}tags for {entry_id}: {', '.join(result) if result else '(none)'}")
+    _emit(args.json, {"id": entry_id, "tags": result, "changed": changed},
+          f"{prefix}tags for {entry_id}: {', '.join(result) if result else '(none)'}")
     return 0
 
 
@@ -1070,10 +1147,9 @@ def cmd_rm(args):
     root = pc.get_repo_root()
     result = entry_delete(root, args.id, force=args.force)
     if "error" in result:
-        print(f"error: {result['error']}", file=sys.stderr)
-        return 1
+        return _fail(result["error"], args.json)
     suffix = f" ({result['backlinks_cleared']} backlink(s) cleaned up)" if result["backlinks_cleared"] else ""
-    print(f"deleted {result['path']}{suffix}")
+    _emit(args.json, {"id": args.id, **result}, f"deleted {result['path']}{suffix}")
     return 0
 
 
@@ -1085,9 +1161,8 @@ def cmd_mv(args):
     root = pc.get_repo_root()
     result = entry_move(root, args.id, new_type=args.type, new_title=args.title)
     if "error" in result:
-        print(f"error: {result['error']}", file=sys.stderr)
-        return 1
-    print(f"-> {result['path']}")
+        return _fail(result["error"], args.json)
+    _emit(args.json, {"id": args.id, **result}, f"-> {result['path']}")
     return 0
 
 
@@ -1105,9 +1180,8 @@ def cmd_link(args):
     entry_id = args.id
     if entry_id is None:
         if not interactive:
-            print("error: `kb link` needs an entry id (install fzf and run from a "
-                  "terminal for a picker)", file=sys.stderr)
-            return 1
+            return _fail("`kb link` needs an entry id (install fzf and run from a "
+                         "terminal for a picker)", args.json)
         entry_id = _pick_entry(root, "link> ", "select an entry to link")
         if entry_id is None:
             return 0
@@ -1117,17 +1191,14 @@ def cmd_link(args):
 
     found = _find_entry(root, entry_id)
     if found is None:
-        print(f"error: no entry with id '{entry_id}'", file=sys.stderr)
-        return 1
+        return _fail(f"no entry with id '{entry_id}'", args.json)
     path, fm, body = found
     links = list(fm.get("links") or [])
 
     values = args.values
     if not values:
         if not interactive:
-            print(f"error: `kb link {entry_id} {args.action}` needs at least one target id",
-                  file=sys.stderr)
-            return 1
+            return _fail(f"`kb link {entry_id} {args.action}` needs at least one target id", args.json)
         if args.action == "add":
             candidate_ids = {e["id"] for e in _iter_all_entries(root)} - {entry_id} - set(links)
             values = _pick_entries_multi(root, "add link> ",
@@ -1143,11 +1214,11 @@ def cmd_link(args):
     result = entry_set_links(root, entry_id, add=values if args.action == "add" else None,
                               rm=values if args.action == "rm" else None)
     if isinstance(result, dict):  # {"error": "unknown id(s) ..."}
-        print(f"error: {result['error']}", file=sys.stderr)
-        return 1
+        return _fail(result["error"], args.json)
     changed = result != links
     prefix = "" if changed else "no change -- "
-    print(f"{prefix}links for {entry_id}: {', '.join(result) if result else '(none)'}")
+    _emit(args.json, {"id": entry_id, "links": result, "changed": changed},
+          f"{prefix}links for {entry_id}: {', '.join(result) if result else '(none)'}")
     return 0
 
 
@@ -1170,14 +1241,9 @@ def show_links(root, target_id, json_out=False):
             backlinks.append((fm.get("id"), fm.get("title"), os.path.relpath(path, root)))
 
     if forward is None:
-        if json_out:
-            print(f'{{"error": "no entry with id \'{target_id}\'"}}', file=sys.stderr)
-        else:
-            print(f"error: no entry with id '{target_id}'", file=sys.stderr)
-        return 1
+        return _fail(f"no entry with id '{target_id}'", json_out)
 
     if json_out:
-        import json
         print(json.dumps({
             "id": target_id,
             "path": target_path,
@@ -1247,8 +1313,10 @@ def bd_list(root, include_all=False):
     return json.loads(_bd_run(bd_args))
 
 
-def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None, due=None):
-    """Create a bd issue, returning bd's own confirmation text. Raises
+def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None, due=None,
+              as_json=False):
+    """Create a bd issue, returning bd's own confirmation text (its issue JSON
+    with `as_json`). Raises
     RuntimeError(stderr) on failure. Shared by _todo_add (kb todo -a TITLE)
     and kb web's POST /api/todo. `due` is anything resolve_when() accepts."""
     bd_args = ["bd", "-C", root, "create", "--title", title, "--type", issue_type, "--priority", priority]
@@ -1258,6 +1326,8 @@ def bd_create(root, title, description=None, priority="2", issue_type="task", la
         bd_args += ["--labels", labels]
     if due:
         bd_args += ["--due", resolve_when(due)]
+    if as_json:
+        bd_args.append("--json")
     return _bd_run(bd_args)
 
 
@@ -1685,7 +1755,7 @@ def cmd_todo(args):
     root = pc.get_repo_root()
 
     if args.words:
-        return _todo_word_command(root, args.words)
+        return _todo_word_command(root, args.words, args.json)
 
     if args.add is not None:
         return _todo_add(root, args)
@@ -1733,27 +1803,28 @@ def _due_suffix(issue):
     return f"  ({label})" if label else ""
 
 
-def _todo_word_command(root, words):
+def _todo_word_command(root, words, json_out=False):
     """`kb todo snooze ID WHEN` / `due ID WHEN|none` / `unsnooze ID` -- the
     reminder verbs, as positional words so they read like the rest of `kb todo`."""
     verb, rest = words[0], words[1:]
     try:
         if verb == "snooze" and len(rest) == 2:
             bd_snooze(root, rest[0], rest[1])
-            print(f"snoozed {rest[0]} until {rest[1]} -- it will come back and remind you then")
+            _emit(json_out, {"action": "snooze", "id": rest[0], "until": rest[1]},
+                  f"snoozed {rest[0]} until {rest[1]} -- it will come back and remind you then")
         elif verb == "unsnooze" and len(rest) == 1:
-            print(bd_unsnooze(root, rest[0]))
+            output = bd_unsnooze(root, rest[0])
+            _emit(json_out, {"action": "unsnooze", "id": rest[0]}, output)
         elif verb == "due" and len(rest) == 2:
-            bd_update(root, rest[0], due="" if rest[1] in ("none", "clear") else rest[1])
-            print(f"{rest[0]}: due date cleared" if rest[1] in ("none", "clear")
-                  else f"{rest[0]}: due {rest[1]}")
+            clear = rest[1] in ("none", "clear")
+            bd_update(root, rest[0], due="" if clear else rest[1])
+            _emit(json_out, {"action": "due", "id": rest[0], "due": None if clear else rest[1]},
+                  f"{rest[0]}: due date cleared" if clear else f"{rest[0]}: due {rest[1]}")
         else:
-            print("usage: kb todo snooze ID WHEN | kb todo unsnooze ID | kb todo due ID WHEN|none\n"
-                  "  WHEN: 30m, 2h, 3d, 1w, tomorrow, friday, 5pm, 2026-11-02", file=sys.stderr)
-            return 2
+            return _fail("usage: kb todo snooze ID WHEN | kb todo unsnooze ID | kb todo due ID WHEN|none\n"
+                         "  WHEN: 30m, 2h, 3d, 1w, tomorrow, friday, 5pm, 2026-11-02", json_out, code=2)
     except RuntimeError as e:
-        print(f"error: {verb} failed: {e}", file=sys.stderr)
-        return 1
+        return _fail(f"{verb} failed: {e}", json_out)
     return 0
 
 
@@ -1764,15 +1835,17 @@ def _todo_add(root, args):
     (`kb todo -a`), hand off to bd's own interactive form instead of reinventing
     it -- that already prompts for every field a ticket needs."""
     if not args.add:
+        if args.json:
+            return _fail("`kb todo -a --json` needs a TITLE -- bd's interactive form can't be machine-driven",
+                         True)
         os.execvp("bd", ["bd", "-C", root, "create-form"])  # replaces this process
 
     try:
         output = bd_create(root, args.add, description=args.description,
                             priority=args.priority, issue_type=args.type, labels=args.labels,
-                            due=args.due)
+                            due=args.due, as_json=args.json)
     except RuntimeError as e:
-        print(f"error: bd create failed: {e}", file=sys.stderr)
-        return 1
+        return _fail(f"bd create failed: {e}", args.json)
     print(output)
     return 0
 
@@ -2133,6 +2206,34 @@ def tool_status(sync_sources=None):
     return status
 
 
+def semantic_status(root):
+    """(ok, message) for the optional semantic index, or None when it isn't in play
+    (switched off in config, or the extra isn't installed). Read-only."""
+    model_ref = semantic.active_model(root)
+    if not model_ref:
+        return None
+    db_path = index_status(root)
+    if not os.path.exists(db_path):
+        return False, "no semantic index -- run `kb index --full`"
+    try:
+        semantic.check_model(model_ref)
+    except semantic.SemanticUnavailable as e:
+        return False, f"semantic model unavailable: {e}"
+    conn = sqlite3.connect(db_path)
+    try:
+        embedded, total, current = semantic.index_state(conn, model_ref)
+        stored = semantic.stored_model(conn)
+    except sqlite3.OperationalError:
+        return False, "no semantic index -- run `kb index`"
+    finally:
+        conn.close()
+    if current:
+        return True, f"semantic index is current ({embedded}/{total} embedded, {model_ref})"
+    if stored not in (None, model_ref):
+        return False, f"semantic index was built with {stored}, config says {model_ref} -- run `kb index`"
+    return False, f"semantic index is incomplete ({embedded}/{total} embedded) -- run `kb index`"
+
+
 def index_status(root):
     return os.path.join(root, ".pkb", "fts.db")
 
@@ -2174,7 +2275,7 @@ def _git(*args, cwd=TOOL_ROOT):
 
 def _github_request(url):
     req = urllib.request.Request(url, headers={"User-Agent": "pkb-cli"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=pc.ssl_context()) as resp:
         return resp.read()
 
 
@@ -2409,6 +2510,12 @@ def cmd_setup(args):
         full = not os.path.exists(db_path)
         rc = run_script("index_fts", ["--full"] if full else [])
         ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
+        sem = semantic_status(root)
+        if sem:
+            (ok if sem[0] else todo).append(sem[1])
+        elif semantic.missing_dependency() and semantic.config(root)[0]:
+            ok.append("semantic search not installed (optional) -- `uv tool install 'pkb-cli[semantic]'` "
+                      "adds meaning-based search")
 
         # 3. local bd store
         if tools["bd"]:
@@ -3098,6 +3205,9 @@ def doctor_checks(root, push=None):
                             f"-- run `kb index`")
             else:
                 ok.append(f"search index is current ({indexed_count} files)")
+            sem = semantic_status(root)
+            if sem:
+                (ok if sem[0] else todo).append(sem[1])
 
         # promoted entries whose source (e.g. an edited usememos memo) has been
         # re-synced since promotion -- promotion is a one-time copy, so nothing
@@ -3471,7 +3581,8 @@ def main():
 
     p = sub.add_parser(
         "search", help="search indexed content",
-        description="Search indexed content by keyword (FTS5 match syntax).",
+        description="Search indexed content. By default keyword (FTS5) and semantic matches are "
+                    "combined when the optional `semantic` extra is installed; otherwise keyword only.",
         epilog=(
             "if fzf is installed and you're in a real terminal, this opens an "
             "interactive picker by default: select a result (with a live file "
@@ -3486,6 +3597,11 @@ def main():
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
     p.add_argument("--json", action="store_true", help="machine-readable output; implies --plain")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--keyword", action="store_true",
+                      help="FTS5 keyword match only (exact words/prefixes, FTS5 syntax)")
+    mode.add_argument("--semantic", action="store_true",
+                      help="rank by meaning only (needs the `semantic` extra); errors if unavailable")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser(
@@ -3502,6 +3618,7 @@ def main():
     p.add_argument("--tags", metavar="TAG,TAG", help="comma-separated initial tags")
     p.add_argument("--links", metavar="ID,ID", help="comma-separated ids of related entries (must already exist)")
     p.add_argument("--body", metavar="TEXT", help="initial body text, after the title heading")
+    p.add_argument("--json", action="store_true", help="machine-readable output: {id, path, type, title}")
     p.set_defaults(func=cmd_new)
 
     p = sub.add_parser(
@@ -3543,6 +3660,8 @@ def main():
     p.add_argument("--tag", metavar="TAG", help="list past entries tagged TAG instead of opening one")
     p.add_argument("--plain", action="store_true",
                     help="force opening/creating today's entry directly, skipping the interactive picker")
+    p.add_argument("--json", action="store_true",
+                    help="machine-readable result for -m/--add and `rollup`")
     p.set_defaults(func=cmd_journal)
 
     p = sub.add_parser(
@@ -3568,6 +3687,8 @@ def main():
                     help="Diataxis type, required for `promote`")
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
+    p.add_argument("--json", action="store_true",
+                    help="machine-readable output: the item list, or the result of promote/redirect/discard")
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("triage", help="flag inbox items overdue for triage")
@@ -3629,6 +3750,7 @@ def main():
     p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
     p.add_argument("values", nargs="*", metavar="TAG",
                     help="tag(s) to add/remove (omit for an fzf picker)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_tag)
 
     p = sub.add_parser(
@@ -3653,7 +3775,7 @@ def main():
     p.add_argument("action", nargs="?", choices=["add", "rm"], default=None)
     p.add_argument("values", nargs="*", metavar="TARGET_ID",
                     help="id(s) to link/unlink (omit for an fzf picker)")
-    p.add_argument("--json", action="store_true", help="machine-readable output (no-action form only)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_link)
 
     p = sub.add_parser(
@@ -3671,6 +3793,7 @@ def main():
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
     p.add_argument("--force", action="store_true",
                     help="delete even if other entries still link to it, cleaning up those links")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_rm)
 
     p = sub.add_parser(
@@ -3690,6 +3813,7 @@ def main():
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
     p.add_argument("--type", choices=pc.CORE_TYPES, help="new Diataxis type")
     p.add_argument("--title", help="new title")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_mv)
 
     p = sub.add_parser(
@@ -3718,7 +3842,9 @@ def main():
     p.add_argument("--all", action="store_true", help="include closed issues")
     p.add_argument("--plain", action="store_true",
                     help="force the plain list even if fzf + a terminal make interactive mode available")
-    p.add_argument("--json", action="store_true", help="machine-readable output (bd's own issue JSON); implies --plain")
+    p.add_argument("--json", action="store_true",
+                    help="machine-readable output (bd's own issue JSON); implies --plain; also the "
+                         "result of -a/--add and snooze/unsnooze/due")
     p.add_argument("-a", "--add", nargs="?", const="", default=None, metavar="TITLE",
                     help="create a new TODO with TITLE; with no TITLE, open bd's interactive form")
     p.add_argument("-d", "--description", metavar="TEXT", help="description for -a/--add")

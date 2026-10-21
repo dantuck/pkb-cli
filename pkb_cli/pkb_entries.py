@@ -18,9 +18,10 @@ def _reindex_fast(root):
     Used by entry_set_tags/entry_set_links/entry_update_content, which kb
     web's edit panel can trigger repeatedly in quick succession; other
     callers keep using run_script for output capture / exit-code parity with
-    `kb reindex`."""
+    `kb reindex`. Quiet, so a write command's own output (a path, or --json)
+    isn't preceded by the indexer's summary line."""
     from . import index_fts
-    index_fts.index_repo(root)
+    index_fts.index_repo(root, quiet=True)
 
 
 def _find_entry(root, entry_id):

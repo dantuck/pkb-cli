@@ -6,11 +6,13 @@ with only the stdlib.
 import contextlib
 import copy
 import fcntl
+import functools
 import json
 import os
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -484,6 +486,12 @@ DEFAULT_CONFIG = {
     # remote/network and depends on credentials being available wherever kb
     # runs -- opt in per data repo once that's set up (see `kb push`).
     "auto_push": False,
+    # semantic search needs the optional `semantic` extra; without it this is inert.
+    # `model` is a Hugging Face id or a local directory ($PKB_SEMANTIC_MODEL overrides it).
+    "semantic": {
+        "enabled": True,
+        "model": "minishlab/potion-base-8M",
+    },
     "sync": {
         "memos": {
             "base_url_env": "PKB_MEMOS_URL",
@@ -782,3 +790,25 @@ def warn_if_editor_missing(editor):
     exe = argv[0]
     if not shutil.which(exe) and not os.path.exists(exe):
         print(f"note: '{exe}' isn't on PATH right now -- kb will fail to open it until that's fixed.")
+
+
+@functools.lru_cache(maxsize=None)
+def ssl_context():
+    """Default TLS context, plus (on macOS) the certificates in the system
+    keychains. TLS-inspecting proxies like Zscaler re-sign traffic with a root CA
+    that IT installs in the keychain but that Python's own CA bundle (python.org /
+    uv builds) doesn't know, so requests would fail CERTIFICATE_VERIFY_FAILED."""
+    ctx = ssl.create_default_context()
+    if sys.platform == "darwin":
+        keychains = ["/Library/Keychains/System.keychain", "/System/Library/Keychains/SystemRootCertificates.keychain"]
+        login = os.path.expanduser("~/Library/Keychains/login.keychain-db")
+        if os.path.exists(login):
+            keychains.insert(0, login)
+        try:
+            pem = subprocess.run(["security", "find-certificate", "-a", "-p", *keychains],
+                                 capture_output=True, text=True, timeout=10).stdout
+            if pem.strip():
+                ctx.load_verify_locations(cadata=pem)
+        except (OSError, subprocess.SubprocessError, ssl.SSLError):
+            pass  # keep the default context
+    return ctx
