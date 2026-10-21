@@ -955,3 +955,11 @@ h1 { font-size: 1.3rem; }
 }
 
 [hidden] { display: none !important; }
+
+/* Output of Setup/Doctor/Update runs: size it like the surrounding Manage text
+   (a bare <pre> renders at the browser's larger monospace default) and wrap
+   long lines instead of clipping them on a phone. */
+#admin-output {
+  font-size: 0.75rem; line-height: 1.45; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; -webkit-text-size-adjust: 100%;
+}
