@@ -1,3 +1,342 @@
+// Grows a textarea to fit its content, so editing an entry never means
+// scrolling a small fixed-height box inside the page.
+function autosizeTextarea(el) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + 2 + "px";
+}
+
+// ---------- visual (in-place) editing ----------
+// The rendered entry itself becomes contenteditable. On every edit the DOM is
+// serialised back to markdown (htmlToMarkdown) -- the inverse of
+// renderMarkdown for the syntax it supports. Because the renderer is lossy
+// (e.g. it flattens nested lists), richEditable() first checks that an
+// entry survives a render -> serialise round trip; entries that don't are
+// edited as source instead, so visual editing can never silently rewrite them.
+const RICH_BLOCK_TAGS = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre"]);
+
+function mdMark(inner, mark) {
+  const m = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return m[2] ? `${m[1]}${mark}${m[2]}${mark}${m[3]}` : inner;
+}
+
+function htmlInline(node) {
+  let s = "";
+  for (const n of node.childNodes) {
+    if (n.nodeType === 3) { s += n.textContent.replace(/ /g, " "); continue; }
+    if (n.nodeType !== 1) continue;
+    const t = n.tagName.toLowerCase();
+    if (t === "br") { s += " "; continue; }
+    if (t === "ul" || t === "ol") continue;  // nested lists are handled by the list serialiser
+    const inner = htmlInline(n);
+    if (t === "strong" || t === "b") s += mdMark(inner, "**");
+    else if (t === "em" || t === "i") s += mdMark(inner, "*");
+    else if (t === "code") s += mdMark(inner, "`");
+    else if (t === "a") s += n.getAttribute("href") ? `[${inner}](${n.getAttribute("href")})` : inner;
+    else if (t === "img") s += `![${n.getAttribute("alt") || ""}](${n.getAttribute("data-src") || n.getAttribute("src") || ""})`;
+    else s += inner;
+  }
+  return s;
+}
+
+function htmlBlocks(node) {
+  const out = [];
+  let loose = "";  // inline content sitting directly in the container
+  const flush = () => { const t = loose.trim(); if (t) out.push(t); loose = ""; };
+  for (const n of node.childNodes) {
+    if (n.nodeType === 3) { loose += n.textContent.replace(/ /g, " "); continue; }
+    if (n.nodeType !== 1) continue;
+    const t = n.tagName.toLowerCase();
+    if (!RICH_BLOCK_TAGS.has(t)) { loose += htmlInline({ childNodes: [n] }); continue; }
+    flush();
+    if (/^h[1-6]$/.test(t)) {
+      const text = htmlInline(n).trim();
+      if (text) out.push("#".repeat(Number(t[1])) + " " + text);
+    } else if (t === "ul" || t === "ol") {
+      const items = [...n.children].filter((c) => c.tagName.toLowerCase() === "li");
+      const lines = items.map((li, i) => `${t === "ul" ? "-" : i + 1 + "."} ${htmlInline(li).trim()}`).filter((l) => l.replace(/^(-|\d+\.)\s*/, ""));
+      if (lines.length) out.push(lines.join("\n"));
+    } else if (t === "blockquote") {
+      const lines = htmlBlocks(n).flatMap((b) => b.split("\n")).map((l) => "> " + l);
+      if (lines.length) out.push(lines.join("\n"));
+    } else if (t === "pre") {
+      out.push("```\n" + n.textContent.replace(/\n$/, "") + "\n```");
+    } else if (t === "li") {
+      const text = htmlInline(n).trim();
+      if (text) out.push(text);
+    } else {  // p, div: may contain further blocks (Chrome nests divs)
+      out.push(...htmlBlocks(n));
+    }
+  }
+  flush();
+  return out;
+}
+
+function htmlToMarkdown(root) {
+  return htmlBlocks(root).join("\n\n");
+}
+
+// Splits off the "# Title" first line the feed already shows as the row title,
+// so the in-place editor shows just the body and the line is re-attached on save.
+function splitLeadingH1(body) {
+  const shown = String(body || "").replace(/^\n+/, "");
+  const first = shown.split("\n", 1)[0];
+  if (/^#\s+\S/.test(first)) return { h1: first, rest: shown.slice(first.length).replace(/^\n+/, "") };
+  return { h1: "", rest: shown };
+}
+
+function richEditable(body) {
+  const { rest } = splitLeadingH1(body);
+  if (/^[ \t]+([-*]|\d+\.)\s/m.test(rest) || /\t/.test(rest)) return false;  // nested lists / tabs
+  // The renderer joins consecutive plain lines into one paragraph (that is how
+  // tables and hard-wrapped text would be flattened on save), so any entry
+  // with two plain lines in a row is edited as source instead.
+  let inFence = false;
+  let prevKind = "";
+  for (const line of rest.split("\n")) {
+    if (line.trim().startsWith("```")) { inFence = !inFence; prevKind = ""; continue; }
+    if (inFence) continue;
+    const kind = !line.trim() ? "" : /^#{1,6}\s/.test(line) ? "h" : /^\s*([-*]|\d+\.)\s/.test(line) ? "li" : /^>/.test(line) ? "q" : "p";
+    if (kind === "p" && prevKind) return false;
+    prevKind = kind;
+  }
+  const el = document.createElement("div");
+  el.innerHTML = renderMarkdown(rest);
+  const squash = (s) => s.replace(/\s+/g, " ").trim();
+  return squash(htmlToMarkdown(el)) === squash(rest);
+}
+
+// Which toolbar formats apply at the caret/selection -- drives the buttons'
+// pressed state. Visual mode reads the DOM; source mode reads the markdown.
+function richActiveFormats(el) {
+  const sel = getSelection();
+  if (!el || !sel.rangeCount || !el.contains(sel.anchorNode)) return {};
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  const has = (s) => { const x = node.closest(s); return !!x && el.contains(x); };
+  return {
+    // Headings report "bold" from their own styling, so only real <b> counts there.
+    // At a bare caret, the surrounding markup says what the text *is*; the
+    // command state says what the next typed character *will be* (e.g. after
+    // clicking Bold inside a bold word) -- the latter is what the button shows.
+    bold: has("h1,h2,h3,h4,h5,h6") ? has("b,strong") : document.queryCommandState("bold"),
+    italic: document.queryCommandState("italic"),
+    code: has("code"), link: has("a"),
+    heading: has("h1,h2,h3,h4,h5,h6"), quote: has("blockquote"), codeblock: has("pre"),
+    ul: has("ul"), ol: has("ol"),
+  };
+}
+
+function sourceActiveFormats(ta) {
+  if (!ta) return {};
+  const { selectionStart: s, selectionEnd: e, value: v } = ta;
+  const ls = v.lastIndexOf("\n", s - 1) + 1;
+  let le = v.indexOf("\n", e);
+  if (le === -1) le = v.length;
+  const line = v.slice(ls, le);
+  const lo = s - ls, hi = e - ls;
+  // an inline span is "active" when the selection sits inside a match
+  const inside = (re) => [...line.matchAll(re)].some((m) => lo >= m.index && hi <= m.index + m[0].length);
+  const fences = (v.slice(0, ls).match(/^\s*```/gm) || []).length;
+  return {
+    bold: inside(/\*\*[^*]+\*\*/g), italic: inside(/(?<!\*)\*[^*]+\*(?!\*)/g),
+    code: inside(/`[^`]+`/g), link: inside(/\[[^\]]*\]\([^)]*\)/g),
+    heading: /^#{1,6}\s/.test(line), quote: /^>/.test(line), codeblock: fences % 2 === 1,
+    ul: /^\s*[-*]\s/.test(line), ol: /^\s*\d+\.\s/.test(line),
+  };
+}
+
+// execCommand-based formatting for the contenteditable surface.
+function richApply(el, id) {
+  if (!el) return;
+  el.focus();
+  const sel = getSelection();
+  const within = (sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement)) || el;
+  const closest = (sel_) => within.closest(sel_) && el.contains(within.closest(sel_)) ? within.closest(sel_) : null;
+  document.execCommand("styleWithCSS", false, false);
+  switch (id) {
+    case "bold": return document.execCommand("bold");
+    case "italic": return document.execCommand("italic");
+    case "ul": return document.execCommand("insertUnorderedList");
+    case "ol": return document.execCommand("insertOrderedList");
+    case "heading": return document.execCommand("formatBlock", false, closest("h1,h2,h3,h4,h5,h6") ? "p" : "h2");
+    case "quote": return closest("blockquote") ? document.execCommand("outdent") : document.execCommand("formatBlock", false, "blockquote");
+    case "codeblock": return document.execCommand("formatBlock", false, closest("pre") ? "p" : "pre");
+    case "code": {
+      const code = closest("code");
+      if (code) { code.replaceWith(...code.childNodes); el.dispatchEvent(new Event("input", { bubbles: true })); return; }
+      if (sel.isCollapsed) return;
+      return document.execCommand("insertHTML", false, `<code>${escapeHtml(sel.toString())}</code>`);
+    }
+    case "link": {
+      if (closest("a")) return document.execCommand("unlink");
+      const url = (window.prompt("Link URL") || "").trim();
+      if (url && SAFE_URL_RE.test(url)) document.execCommand("createLink", false, url);
+      return;
+    }
+  }
+}
+
+// "## " / "- " / "1. " / "> " typed at the start of an empty-so-far paragraph
+// turns it into that block, like most visual markdown editors.
+function richBlockShortcut(el, e) {
+  const sel = getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  const block = node.closest("p,div");
+  if (!block || !el.contains(block) || block === el) return false;
+  const r = sel.getRangeAt(0).cloneRange();
+  r.setStart(block, 0);
+  const typed = r.toString();
+  const m = typed.match(/^(#{1,6}|[-*]|\d+\.|>)$/);
+  if (!m) return false;
+  e.preventDefault();
+  // Backspace over the marker (rather than deleting the range) so the caret
+  // stays valid inside the now-empty block for the command below.
+  for (let i = 0; i < typed.length; i++) document.execCommand("delete");
+  const mark = m[1];
+  if (mark[0] === "#") document.execCommand("formatBlock", false, "h" + mark.length);
+  else if (mark === ">") document.execCommand("formatBlock", false, "blockquote");
+  else document.execCommand(/\d/.test(mark) ? "insertOrderedList" : "insertUnorderedList");
+  return true;
+}
+
+// ---------- markdown editing helpers ----------
+// Toolbar/shortcut actions on a plain <textarea>. Edits go through
+// execCommand("insertText") where possible so the browser's native undo stack
+// keeps working (a bare `ta.value = ...` would wipe it); the resulting input
+// event is also what keeps x-model in sync. Only syntax the renderer below
+// understands is offered.
+const MD_TOOLS = [
+  { id: "heading", label: "H", title: "Heading" },
+  { id: "bold", label: "B", title: "Bold (⌘B)" },
+  { id: "italic", label: "I", title: "Italic (⌘I)" },
+  { id: "code", label: "</>", title: "Inline code (⌘E)" },
+  { id: "codeblock", label: "{ }", title: "Code block" },
+  { id: "quote", label: "❝", title: "Quote" },
+  { id: "ul", label: "•", title: "Bulleted list" },
+  { id: "ol", label: "1.", title: "Numbered list" },
+  { id: "link", label: "Link", title: "Link (⌘K)" },
+];
+const MD_URL_RE = /^https?:\/\/\S+$/;
+
+function mdReplace(ta, start, end, text, selStart, selEnd) {
+  ta.focus();
+  ta.setSelectionRange(start, end);
+  const ok = text === ""
+    ? (start === end || document.execCommand("delete"))
+    : document.execCommand("insertText", false, text);
+  if (!ok) {
+    ta.setRangeText(text, start, end, "end");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  ta.setSelectionRange(selStart, selEnd);
+}
+
+function mdWrap(ta, pre, suf, placeholder) {
+  const { selectionStart: s, selectionEnd: e, value: v } = ta;
+  const sel = v.slice(s, e);
+  const wrapped = s >= pre.length && v.slice(s - pre.length, s) === pre && v.slice(e, e + suf.length) === suf;
+  // `*` is also half of `**`: don't mistake bold for italic when toggling.
+  const isBoldNotItalic = pre === "*" && v[s - 2] === "*" && v[e + 1] === "*";
+  if (wrapped && !isBoldNotItalic) {
+    mdReplace(ta, s - pre.length, e + suf.length, sel, s - pre.length, s - pre.length + sel.length);
+    return;
+  }
+  const text = sel || placeholder;
+  mdReplace(ta, s, e, pre + text + suf, s + pre.length, s + pre.length + text.length);
+}
+
+// Rewrites every line touched by the selection.
+function mdLines(ta, fn) {
+  const { selectionStart: s, selectionEnd: e, value: v } = ta;
+  const ls = v.lastIndexOf("\n", s - 1) + 1;
+  let le = e > s && v[e - 1] === "\n" ? e - 1 : v.indexOf("\n", e);
+  if (le === -1) le = v.length;
+  const out = fn(v.slice(ls, le).split("\n")).join("\n");
+  mdReplace(ta, ls, le, out, ls, ls + out.length);
+}
+
+function mdPrefixLines(ta, prefix, stripRe) {
+  mdLines(ta, (lines) => {
+    const all = lines.every((l) => l.startsWith(prefix));
+    return lines.map((l) => (all ? l.slice(prefix.length) : prefix + l.replace(stripRe, "")));
+  });
+}
+
+function mdApply(ta, id) {
+  if (!ta) return;
+  const { selectionStart: s, selectionEnd: e, value: v } = ta;
+  switch (id) {
+    case "bold": return mdWrap(ta, "**", "**", "bold text");
+    case "italic": return mdWrap(ta, "*", "*", "italic text");
+    case "code": return mdWrap(ta, "`", "`", "code");
+    case "heading": return mdPrefixLines(ta, "## ", /^#{1,6}\s+/);
+    case "quote": return mdPrefixLines(ta, "> ", /^>\s?/);
+    case "ul": return mdPrefixLines(ta, "- ", /^\s*(?:[-*]|\d+\.)\s+/);
+    case "ol":
+      return mdLines(ta, (lines) => {
+        const all = lines.every((l) => /^\d+\.\s/.test(l));
+        return lines.map((l, i) => (all ? l.replace(/^\d+\.\s/, "") : `${i + 1}. ${l.replace(/^\s*(?:[-*]|\d+\.)\s+/, "")}`));
+      });
+    case "codeblock": {
+      const sel = v.slice(s, e);
+      const lead = s > 0 && v[s - 1] !== "\n" ? "\n" : "";
+      const text = `${lead}\`\`\`\n${sel}\n\`\`\``;
+      const caret = s + lead.length + 4;
+      return mdReplace(ta, s, e, text, caret, caret + sel.length);
+    }
+    case "link": {
+      const sel = v.slice(s, e);
+      if (MD_URL_RE.test(sel)) {
+        return mdReplace(ta, s, e, `[link text](${sel})`, s + 1, s + 10);
+      }
+      const text = sel || "link text";
+      const from = s + text.length + 3;
+      return mdReplace(ta, s, e, `[${text}](url)`, from, from + 3);
+    }
+  }
+}
+
+// Enter on a list/quote line continues it (an empty item ends it); the usual
+// Cmd/Ctrl shortcuts map onto the toolbar actions.
+function mdKeydown(e) {
+  const ta = e.target;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && !e.shiftKey && !e.altKey) {
+    const id = { b: "bold", i: "italic", e: "code", k: "link" }[e.key.toLowerCase()];
+    if (id) { e.preventDefault(); mdApply(ta, id); }
+    return;
+  }
+  if (e.key !== "Enter" || e.shiftKey || e.altKey || mod || e.isComposing) return;
+  const { selectionStart: pos, selectionEnd: end, value: v } = ta;
+  if (pos !== end) return;
+  const ls = v.lastIndexOf("\n", pos - 1) + 1;
+  let le = v.indexOf("\n", pos);
+  if (le === -1) le = v.length;
+  if (pos !== le) return;  // only continue from the end of a line
+  const m = v.slice(ls, le).match(/^(\s*)([-*]|\d+\.|>)\s(.*)$/);
+  if (!m) return;
+  e.preventDefault();
+  if (!m[3].trim()) {
+    mdReplace(ta, ls, le, "", ls, ls);
+    return;
+  }
+  const marker = /^\d+\.$/.test(m[2]) ? `${parseInt(m[2], 10) + 1}.` : m[2];
+  const text = `\n${m[1]}${marker} `;
+  mdReplace(ta, pos, pos, text, pos + text.length, pos + text.length);
+}
+
+// Pasting a URL over selected text makes it a link instead of replacing it.
+function mdPaste(e) {
+  const ta = e.target;
+  const url = (e.clipboardData?.getData("text/plain") || "").trim();
+  const { selectionStart: s, selectionEnd: en, value: v } = ta;
+  if (s === en || !MD_URL_RE.test(url)) return;
+  e.preventDefault();
+  const text = `[${v.slice(s, en)}](${url})`;
+  mdReplace(ta, s, en, text, s + text.length, s + text.length);
+}
+
 // ---------- markdown rendering ----------
 // Small hand-rolled renderer (headers, bold/italic, inline code, fenced
 // code blocks, links, lists, blockquotes, paragraphs) -- enough for the
@@ -196,6 +535,13 @@ document.addEventListener("alpine:init", () => {
   Alpine.data("kbApp", () => ({
     CORE_TYPES,
     ALL_TYPES,
+    autosizeTextarea,
+    MD_TOOLS,
+    mdActive: {},
+    richApply,
+    mdApply,
+    mdKeydown,
+    mdPaste,
 
     // ---------- status ----------
     statusText: "checking server...",
@@ -225,7 +571,10 @@ document.addEventListener("alpine:init", () => {
     captureOpen: false,
     captureCompact: false,
     updateCaptureProgress() {
-      const p = this.captureOpen ? 0 : Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
+      // Wide layouts start collapsed to a one-line bar (see style.css); the
+      // box then only expands while focused, not as a function of scroll.
+      const wide = window.matchMedia("(min-width: 820px)").matches;
+      const p = this.captureOpen ? 0 : wide ? 1 : Math.min(1, Math.max(0, window.scrollY / CAPTURE_SCROLL_RANGE));
       document.getElementById("site-header")?.style.setProperty("--p", p);
       this.captureCompact = p > 0.5;
     },
@@ -285,6 +634,13 @@ document.addEventListener("alpine:init", () => {
         return;
       }
       const data = await res.json();
+      if (!append && this.entryInline) {
+        // An expanded row survives a refresh (sync events, new captures) as
+        // long as its entry is still listed; otherwise its row is about to
+        // be removed, so hand the panel back to <body> first.
+        const again = data.items.find((i) => i.id === this.modalEntryId);
+        if (again) this.modalItem = again; else this.closeEntryModal();
+      }
       this.feedItems = append ? this.feedItems.concat(data.items) : data.items;
       this.feedCursor = data.next;
       this.feedEmptyMsg = this.feedItems.length ? "" : "Nothing here yet.";
@@ -312,6 +668,7 @@ document.addEventListener("alpine:init", () => {
 
     // ---------- inbox ----------
     inboxDrawerOpen: false,
+    dockTodos: false,
     inboxItems: [],
     // Distinguishes "haven't heard back yet" from "heard back, zero items" --
     // the pill badge needs both so it can stay invisible-but-space-reserving
@@ -344,7 +701,7 @@ document.addEventListener("alpine:init", () => {
     // rather than inventing a fourth palette just for todos.
     todoDrawerOpen: false,
     todoItems: [],
-    todoAdd: { title: "", priority: "2", type: "task", description: "", labels: "" },
+    todoAdd: { title: "", priority: "2", type: "task", description: "", labels: "", due: "" },
     todoAddExpanded: false,
     todoLoaded: false,
     todoShowClosed: false,
@@ -409,9 +766,11 @@ document.addEventListener("alpine:init", () => {
         title, priority: this.todoAdd.priority, type: this.todoAdd.type,
         description: this.todoAdd.description.trim() || undefined,
         labels: this.todoAdd.labels.trim() || undefined,
+        due: this.todoAdd.due.trim() || undefined,
       });
       if (ok) {
         this.todoAdd.title = "";
+        this.todoAdd.due = "";
         this.todoAdd.description = "";
         this.todoAdd.labels = "";
         this.todoAddExpanded = false;
@@ -419,10 +778,9 @@ document.addEventListener("alpine:init", () => {
       }
     },
 
-    // ---------- todo modal ----------
-    // Mirrors the entry modal's click-a-card-to-see-more pattern instead of
-    // an inline expando -- so a todo's full bd detail and its comment box
-    // live in the same kind of surface as everything else you open.
+    // ---------- todo detail ----------
+    // Clicking a todo swaps the drawer's list for that todo's detail view
+    // (back arrow returns to the list). The todoModal* names predate that.
     todoModalOpen: false,
     todoModalItem: null,
     todoModalDetail: "",
@@ -442,6 +800,63 @@ document.addEventListener("alpine:init", () => {
     todoModalDepDirection: "blocked_by",
     todoModalDepError: "",
     todoModalDeleteConfirm: false,
+    todoModalDue: "",
+
+    // ---------- reminders ----------
+    // A snooze is bd's "deferred" status with a future defer_until; the server also
+    // moves the due date there, so a snoozed todo comes back already due. Labels
+    // mirror format_due() in cli.py.
+    isSnoozed(item) {
+      return !!item && item.status === "deferred" && (!item.defer_until || new Date(item.defer_until) > new Date());
+    },
+    isOverdue(item) {
+      return !!item && item.status !== "closed" && !this.isSnoozed(item) && !!item.due_at && new Date(item.due_at) <= new Date();
+    },
+    dueLabel(item) {
+      if (!item || item.status === "closed") return "";
+      const snoozed = this.isSnoozed(item);
+      const when = snoozed ? item.defer_until : item.due_at;
+      if (!when) return "";
+      const seconds = Math.round((new Date(when) - new Date()) / 1000);
+      const span = Math.abs(seconds);
+      const [unit, size] = [["d", 86400], ["h", 3600], ["m", 60]].find(([, n]) => span >= n) || ["", 0];
+      const amount = size ? `${Math.floor(span / size)}${unit}` : "<1m";
+      if (snoozed) return `snoozed ${amount}`;
+      return seconds > 0 ? `due in ${amount}` : `overdue ${amount}`;
+    },
+    // Reload the list, then re-point the open detail view at the refreshed item so
+    // its due/snooze badges update without closing the view.
+    async refreshTodoModalItem() {
+      const id = this.todoModalItem && this.todoModalItem.id;
+      await this.loadTodos();
+      if (!id) return;
+      const fresh = this.todoItems.find((i) => i.id === id);
+      if (fresh) {
+        this.todoModalItem = fresh;
+        this.todoModalDue = "";
+      }
+    },
+    async saveTodoDue() {
+      if (!this.todoModalItem) return;
+      const text = this.todoModalDue.trim();
+      if (!text) return;
+      const clear = text === "none" || text === "clear";
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { due: clear ? "" : text });
+      this.todoModalUpdateErr = !ok;
+      this.todoModalUpdateMsg = ok ? (clear ? "reminder cleared" : "reminder set") : ((data && data.error) || "failed to save");
+      if (ok) await this.refreshTodoModalItem();
+    },
+    async snoozeTodo(until) {
+      if (!this.todoModalItem) return;
+      const r = await this.todoAction(this.todoModalItem.id, "snooze", { until });
+      if (r) await this.refreshTodoModalItem();
+    },
+    async unsnoozeTodo() {
+      if (!this.todoModalItem) return;
+      const r = await this.todoAction(this.todoModalItem.id, "unsnooze");
+      if (r) await this.refreshTodoModalItem();
+    },
 
     async openTodoModal(item) {
       this.todoModalItem = item;
@@ -452,6 +867,7 @@ document.addEventListener("alpine:init", () => {
       this.todoModalDescription = item.description || "";
       this.todoModalAssignee = item.owner || "";
       this.todoModalLabelInput = "";
+      this.todoModalDue = "";
       this.todoModalUpdateMsg = "";
       this.todoModalUpdateErr = false;
       this.todoModalBlockedBy = [];
@@ -624,6 +1040,10 @@ document.addEventListener("alpine:init", () => {
     // in the modal (title/tags) is reflected on the card automatically
     // through Alpine's reactivity -- no manual DOM syncing needed.
     modalOpen: false,
+    // True when the entry panel is docked inside its feed row (wide screens)
+    // instead of floating as an overlay -- see dockEntryPanel().
+    entryInline: false,
+    bootHashDone: false,
     modalEntryId: null,
     modalItem: null,
     modalStamp: "",
@@ -641,10 +1061,20 @@ document.addEventListener("alpine:init", () => {
     modalTagInput: "",
     modalLinkInput: "",
     modalLinkError: "",
-    modalPreview: false,
+    // Editor layout: raw markdown only, rendered only, or both side by side
+    // (the default -- you see the result as you type).
+    modalMode: "split",
+    // First "# Title" line of the body, set aside while the visual editor
+    // (whose content is written by loadRich, never re-rendered per keystroke)
+    // is open and re-attached on every edit.
+    modalH1: "",
     modalSaving: false,
     modalSaveMsg: "",
     modalSaveErr: false,
+    // Snapshot of title/body when editing starts: Cancel restores it, and the
+    // difference from the live fields is what "unsaved changes" means.
+    modalOrig: { title: "", body: "" },
+    modalDiscardArmed: false,
 
     // Typeahead over every tag/entry already in the repo, loaded once at boot
     // (see loadTagIndex/loadEntryIndex) -- cheap for a personal KB's scale,
@@ -742,6 +1172,10 @@ document.addEventListener("alpine:init", () => {
       if (ok) this.allEntries = data.items;
     },
 
+    get modalDirty() {
+      return this.modalEditing
+        && (this.modalTitle !== this.modalOrig.title || this.modalBody !== this.modalOrig.body);
+    },
     get modalViewHtml() {
       // Entries conventionally open with a "# Heading" line, and the
       // frontmatter title is already shown in the modal header -- so any
@@ -755,7 +1189,26 @@ document.addEventListener("alpine:init", () => {
       return renderMarkdown(this.modalBody);
     },
 
-    async openEntryModal(item) {
+    // On wide screens the same panel element is moved into the clicked feed
+    // row, so the entry expands in place and the feed keeps its scroll
+    // position; elsewhere (narrow screens, command palette) it stays an
+    // overlay. All bindings are on the element itself, so moving it is safe.
+    undockEntryPanel() {
+      const panel = document.getElementById("entry-panel");
+      if (panel && panel.parentElement !== document.body) document.body.appendChild(panel);
+    },
+    dockEntryPanel(row) {
+      const panel = document.getElementById("entry-panel");
+      if (panel && row) row.appendChild(panel);
+    },
+    async openEntryModal(item, row) {
+      // Clicking the already-expanded row collapses it.
+      if (row && this.modalOpen && this.modalEntryId === item.id) { this.requestCloseEntry(); return; }
+      if (!this.guardUnsaved()) return;
+      this.undockEntryPanel();
+      this.entryInline = !!row && window.matchMedia("(min-width: 820px)").matches;
+      if (this.entryInline) this.dockEntryPanel(row);
+      try { history.replaceState(null, "", "#" + encodeURIComponent(item.id)); } catch {}
       this.modalItem = item;
       this.modalEntryId = item.id;
       this.modalStamp = item.title || item.id;
@@ -768,7 +1221,7 @@ document.addEventListener("alpine:init", () => {
       this.modalLinkError = "";
       this.modalSaveMsg = "";
       this.modalSaveErr = false;
-      this.modalPreview = false;
+      this.modalMode = "split";
       this.modalTagHighlight = -1;
       this.modalLinkHighlight = -1;
       this.modalOpen = true;
@@ -776,6 +1229,7 @@ document.addEventListener("alpine:init", () => {
         const res = await fetch(`/api/entries/${encodeURIComponent(item.id)}`);
         if (!res.ok) throw new Error();
         const data = await res.json();
+        if (this.modalEntryId !== item.id) return;  // another entry was opened meanwhile
         this.modalTags = data.frontmatter.tags || [];
         this.modalLinks = data.frontmatter.links || [];
         this.modalTitle = data.frontmatter.title || "";
@@ -784,26 +1238,204 @@ document.addEventListener("alpine:init", () => {
       } catch {
         this.modalLoadError = "couldn't load";
       } finally {
-        this.modalLoading = false;
+        if (this.modalEntryId === item.id) this.modalLoading = false;
       }
+      // Only now does the row swap its snippet for the full body, so scroll
+      // after that swap rather than before the content has arrived.
+      if (this.entryInline && this.modalEntryId === item.id) {
+        this.$nextTick(() => row.scrollIntoView({ block: "nearest" }));
+      }
+    },
+    // Warns instead of silently dropping edits when the user navigates away.
+    guardUnsaved() {
+      if (!this.modalDirty) return true;
+      this.modalSaveErr = true;
+      this.modalSaveMsg = "Unsaved changes -- save or cancel first";
+      return false;
+    },
+    requestCloseEntry() {
+      if (this.guardUnsaved()) this.closeEntryModal();
     },
     closeEntryModal() {
       this.modalOpen = false;
+      this.modalEditing = false;
+      this.undockEntryPanel();
+      this.entryInline = false;
+      try { history.replaceState(null, "", location.pathname + location.search); } catch {}
       this.modalItem = null;
       this.modalEntryId = null;
     },
-    showModalEdit() {
+    showModalEdit(opts = {}) {
       if (this.modalReadonly) return;  // belt-and-suspenders: the edit button is hidden for these
-      this.modalPreview = false;
       this.modalSaveMsg = "";
+      this.modalSaveErr = false;
+      this.modalDiscardArmed = false;
+      this.modalBody = this.modalBody.replace(/^\n+/, "");  // no empty first line in the editor
+      this.modalOrig = { title: this.modalTitle, body: this.modalBody };
+      // Edit the rendered entry in place when that is lossless; otherwise
+      // fall back to markdown source with a live preview.
+      if (richEditable(this.modalBody)) {
+        this.loadRich();
+        this.modalMode = "rich";
+      } else {
+        this.modalMode = "split";
+        this.modalSaveMsg = "Edited as source -- this entry has formatting visual editing can't preserve";
+      }
       this.modalEditing = true;
+      this.$nextTick(() => this.$nextTick(() => {
+        if (this.modalMode === "rich") this.focusRich(opts.offset);
+        else { const ta = document.querySelector("#entry-panel .edit-body"); autosizeTextarea(ta); ta?.focus(); }
+      }));
     },
-    showModalView() {
+    richEl() { return document.querySelector("#entry-panel .rich-edit"); },
+    loadRich() {
+      const { h1, rest } = splitLeadingH1(this.modalBody);
+      this.modalH1 = h1;
+      // Written straight into the element (not via x-html) so the content is
+      // there synchronously -- focusRich() runs right after and needs it.
+      const el = this.richEl();
+      if (el) el.innerHTML = renderMarkdown(rest);
+    },
+    // `offset` is a character offset into the entry's text (see viewClick): the
+    // view and the editor render the same content, so the same offset lands on
+    // the same spot even though the page layout shifts when editing starts.
+    focusRich(offset) {
+      const el = this.richEl();
+      if (!el) return;
+      el.focus();
+      const range = document.createRange();
+      let placed = false;
+      if (offset != null) {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let left = offset;
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (left <= n.length) { range.setStart(n, left); placed = true; break; }
+          left -= n.length;
+        }
+      }
+      if (placed) range.collapse(true);
+      else { range.selectNodeContents(el); range.collapse(false); }
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    },
+    // Visual -> markdown on every edit: modalBody is what Save sends and what
+    // the dirty check compares, but the editing surface itself is not re-rendered.
+    onRichInput() {
+      const el = this.richEl();
+      if (!el) return;
+      const md = htmlToMarkdown(el);
+      this.modalBody = (this.modalH1 ? this.modalH1 + "\n\n" : "") + md + (md ? "\n" : "");
+      this.modalDiscardArmed = false;
+    },
+    // Enter / leaving a list leaves empty <p>/<div> blocks behind (sometimes
+    // nested). They render as blank space and serialise to nothing, so drop them
+    // -- only when focus leaves or on save, never while the caret may be in one.
+    richTidy() {
+      const el = this.richEl();
+      if (!el) return;
+      [...el.querySelectorAll("p,div")].reverse().forEach((b) => {
+        if (!b.textContent.trim() && !b.querySelector("img,pre,ul,ol,li,blockquote")) b.remove();
+      });
+    },
+    richKeydown(e) {
+      const el = e.currentTarget;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === "Enter") { e.preventDefault(); this.saveModalEntry(); return; }
+      if (mod && !e.shiftKey && !e.altKey) {
+        const id = { b: "bold", i: "italic", e: "code", k: "link" }[e.key.toLowerCase()];
+        if (id) { e.preventDefault(); richApply(el, id); this.onRichInput(); this.updateToolActive(); }
+        return;
+      }
+      if (e.key === " " && !e.isComposing && richBlockShortcut(el, e)) this.onRichInput();
+    },
+    // Paste as plain text so foreign HTML (fonts, spans, styles) never enters
+    // the entry; a URL pasted over a selection becomes a link.
+    richPaste(e) {
+      e.preventDefault();
+      const text = (e.clipboardData?.getData("text/plain") || "").replace(/\r/g, "");
+      const sel = getSelection();
+      if (!sel.isCollapsed && MD_URL_RE.test(text.trim())) {
+        document.execCommand("createLink", false, text.trim());
+      } else {
+        text.split("\n").forEach((line, i) => {
+          if (i) document.execCommand("insertParagraph");
+          if (line) document.execCommand("insertText", false, line);
+        });
+      }
+      this.onRichInput();
+    },
+    // Clicking the rendered entry starts editing right where you clicked.
+    viewClick(e) {
+      if (this.modalReadonly || e.target.closest("a, .media-thumb, .media-video")) return;
+      let offset = null;
+      const hit = document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null;
+      if (hit && e.currentTarget.contains(hit.startContainer)) {
+        const before = document.createRange();
+        before.selectNodeContents(e.currentTarget);
+        before.setEnd(hit.startContainer, hit.startOffset);
+        offset = before.toString().length;
+      }
+      this.showModalEdit({ offset });
+    },
+    setEditMode(mode) {
+      if (mode === this.modalMode) return;
+      if (mode === "rich") {
+        if (!richEditable(this.modalBody)) {
+          this.modalSaveErr = true;
+          this.modalSaveMsg = "This entry has formatting the visual editor can't preserve -- stay in Source";
+          return;
+        }
+        this.loadRich();
+      }
+      this.modalMode = mode;
+      this.$nextTick(() => this.$nextTick(() => {
+        if (mode === "rich") this.focusRich();
+        else { const ta = document.querySelector("#entry-panel .edit-body"); autosizeTextarea(ta); ta?.focus(); }
+      }));
+    },
+    // Recomputes which toolbar buttons show as pressed for the current selection.
+    updateToolActive() {
+      let next = {};
+      if (this.modalEditing) {
+        next = this.modalMode === "rich"
+          ? richActiveFormats(this.richEl())
+          : sourceActiveFormats(document.querySelector("#entry-panel textarea.edit-body"));
+      }
+      if (JSON.stringify(next) !== JSON.stringify(this.mdActive)) this.mdActive = next;
+    },
+    toolAction(id) {
+      if (this.modalMode === "rich") { richApply(this.richEl(), id); this.onRichInput(); }
+      else mdApply(document.querySelector("#entry-panel textarea.edit-body"), id);
+      this.updateToolActive();
+    },
+    // Back to the read-only view, throwing away anything not saved.
+    cancelModalEdit() {
+      this.modalTitle = this.modalOrig.title;
+      this.modalBody = this.modalOrig.body;
       this.modalEditing = false;
+      this.modalMode = "split";
+      this.modalDiscardArmed = false;
+      this.modalSaveErr = false;
+      this.modalSaveMsg = "";
+    },
+    // Esc while editing: cancel straight away if nothing changed, otherwise
+    // ask for a second Esc so a stray keypress can't discard work.
+    escapeEditing() {
+      if (this.modalDirty && !this.modalDiscardArmed) {
+        this.modalDiscardArmed = true;
+        this.modalSaveErr = true;
+        this.modalSaveMsg = "Unsaved changes -- press Esc again to discard";
+        return;
+      }
+      this.cancelModalEdit();
     },
     async saveModalEntry() {
+      if (this.modalSaving) return;
+      if (this.modalMode === "rich") this.richTidy();
       this.modalSaving = true;
       this.modalSaveErr = false;
+      this.modalDiscardArmed = false;
       this.modalSaveMsg = "saving…";
       const { ok, data } = await apiFetch(`/api/entries/${encodeURIComponent(this.modalEntryId)}`, "PATCH", {
         title: this.modalTitle, body: this.modalBody,
@@ -814,7 +1446,10 @@ document.addEventListener("alpine:init", () => {
         if (data.body != null) this.modalBody = data.body;
         if (this.modalItem) this.modalItem.title = this.modalTitle || this.modalEntryId;
         this.modalStamp = this.modalTitle || this.modalEntryId;
-        this.showModalView();
+        this.modalOrig = { title: this.modalTitle, body: this.modalBody };
+        this.modalEditing = false;
+        this.modalSaveMsg = "Saved";
+        setTimeout(() => { if (!this.modalEditing && this.modalSaveMsg === "Saved") this.modalSaveMsg = ""; }, 2500);
       } else {
         this.modalSaveErr = true;
         this.modalSaveMsg = (data && data.error) || "save failed";
@@ -1263,13 +1898,14 @@ document.addEventListener("alpine:init", () => {
       }
       if (e.key !== "Escape") return;
       if (this.lightboxOpen) { this.closeLightbox(); return; }
+      if (this.modalOpen && this.modalEditing && !this.paletteOpen) { this.escapeEditing(); return; }
       if (this.paletteOpen) this.closePalette();
       if (this.adminOpen) this.adminOpen = false;
       if (this.inboxDrawerOpen) this.inboxDrawerOpen = false;
+      if (this.todoModalOpen) { this.closeTodoModal(); return; }
       if (this.todoDrawerOpen) this.todoDrawerOpen = false;
       if (this.modalOpen) this.closeEntryModal();
       if (this.newEntryOpen) this.closeNewEntryModal();
-      if (this.todoModalOpen) this.closeTodoModal();
     },
 
     // ---------- boot ----------
@@ -1278,7 +1914,30 @@ document.addEventListener("alpine:init", () => {
       this.applyThemeAttr(this.theme);
       this.$watch("theme", (mode) => this.applyThemeAttr(mode));
 
+      // Wide screens dock Todos as always-visible
+      // columns instead of slide-over drawers. Breakpoints match style.css.
+      const dockQueries = [
+        ["dockTodos", "todoDrawerOpen", window.matchMedia("(min-width: 1100px)")],
+      ];
+      for (const [flag, drawer, mq] of dockQueries) {
+        const sync = () => {
+          this[flag] = mq.matches;
+          if (mq.matches) this[drawer] = false;
+        };
+        sync();
+        mq.addEventListener("change", sync);
+      }
+
+      // init() runs twice (see bootHashDone), so register this one only once.
+      if (!window.__kbSelectionListener) {
+        window.__kbSelectionListener = true;
+        document.addEventListener("selectionchange", () => this.updateToolActive());
+      }
+      this.$watch("modalMode", () => this.$nextTick(() => this.updateToolActive()));
+      this.$watch("modalEditing", () => this.$nextTick(() => this.updateToolActive()));
+
       window.addEventListener("scroll", () => this.updateCaptureProgress(), { passive: true });
+      window.addEventListener("resize", () => this.updateCaptureProgress());
       // Scroll-driven changes must not be eased (they'd lag the scroll), but a
       // click/focus-driven open or close should glide -- so transitions are
       // only switched on briefly around that change.
@@ -1296,13 +1955,12 @@ document.addEventListener("alpine:init", () => {
       // Every flag needs its own $watch (Alpine has no "watch any of these"
       // form), but they all share one body.
       const updateBodyScrollLock = () => {
-        document.body.style.overflow = (this.modalOpen || this.newEntryOpen || this.todoModalOpen
+        document.body.style.overflow = ((this.modalOpen && !this.entryInline) || this.newEntryOpen
           || this.adminOpen || this.inboxDrawerOpen || this.todoDrawerOpen || this.paletteOpen
           || this.lightboxOpen) ? "hidden" : "";
       };
       this.$watch("modalOpen", updateBodyScrollLock);
       this.$watch("newEntryOpen", updateBodyScrollLock);
-      this.$watch("todoModalOpen", updateBodyScrollLock);
       this.$watch("adminOpen", updateBodyScrollLock);
       this.$watch("adminOpen", (open) => {
         if (open) { this.loadAdminStatus(); this.adminTabOpened(); } else this.adminConfirm = "";
@@ -1322,6 +1980,21 @@ document.addEventListener("alpine:init", () => {
           this.statusText = "couldn't reach /api/health";
           this.statusClass = "err";
         });
+
+      const bootId = decodeURIComponent(location.hash.slice(1));
+      if (bootId) {
+        // init() runs twice (Alpine auto-calls it and x-init does too), so the
+        // "already handled" flag lives on the component, not in this closure.
+        this.$watch("feedItems", () => {
+          if (this.bootHashDone) return;
+          this.bootHashDone = true;
+          this.$nextTick(() => {
+            const row = document.querySelector(`#feed > li[data-id="${CSS.escape(bootId)}"]`);
+            const item = this.feedItems.find((i) => i.id === bootId) || { id: bootId, title: bootId };
+            this.openEntryModal(item, row);
+          });
+        });
+      }
 
       this.refreshAll();
 
