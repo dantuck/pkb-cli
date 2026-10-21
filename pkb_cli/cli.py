@@ -1416,10 +1416,143 @@ def reminders_to_send(issues, repeat_hours=4, now=None):
     return out
 
 
-def notify(title, message):
-    """Post a desktop notification (osascript on macOS, notify-send on Linux).
-    Returns False if no notifier is available or it failed. Text goes in as argv,
-    never interpolated into a script, so a todo title can't break out of it."""
+# --- desktop notifications --------------------------------------------------
+# macOS shows a notification's icon and name from the *app bundle* that posted it,
+# and `osascript` is always "Script Editor". To get kb's own icon and its own
+# entry in System Settings -> Notifications, `kb remind install` builds a copy of
+# terminal-notifier.app ("kb reminders.app", its own bundle id and icon) in
+# ~/Applications and posts through that. Without terminal-notifier, or on Linux,
+# it falls back to osascript / notify-send.
+
+NOTIFIER_BUNDLE_ID = "dev.pkb-cli.notifier"
+NOTIFICATION_SETTINGS_URL = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+
+
+def _notifier_app_path():
+    return os.path.expanduser("~/Applications/kb reminders.app")
+
+
+def _notifier_binary():
+    """Path to the built "kb reminders" notifier, or None (not macOS / not built)."""
+    path = os.path.join(_notifier_app_path(), "Contents", "MacOS", "terminal-notifier")
+    return path if sys.platform == "darwin" and os.path.exists(path) else None
+
+
+def _terminal_notifier_app():
+    """The stock terminal-notifier.app (e.g. brew's) to copy from, or None."""
+    exe = shutil.which("terminal-notifier")
+    if not exe:
+        return None
+    for path in (exe, os.path.realpath(exe)):
+        candidate = os.path.join(os.path.dirname(os.path.dirname(path)), "terminal-notifier.app")
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def build_notifier_app():
+    """Build ~/Applications/kb reminders.app: a copy of terminal-notifier.app with
+    kb's icon and its own bundle id (which is what gives it its own icon, name and
+    notification permission). Skips the rebuild when the copy already matches the
+    source and icon -- re-signing changes the code signature, which can make macOS
+    forget a permission the user already granted. Returns (ok, message)."""
+    if sys.platform != "darwin":
+        return False, "the kb reminders app is macOS-only"
+    src = _terminal_notifier_app()
+    if src is None:
+        return False, "terminal-notifier isn't installed -- `brew install terminal-notifier`"
+    icon_png = os.path.join(PKG_DIR, "templates", "notifier", "kb-reminder.png")
+    dest = _notifier_app_path()
+
+    import hashlib
+    import plistlib
+    with open(os.path.join(src, "Contents", "Info.plist"), "rb") as f:
+        src_version = plistlib.load(f).get("CFBundleShortVersionString", "?")
+    with open(icon_png, "rb") as f:
+        stamp = f"{src_version}+{hashlib.sha256(f.read()).hexdigest()[:12]}"
+    dest_plist = os.path.join(dest, "Contents", "Info.plist")
+    try:
+        with open(dest_plist, "rb") as f:
+            if plistlib.load(f).get("KBBuiltFrom") == stamp and _notifier_binary():
+                return True, f"kb reminders app is up to date ({dest})"
+    except (OSError, plistlib.InvalidFileException):
+        pass
+
+    with tempfile.TemporaryDirectory() as tmp:
+        iconset = os.path.join(tmp, "kb.iconset")
+        os.makedirs(iconset)
+        for size in (16, 32, 128, 256, 512):
+            for scale in (1, 2):
+                name = f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"
+                r = subprocess.run(["sips", "-z", str(size * scale), str(size * scale), icon_png,
+                                    "--out", os.path.join(iconset, name)], capture_output=True, text=True)
+                if r.returncode != 0:
+                    return False, f"sips failed: {r.stderr.strip() or r.stdout.strip()}"
+        icns = os.path.join(tmp, "kb-reminder.icns")
+        r = subprocess.run(["iconutil", "-c", "icns", iconset, "-o", icns], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False, f"iconutil failed: {r.stderr.strip() or r.stdout.strip()}"
+
+        staged = os.path.join(tmp, "kb reminders.app")
+        shutil.copytree(src, staged, symlinks=True)
+        resources = os.path.join(staged, "Contents", "Resources")
+        for name in os.listdir(resources):
+            if name.endswith(".icns"):
+                os.remove(os.path.join(resources, name))
+        shutil.copy(icns, os.path.join(resources, "kb-reminder.icns"))
+        plist_path = os.path.join(staged, "Contents", "Info.plist")
+        with open(plist_path, "rb") as f:
+            info = plistlib.load(f)
+        info.update({"CFBundleIdentifier": NOTIFIER_BUNDLE_ID, "CFBundleName": "kb reminders",
+                     "CFBundleIconFile": "kb-reminder", "KBBuiltFrom": stamp})
+        with open(plist_path, "wb") as f:
+            plistlib.dump(info, f)
+        r = subprocess.run(["codesign", "--force", "--deep", "-s", "-", staged], capture_output=True, text=True)
+        if r.returncode != 0:
+            return False, f"codesign failed: {r.stderr.strip()}"
+
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if os.path.lexists(dest):
+            shutil.rmtree(dest)
+        shutil.move(staged, dest)
+    return True, f"built the kb reminders app ({dest})"
+
+
+def notifier_authorization():
+    """The "kb reminders" app's notification permission as macOS reports it --
+    'authorized', 'denied', 'not requested yet', ... -- or None if there's no built
+    notifier to ask. Read-only: asking doesn't prompt the user."""
+    exe = _notifier_binary()
+    if exe is None:
+        return None
+    try:
+        out = subprocess.run([exe, "-diagnose"], capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r"^\s*authorization\s+(.+?)\s*$", out, re.M)
+    return m.group(1).lower() if m else None
+
+
+def notifier_allowed(authorization):
+    return authorization is not None and (authorization.startswith("authorized") or authorization == "provisional")
+
+
+def notify_status(title, message, group=None, fallback=True):
+    """Post a desktop notification and say what happened: 'sent', 'denied' (macOS
+    permission for the kb reminders app is off), 'failed', or 'unavailable' (no
+    notifier at all). Text goes in as argv, never interpolated into a script, so a
+    todo title can't break out of one. With fallback=False the kb reminders app is
+    the only thing tried, so a permission problem isn't hidden by osascript working."""
+    status = "unavailable"
+    exe = _notifier_binary()
+    if exe:
+        cmd = [exe, "-title", title, "-message", message] + (["-group", group] if group else [])
+        code = subprocess.run(cmd, capture_output=True).returncode
+        if code == 0:
+            return "sent"
+        status = "denied" if code == 3 else "failed"
+        if not fallback:
+            return status
     if sys.platform == "darwin" and shutil.which("osascript"):
         cmd = ["osascript", "-e", "on run argv", "-e",
                "display notification (item 1 of argv) with title (item 2 of argv)",
@@ -1427,8 +1560,71 @@ def notify(title, message):
     elif shutil.which("notify-send"):
         cmd = ["notify-send", title, message]
     else:
-        return False
-    return subprocess.run(cmd, capture_output=True).returncode == 0
+        return status
+    return "sent" if subprocess.run(cmd, capture_output=True).returncode == 0 else "failed"
+
+
+def notify(title, message):
+    """Post a desktop notification; True if one was handed to the OS."""
+    return notify_status(title, message) == "sent"
+
+
+def notification_help():
+    return ("macOS isn't allowing notifications from \"kb reminders\" yet.\n"
+            "  System Settings -> Notifications -> kb reminders -> Allow Notifications\n"
+            "  (if you clicked Don't Allow earlier, this is the only place to undo it, or run:\n"
+            f"   tccutil reset UserNotification {NOTIFIER_BUNDLE_ID})\n"
+            "  then check with: kb remind test")
+
+
+def open_notification_settings(force=False):
+    """Open System Settings at the Notifications pane. By default only for a person at
+    a terminal (a background job opening windows would be rude); kb web passes
+    force=True because the person asked by clicking a button. True if it was opened."""
+    if sys.platform == "darwin" and (force or sys.stdout.isatty()):
+        return subprocess.run(["open", NOTIFICATION_SETTINGS_URL], capture_output=True).returncode == 0
+    return False
+
+
+def send_test_notification():
+    """Post a test notification through the same path real reminders use and return
+    (ok, message) -- the message says what to do when it didn't work."""
+    status = notify_status("kb reminders are on", "You'll get a notification like this when a TODO comes due.",
+                            group="kb-remind-test", fallback=False)
+    if status == "sent":
+        return True, ("sent a test notification -- if you don't see it, a Focus / Do Not Disturb "
+                      "mode may be holding it back")
+    if status == "denied":
+        open_notification_settings()
+        return False, notification_help()
+    if status == "failed":
+        return False, "the notifier ran but failed -- run `kb remind test` again, or see `terminal-notifier -diagnose`"
+    if sys.platform == "darwin":
+        return False, ("no notifier available -- `brew install terminal-notifier`, then `kb remind install` "
+                       "builds the kb reminders app")
+    return False, "no notifier available -- install `notify-send` (libnotify)"
+
+
+def finish_reminder_install():
+    """After the reminder timer is installed: on macOS build the kb reminders app
+    (when terminal-notifier is there), then send a test notification so a missing
+    permission shows up now, with instructions, not silently at the first real
+    reminder. Returns (ok, message). Run from the user's terminal -- the permission
+    prompt needs a GUI session, which the background job doesn't have."""
+    lines = []
+    if sys.platform == "darwin":
+        if _terminal_notifier_app():
+            built, msg = build_notifier_app()
+            lines.append(msg)
+            if not built:
+                lines.append("falling back to osascript notifications (Script Editor's icon)")
+        else:
+            lines.append("terminal-notifier isn't installed, so notifications will use osascript "
+                         "(Script Editor's icon) -- `brew install terminal-notifier` and re-run "
+                         "`kb remind install` for kb's own icon")
+    ok, msg = send_test_notification()
+    lines.append(msg)
+    return ok, "\n".join(lines)
 
 
 def bd_reopen(root, issue_id):
@@ -1630,6 +1826,51 @@ def _todo_interactive(root, issues):
     return 0
 
 
+def reminders_install(root, interval_minutes):
+    """Install the reminder timer and run the post-install notification check
+    (`kb remind install`, minus the printing of the check's result). Returns
+    (returncode, notifications_ok, message) -- message is the post-install guidance, empty
+    if the timer itself couldn't be installed. Shared by the CLI and kb web."""
+    kind = _service_kind()
+    if kind is None:
+        print(f"error: reminders can't be scheduled on {sys.platform}", file=sys.stderr)
+        return 1, False, ""
+    rc = _interval_service_install(kind, "remind", root, ["remind", "check"], interval_minutes,
+                                    "kb remind -- notify about due TODOs")
+    if rc != 0:
+        return rc, False, ""
+    ok, msg = finish_reminder_install()
+    return 0, ok, msg
+
+
+def reminders_info():
+    """Structured reminder state for kb web's Reminders card: the timer
+    ({installed, running, detail, interval_minutes}) and, on macOS, the "kb reminders"
+    notifier ({app_built, terminal_notifier, authorization, allowed}). Read-only --
+    never prompts or notifies."""
+    kind = _service_kind()
+    if kind is None:
+        return {"supported": False}
+    out = {"supported": True, "kind": kind, **_service_state(kind, "remind")}
+    out["healthy"], out["message"] = reminder_status_line(kind)
+    out["interval_minutes"] = _timer_interval_minutes(kind, "remind") if out["installed"] else None
+    if kind == "launchd":
+        auth = notifier_authorization()
+        out["notifier"] = {"app_built": _notifier_binary() is not None,
+                           "terminal_notifier": _terminal_notifier_app() is not None,
+                           "authorization": auth, "allowed": notifier_allowed(auth)}
+    return out
+
+
+def _print_result(ok, msg):
+    """Print a success on stdout or a problem on stderr, flushing stdout first so a
+    problem never appears ahead of output that was printed before it (stdout is
+    block-buffered when piped, stderr isn't)."""
+    sys.stdout.flush()
+    print(msg, file=sys.stdout if ok else sys.stderr)
+    sys.stderr.flush()
+
+
 def reminder_status_line(kind=None):
     """(ok, message) describing the `kb remind` timer for setup/doctor -- ok is True
     when it's scheduled and healthy, False when it needs attention or isn't on.
@@ -1645,9 +1886,19 @@ def reminder_status_line(kind=None):
         return False, f"reminder job is {info['detail']}"
     if kind == "systemd" and not info["running"]:
         return False, f"reminder timer is {info['detail'] or 'inactive'} -- run `kb remind install` again"
-    notifier = "osascript" if kind == "launchd" else "notify-send"
-    if not shutil.which(notifier):
-        return False, f"reminders are scheduled but `{notifier}` isn't installed, so no notification can appear"
+    if kind == "launchd" and _notifier_binary():
+        auth = notifier_authorization()
+        if not notifier_allowed(auth):
+            return False, (f"reminders are scheduled but notifications for \"kb reminders\" are "
+                           f"{auth or 'in an unknown state'} -- System Settings -> Notifications -> "
+                           f"kb reminders -> Allow, then `kb remind test`")
+    elif kind == "launchd" and _terminal_notifier_app():
+        return False, ("terminal-notifier is installed but the \"kb reminders\" app isn't built -- run "
+                       "`kb remind install` (gives notifications kb's own icon)")
+    else:
+        notifier = "osascript" if kind == "launchd" else "notify-send"
+        if not shutil.which(notifier):
+            return False, f"reminders are scheduled but `{notifier}` isn't installed, so no notification can appear"
     return True, "TODO reminders are scheduled (`kb remind status`)"
 
 
@@ -1655,6 +1906,10 @@ def cmd_remind(args):
     """`kb remind` -- list what's due; `check` notifies about it (run on a timer);
     `install`/`uninstall`/`status` manage that timer."""
     kind = _service_kind()
+    if args.action == "test":
+        ok, msg = send_test_notification()
+        _print_result(ok, msg)
+        return 0 if ok else 1
     if args.action in ("install", "uninstall", "status"):
         if kind is None:
             print(f"error: `kb remind {args.action}` isn't supported on {sys.platform} -- only macOS "
@@ -1665,11 +1920,17 @@ def cmd_remind(args):
             root = _resolve_agent_repo(args)
             if root is None:
                 return 1
-            return _interval_service_install(kind, "remind", root, ["remind", "check"],
-                                              args.interval_minutes,
-                                              "kb remind -- notify about due TODOs")
+            rc, ok, msg = reminders_install(root, args.interval_minutes)
+            if rc == 0:
+                _print_result(ok, msg)
+            return rc
         if args.action == "uninstall":
-            return _interval_service_uninstall(kind, "remind")
+            rc = _interval_service_uninstall(kind, "remind")
+            app = _notifier_app_path()
+            if sys.platform == "darwin" and os.path.isdir(app):
+                shutil.rmtree(app)
+                print(f"removed {app}")
+            return rc
         return _interval_service_status(kind, "remind", "kb remind install")
 
     if not shutil.which("bd"):
@@ -1829,6 +2090,9 @@ def hook_managed_python(content):
 # brew formula names for the always-checked tools that aren't declared by a
 # sync source's SOURCE_META (those declare their own "brew_formula").
 BUILTIN_BREW_FORMULAS = {"sops": "sops", "rg": "ripgrep", "fzf": "fzf"}
+if sys.platform == "darwin":
+    # desktop notifications for `kb remind` -- see build_notifier_app()
+    BUILTIN_BREW_FORMULAS["terminal-notifier"] = "terminal-notifier"
 
 
 def missing_deps_with_formulas(tools, sync_sources):
@@ -2173,10 +2437,12 @@ def cmd_setup(args):
                     with contextlib.redirect_stdout(out):
                         rc = _interval_service_install(kind, "remind", root, ["remind", "check"], 5,
                                                        "kb remind -- notify about due TODOs")
-                    ok.append("installed the TODO reminder check (every 5 minutes)" if rc == 0
-                              else "TODO reminder install failed")
                     if rc != 0:
                         todo.append(f"kb remind install failed: {out.getvalue().strip()}")
+                    else:
+                        ok.append("installed the TODO reminder check (every 5 minutes)")
+                        notified, note = finish_reminder_install()
+                        (ok if notified else todo).append(note.replace("\n", "\n         "))
                 else:
                     todo.append(reminder_msg)
             else:
@@ -2534,14 +2800,15 @@ def _service_status(kind, agent_name):
     return 0 if info["running"] else 1
 
 
-def _sync_interval_minutes(kind):
-    """Minutes between runs of an installed sync service, or None if it can't be read."""
+def _timer_interval_minutes(kind, name):
+    """Minutes between runs of an installed interval service (sync, remind), or None
+    if it can't be read."""
     try:
         if kind == "launchd":
             import plistlib
-            with open(_agent_launchd_plist_path("sync"), "rb") as f:
+            with open(_agent_launchd_plist_path(name), "rb") as f:
                 return plistlib.load(f).get("StartInterval", 0) // 60 or None
-        with open(_agent_systemd_timer_path("sync"), encoding="utf-8") as f:
+        with open(_agent_systemd_timer_path(name), encoding="utf-8") as f:
             m = re.search(r"^OnUnitActiveSec=(\d+)min", f.read(), re.M)
         return int(m.group(1)) if m else None
     except (OSError, ValueError):
@@ -2559,7 +2826,7 @@ def service_info():
     for name in AGENTS:
         out[name] = _service_state(kind, name)
     if out["sync"]["installed"]:
-        out["sync"]["interval_minutes"] = _sync_interval_minutes(kind)
+        out["sync"]["interval_minutes"] = _timer_interval_minutes(kind, "sync")
     return out
 
 
@@ -3475,13 +3742,14 @@ def main():
             "  kb todo -a \"review the vendor email\" --due 'tomorrow 9am'\n"
             "  kb remind                           what's due right now\n"
             "  kb remind install                   check every 5 minutes, notify on due\n"
+            "  kb remind test                      send a test notification (and say how to fix it if not)\n"
             "  kb todo snooze <id> 1h              hide it, remind me again in an hour\n"
             "  kb remind status | uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("action", nargs="?", default="list",
-                    choices=["list", "check", "install", "uninstall", "status"])
+                    choices=["list", "check", "test", "install", "uninstall", "status"])
     p.add_argument("--interval-minutes", type=int, default=5, metavar="MIN",
                     help="how often to run `kb remind check` (default: 5; install only)")
     p.add_argument("--repeat-hours", type=float, default=4, metavar="H",

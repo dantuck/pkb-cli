@@ -3,6 +3,8 @@ what counts as due, the announce-once-then-repeat state, and `kb remind check`.
 bd and the desktop notifier are stubbed; nothing here touches a real beads database."""
 import io
 import os
+import shutil
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -176,6 +178,7 @@ class NotifyTest(unittest.TestCase):
     def test_text_is_passed_as_argv_not_interpolated_into_the_script(self):
         evil = 'x" & do shell script "touch /tmp/pwned" & "'
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
+                mock.patch.object(kb_cli, "_notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             self.assertTrue(kb_cli.notify("title", evil))
@@ -185,8 +188,161 @@ class NotifyTest(unittest.TestCase):
 
     def test_returns_false_without_a_notifier(self):
         with mock.patch.object(kb_cli.sys, "platform", "linux"), \
+                mock.patch.object(kb_cli, "_notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value=None):
             self.assertFalse(kb_cli.notify("t", "m"))
+            self.assertEqual(kb_cli.notify_status("t", "m"), "unavailable")
+
+
+class NotifierTest(unittest.TestCase):
+    def run_status(self, code, **kwargs):
+        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+                mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=code)) as run:
+            return kb_cli.notify_status("title", "msg", **kwargs), run
+
+    def test_notifier_gets_text_as_separate_argv_entries(self):
+        evil = '"; rm -rf ~ #'
+        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+                mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            self.assertEqual(kb_cli.notify_status("title", evil, group="g"), "sent")
+        self.assertEqual(run.call_args.args[0],
+                         ["/n/terminal-notifier", "-title", "title", "-message", evil, "-group", "g"])
+
+    def test_exit_3_means_denied_and_fallback_false_does_not_hide_it(self):
+        status, run = self.run_status(3, fallback=False)
+        self.assertEqual(status, "denied")
+        self.assertEqual(run.call_count, 1)  # no osascript attempt
+
+    def test_denied_falls_back_to_osascript_for_real_reminders(self):
+        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+                mock.patch.object(kb_cli.sys, "platform", "darwin"), \
+                mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
+                mock.patch.object(kb_cli.subprocess, "run",
+                                  side_effect=[mock.Mock(returncode=3), mock.Mock(returncode=0)]) as run:
+            self.assertEqual(kb_cli.notify_status("t", "m"), "sent")
+        self.assertEqual(run.call_args_list[1].args[0][0], "osascript")
+
+    def test_authorization_parsing_and_allowed(self):
+        out = "terminal-notifier 3.1.0\n  authorization       denied\n  alerts              enabled\n"
+        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n"), \
+                mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(stdout=out)):
+            self.assertEqual(kb_cli.notifier_authorization(), "denied")
+        with mock.patch.object(kb_cli, "_notifier_binary", return_value=None):
+            self.assertIsNone(kb_cli.notifier_authorization())
+        self.assertTrue(kb_cli.notifier_allowed("authorized"))
+        self.assertFalse(kb_cli.notifier_allowed("denied"))
+        self.assertFalse(kb_cli.notifier_allowed("not requested yet"))
+        self.assertFalse(kb_cli.notifier_allowed(None))
+
+    def test_test_notification_reports_each_outcome(self):
+        cases = {"sent": True, "denied": False, "failed": False, "unavailable": False}
+        for status, expected in cases.items():
+            with mock.patch.object(kb_cli, "notify_status", return_value=status), \
+                    mock.patch.object(kb_cli, "open_notification_settings") as opened:
+                ok, msg = kb_cli.send_test_notification()
+            self.assertEqual(ok, expected, status)
+            self.assertTrue(msg)
+            self.assertEqual(opened.called, status == "denied")  # denial opens System Settings
+            if status == "denied":
+                self.assertIn("System Settings", msg)
+                self.assertIn("kb remind test", msg)
+                self.assertIn(kb_cli.NOTIFIER_BUNDLE_ID, msg)
+
+    def test_finish_install_builds_the_app_then_tests(self):
+        with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
+                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value="/tn.app"), \
+                mock.patch.object(kb_cli, "build_notifier_app", return_value=(True, "built it")) as build, \
+                mock.patch.object(kb_cli, "send_test_notification", return_value=(False, "NOT ALLOWED")):
+            ok, msg = kb_cli.finish_reminder_install()
+        build.assert_called_once()
+        self.assertFalse(ok)
+        self.assertEqual(msg.splitlines(), ["built it", "NOT ALLOWED"])
+
+    def test_finish_install_explains_the_osascript_fallback_without_terminal_notifier(self):
+        with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
+                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value=None), \
+                mock.patch.object(kb_cli, "build_notifier_app") as build, \
+                mock.patch.object(kb_cli, "send_test_notification", return_value=(True, "sent")):
+            ok, msg = kb_cli.finish_reminder_install()
+        build.assert_not_called()
+        self.assertIn("brew install terminal-notifier", msg)
+
+    def test_remind_test_action_sets_the_exit_code(self):
+        for ok, code in ((True, 0), (False, 1)):
+            with mock.patch.object(kb_cli, "send_test_notification", return_value=(ok, "m")), \
+                    redirect_stdout(io.StringIO()), mock.patch.object(kb_cli.sys, "stderr", io.StringIO()):
+                self.assertEqual(kb_cli.cmd_remind(mock.Mock(action="test")), code)
+
+
+@unittest.skipUnless(sys.platform == "darwin" and shutil.which("terminal-notifier") and shutil.which("codesign"),
+                     "needs macOS with terminal-notifier installed")
+class BuildNotifierAppTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.dict(os.environ, {"HOME": tmp.name})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.app = os.path.join(tmp.name, "Applications", "kb reminders.app")
+
+    def test_builds_a_branded_copy_and_skips_an_identical_rebuild(self):
+        import plistlib
+        ok, msg = kb_cli.build_notifier_app()
+        self.assertTrue(ok, msg)
+        with open(os.path.join(self.app, "Contents", "Info.plist"), "rb") as f:
+            info = plistlib.load(f)
+        self.assertEqual(info["CFBundleIdentifier"], kb_cli.NOTIFIER_BUNDLE_ID)
+        self.assertEqual(info["CFBundleName"], "kb reminders")
+        self.assertTrue(os.path.exists(os.path.join(self.app, "Contents", "Resources", "kb-reminder.icns")))
+        self.assertTrue(os.access(kb_cli._notifier_binary(), os.X_OK))
+        before = os.stat(os.path.join(self.app, "Contents", "Info.plist")).st_mtime_ns
+        ok, msg = kb_cli.build_notifier_app()
+        self.assertTrue(ok)
+        self.assertIn("up to date", msg)  # re-signing would risk losing a granted permission
+        self.assertEqual(before, os.stat(os.path.join(self.app, "Contents", "Info.plist")).st_mtime_ns)
+
+
+class RemindersInfoTest(unittest.TestCase):
+    def info(self, kind, state, auth="denied", built=True, stock=True):
+        with mock.patch.object(kb_cli, "_service_kind", return_value=kind), \
+                mock.patch.object(kb_cli, "_service_state", return_value=state), \
+                mock.patch.object(kb_cli, "reminder_status_line", return_value=(False, "msg")), \
+                mock.patch.object(kb_cli, "_timer_interval_minutes", return_value=5), \
+                mock.patch.object(kb_cli, "notifier_authorization", return_value=auth), \
+                mock.patch.object(kb_cli, "_notifier_binary", return_value="/n" if built else None), \
+                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value="/t.app" if stock else None):
+            return kb_cli.reminders_info()
+
+    def test_unsupported_platform(self):
+        self.assertEqual(self.info(None, {}), {"supported": False})
+
+    def test_macos_reports_permission_and_interval(self):
+        info = self.info("launchd", {"installed": True, "running": False, "detail": None})
+        self.assertEqual((info["installed"], info["interval_minutes"]), (True, 5))
+        self.assertEqual(info["notifier"], {"app_built": True, "terminal_notifier": True,
+                                            "authorization": "denied", "allowed": False})
+        info = self.info("launchd", {"installed": True, "running": False, "detail": None}, auth="authorized")
+        self.assertTrue(info["notifier"]["allowed"])
+
+    def test_not_installed_has_no_interval_and_linux_has_no_notifier_block(self):
+        info = self.info("launchd", {"installed": False, "running": False, "detail": "not installed"})
+        self.assertIsNone(info["interval_minutes"])
+        self.assertNotIn("notifier", self.info("systemd", {"installed": True, "running": True, "detail": None}))
+
+
+class OpenSettingsTest(unittest.TestCase):
+    def test_only_opens_for_a_terminal_unless_forced(self):
+        with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
+                mock.patch.object(kb_cli.sys.stdout, "isatty", return_value=False), \
+                mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            self.assertFalse(kb_cli.open_notification_settings())
+            run.assert_not_called()
+            self.assertTrue(kb_cli.open_notification_settings(force=True))
+            self.assertEqual(run.call_args.args[0], ["open", kb_cli.NOTIFICATION_SETTINGS_URL])
+
+    def test_never_on_linux(self):
+        with mock.patch.object(kb_cli.sys, "platform", "linux"):
+            self.assertFalse(kb_cli.open_notification_settings(force=True))
 
 
 class TodoWordCommandTest(unittest.TestCase):
@@ -218,10 +374,29 @@ class TodoWordCommandTest(unittest.TestCase):
 
 
 class ReminderStatusLineTest(unittest.TestCase):
-    def status(self, kind, state, have_notifier=True):
+    def status(self, kind, state, have_notifier=True, bundle=None, stock_app=None):
+        """bundle: the built kb reminders app's authorization string (None = not built)."""
         with mock.patch.object(kb_cli, "_service_state", return_value=state), \
-                mock.patch.object(kb_cli.shutil, "which", return_value="/x" if have_notifier else None):
+                mock.patch.object(kb_cli.shutil, "which", return_value="/x" if have_notifier else None), \
+                mock.patch.object(kb_cli, "_notifier_binary", return_value="/n" if bundle else None), \
+                mock.patch.object(kb_cli, "notifier_authorization", return_value=bundle), \
+                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value=stock_app):
             return kb_cli.reminder_status_line(kind)
+
+    def test_built_app_needs_notification_permission(self):
+        up = {"installed": True, "running": False, "detail": None}
+        self.assertTrue(self.status("launchd", up, bundle="authorized")[0])
+        for auth in ("denied", "not requested yet"):
+            ok, msg = self.status("launchd", up, bundle=auth)
+            self.assertFalse(ok, auth)
+            self.assertIn("kb remind test", msg)
+            self.assertIn(auth, msg)
+
+    def test_stock_notifier_without_the_built_app_points_at_install(self):
+        ok, msg = self.status("launchd", {"installed": True, "running": False, "detail": None},
+                              stock_app="/opt/tn.app")
+        self.assertFalse(ok)
+        self.assertIn("kb remind install", msg)
 
     def test_not_installed_is_optional_and_names_the_command(self):
         ok, msg = self.status("launchd", {"installed": False, "running": False, "detail": "not installed"})

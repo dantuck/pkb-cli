@@ -126,7 +126,7 @@ kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
 kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
 kb todo unsnooze <id>             end a snooze early
 kb todo due <id> <when>|none      set or clear a TODO's reminder time
-kb remind [check|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
+kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware

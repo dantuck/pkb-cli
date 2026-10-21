@@ -98,8 +98,9 @@ When the time comes you get a desktop notification. Not now? Snooze it:
 kb todo snooze <id> 1h
 ```
 
-On macOS, allow notifications for **Script Editor** in System Settings →
-Notifications if none appear. `kb doctor` reports whether the reminder check
+On macOS, `kb remind install` sends a test notification, and if it's blocked
+tells you to allow **kb reminders** in System Settings → Notifications
+(`kb remind test` re-checks). `kb doctor` reports whether the reminder check
 is scheduled and working. More in [how to get reminded about a
 TODO](../how-to/get-reminded-about-a-todo.md).
 
