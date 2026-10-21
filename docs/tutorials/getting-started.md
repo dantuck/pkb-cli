@@ -42,7 +42,9 @@ kb setup
 ```
 
 `kb setup` installs a pre-commit validation hook, builds the search index, and
-sets up a local `bd` (beads) TODO store if `bd` is on your `PATH`. You don't
+sets up a local `bd` (beads) TODO store if `bd` is on your `PATH`. If `bd` is
+there it also offers, defaulting to no, to check for due TODOs every few minutes
+and send a desktop notification (see step 6). You don't
 need to create `tutorials/`, `how-to/`, `reference/`, or `explanation/`
 yourself — `kb new` creates each on first use.
 
@@ -73,6 +75,33 @@ kb journal
 Opens (creating if needed) today's `journal/YYYY/MM/YYYY-MM-DD.md` file, and
 prints an "on this day" section showing entries from a week ago, a month ago,
 and this date in earlier years, if any exist.
+
+## 6. Track a TODO and get reminded
+
+TODOs aren't only for code. Add one with a reminder time:
+
+```bash
+kb todo -a "review the vendor email" --due "tomorrow 9am"
+```
+
+`--due` takes `30m`, `2h`, `3d`, `friday`, `5pm`, `tomorrow 9am`, or a date.
+`kb remind` lists whatever has come due. To be notified without having to
+look, turn on the background check (setup offers this too; it needs `bd`):
+
+```bash
+kb remind install
+```
+
+When the time comes you get a desktop notification. Not now? Snooze it:
+
+```bash
+kb todo snooze <id> 1h
+```
+
+On macOS, allow notifications for **Script Editor** in System Settings →
+Notifications if none appear. `kb doctor` reports whether the reminder check
+is scheduled and working. More in [how to get reminded about a
+TODO](../how-to/get-reminded-about-a-todo.md).
 
 ## Where to go next
 
