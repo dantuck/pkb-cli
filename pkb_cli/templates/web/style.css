@@ -17,13 +17,13 @@
   --danger-soft: rgba(220, 38, 38, 0.08);
   --danger-text: #b91c1c;
   --ok: #16a34a;
-  --shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.05), 0 1px 1px rgba(20, 20, 30, 0.03);
-  --shadow-md: 0 6px 20px rgba(20, 20, 30, 0.08), 0 2px 6px rgba(20, 20, 30, 0.05);
+  --shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.04);
+  --shadow-md: 0 8px 28px rgba(20, 20, 30, 0.08);
   --shadow-lg: 0 20px 60px rgba(10, 10, 20, 0.22), 0 4px 16px rgba(10, 10, 20, 0.1);
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xs: 999px;
   --ease: cubic-bezier(.2, .8, .2, 1);
   --glass-bg: rgba(255, 255, 255, 0.6);
   --glass-border: rgba(255, 255, 255, 0.5);
@@ -275,6 +275,9 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   padding: 0.1rem 0.5rem; border-radius: var(--radius-xs);
 }
 #todo-list .row-badge { cursor: pointer; transition: background 0.1s ease, color 0.1s ease; }
+.due-badge.overdue { background: var(--danger-soft, var(--accent-soft)); color: var(--danger-text); }
+.due-badge.snoozed { opacity: 0.75; font-style: italic; }
+#todo-list li.snoozed .todo-title { opacity: 0.6; }
 #todo-list .row-badge.active { background: var(--accent-soft); color: var(--accent-text); }
 
 #todo-chip-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0 1.1rem 0.6rem; }
@@ -317,6 +320,16 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   white-space: pre-wrap; font-size: 0.82rem; color: var(--muted); margin: 0 0 0.3rem;
   background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.7rem; max-height: 40vh; overflow-y: auto;
 }
+/* The drawer is a flex column (docked: overflow hidden), so the list and
+   detail wrappers must be flex children that can shrink -- otherwise the
+   docked drawer never gets its own scrollbar. */
+#todo-list-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#todo-detail { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#todo-detail .todo-detail-head { flex-shrink: 0; }
+.todo-detail-head { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.7rem; }
+.todo-detail-head .icon-btn { flex-shrink: 0; margin-left: -0.4rem; }
+.todo-detail-head .todo-detail-title { flex: 1; min-width: 0; font-size: 0.95rem; color: var(--heading); overflow-wrap: anywhere; }
+#todo-detail .edit-panel { margin-top: 0; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .todo-description { width: 100%; box-sizing: border-box; font-size: 0.85rem; resize: vertical; }
 
 #todo-filter-row { display: flex; align-items: center; gap: 0.6rem; padding: 0 1.1rem 0.6rem; }
@@ -708,6 +721,217 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .palette-msg {
   color: var(--muted); font-size: 0.88rem; margin: 0;
   padding: 1.4rem 1.2rem; display: flex; align-items: center; justify-content: center; text-align: center;
+}
+
+/* Feed rows, memos-style: flat entries with the full snippet visible --
+   date/type on top, then title, body, tags -- separated by hairlines. */
+#feed { gap: 0; }
+#feed > li {
+  display: block; padding: 1.1rem 0.9rem 1.15rem; border: none; border-bottom: 1px solid var(--divider);
+  border-radius: 0; background: transparent; box-shadow: none; transform: none;
+  transition: background 0.12s ease;
+}
+#feed > li:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); box-shadow: none; border-color: var(--divider); transform: none; }
+#feed > li:active { transform: none; box-shadow: none; }
+#feed > li .title { margin: 0.2rem 0 0; font-size: 1.05rem; }
+#feed > li .snippet {
+  margin: 0.45rem 0 0; font-size: 0.92rem; color: var(--text); max-height: none; overflow: visible;
+  -webkit-mask-image: none; mask-image: none;
+}
+#feed > li .snippet ul, #feed > li .snippet ol { margin: 0.3rem 0; }
+#feed > li .tags-row { margin-top: 0.7rem; }
+
+/* Todos: flat rows too -- dot carries priority, hairline between rows. */
+#todo-list { gap: 0; padding-top: 0.2rem; }
+#todo-list li {
+  padding: 0.6rem 0.4rem; border: none; border-bottom: 1px solid var(--divider); border-radius: 0;
+  background: transparent;
+}
+#todo-list li:hover { background: var(--surface-2); box-shadow: none; transform: none; }
+#todo-list li.pri-high, #todo-list li.pri-mid, #todo-list li.pri-low, #todo-list li.pri-closed { border-left: none; }
+
+@media (max-width: 560px) {
+  #header-row { flex-wrap: wrap; }
+  #header-row > span { flex-wrap: wrap; gap: 0.3rem; }
+}
+
+/* Entry panel docked inside its feed row (see dockEntryPanel in app.js). */
+#feed > li { scroll-margin-top: 12rem; position: relative; }
+
+.modal-panel.inline {
+  position: static; width: auto; min-height: 0; max-height: none; display: none; cursor: default;
+  margin-top: 0.5rem; transform: none; transition: none; overflow: visible;
+  background: transparent; border: none; border-radius: 0;
+  box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.modal-panel.inline.open { display: flex; opacity: 1; transform: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.modal-panel.inline .modal-panel-header { position: absolute; top: 0.7rem; right: 0.8rem; padding: 0; border-bottom: none; }
+.modal-panel.inline .modal-panel-header .stamp { display: none; }
+.modal-panel.inline .modal-panel-body { padding: 0.2rem 0 0; overflow: visible; }
+
+/* While the entry body is still loading the row keeps showing its snippet;
+   the panel only appears once it can fill in -- avoids a collapse-then-grow jump. */
+.modal-panel.inline.loading { display: none; }
+#feed > li.expanded .snippet { display: none; }
+#feed > li.editing > .title, #feed > li.editing > .tags-row { display: none; }
+#feed > li.editing .edit-panel .edit-title { margin-top: 0; }
+
+.modal-panel.inline .modal-panel-body .md-view > :first-child { margin-top: 0; }
+/* Editor */
+.view-editable:not(.is-readonly) { cursor: text; }
+.rich-edit { outline: none; min-height: 4rem; padding: 0.5rem 0.2rem; }
+.rich-edit p:empty, .rich-edit div:empty { display: none; }
+.rich-edit:empty::before { content: "Start writing..."; color: var(--muted); }
+.rich-edit > :first-child { margin-top: 0; }
+
+.edit-panel { container-type: inline-size; }
+.edit-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.edit-split .edit-live {
+  margin: 0; padding: 0.5rem 0.2rem 0.5rem 1rem; border: none; border-left: 2px solid var(--divider);
+}
+.edit-split.mode-split .edit-live:empty::before { content: "Preview"; color: var(--muted); }
+@container (min-width: 640px) {
+  .edit-split.mode-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+.edit-tabs { align-items: center; }
+.md-toolbar { display: inline-flex; align-items: center; gap: 0.1rem; margin-left: auto; padding-bottom: 0.15rem; flex-wrap: wrap; }
+.md-toolbar-bare { display: flex; margin: 0 0 0.3rem; }
+.md-tool {
+  font: inherit; font-size: 0.78rem; min-width: 1.8rem; height: 1.7rem; padding: 0 0.4rem; border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--muted); cursor: pointer; transition: background 0.1s ease, color 0.1s ease;
+}
+.md-tool:hover { background: var(--surface-2); color: var(--heading); }
+.md-tool.active, .md-tool.active:hover { background: var(--accent-soft); color: var(--accent-text); }
+.md-tool-bold { font-weight: 800; }
+.md-tool-italic { font-style: italic; font-family: Georgia, serif; }
+.md-tool-code, .md-tool-codeblock { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; }
+
+.edit-panel .edit-form { gap: 0.6rem; }
+.edit-panel .edit-title {
+  font-size: 1.15rem; font-weight: 650; letter-spacing: -0.01em; color: var(--heading);
+  border-color: transparent; background: transparent; padding: 0.3rem 0.4rem; margin: 0 0 0.1rem -0.4rem; width: calc(100% + 0.4rem);
+}
+.edit-panel .edit-title:hover { border-color: var(--border); }
+.edit-panel .edit-body {
+  min-height: 4rem; resize: none; overflow: hidden; padding: 0.5rem 0.2rem; margin: 0;
+  font: inherit; font-size: 0.95rem; line-height: 1.65; color: var(--text);
+  background: transparent; border: none; border-radius: 0;
+}
+.edit-panel .edit-body:focus { box-shadow: none; }
+.edit-panel .edit-body + .md-view { min-height: 8rem; }
+.edit-tabs { display: flex; gap: 1.1rem; border-bottom: 1px solid var(--divider); }
+.edit-tab {
+  font: inherit; font-size: 0.82rem; color: var(--muted); background: none; border: none; cursor: pointer;
+  padding: 0.25rem 0; margin-bottom: -1px; border-bottom: 2px solid transparent;
+}
+.edit-tab:hover { color: var(--text); }
+.edit-tab.active { color: var(--heading); border-bottom-color: var(--accent); font-weight: 600; }
+.edit-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; margin-top: 0.3rem; }
+.edit-actions .btn { padding: 0.3rem 0.9rem; font-size: 0.85rem; }
+.edit-actions .btn-primary:disabled { background: var(--surface-2); color: var(--muted); box-shadow: none; opacity: 1; }
+.edit-actions .edit-hint { margin-left: auto; color: var(--muted); font-size: 0.75rem; }
+.edit-hint kbd {
+  font: 0.7rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 0.3rem; margin-right: 0.15rem;
+}
+.edit-panel .edit-msg.err, .header-msg.err { color: var(--danger-text); }
+.header-msg { font-size: 0.78rem; color: var(--ok); margin-right: 0.4rem; }
+.edit-panel .edit-form .row + .row { border-top: none; padding-top: 0.2rem; }
+.edit-panel .edit-form input[type=text]:not(.edit-title) { background: transparent; border-color: var(--border); }
+.modal-panel.inline .edit-panel.editing { padding-left: 0; border-left: none; }
+.edit-hint kbd { background: transparent; }
+
+/* Todo quick-add: one field-like card; focus shows on the card, not on the
+   inner input, and the controls stay on a single line. */
+#todo-add-row { gap: 0.4rem; padding: 0.6rem 0.7rem; background: var(--surface-2); border-color: transparent; }
+#todo-add-row #todo-add-title, #todo-add-row #todo-add-title:focus {
+  outline: none; box-shadow: none; border: none; background: transparent; padding: 0.2rem 0.1rem;
+}
+#todo-add-row #todo-add-due, #todo-add-row #todo-add-due:focus {
+  outline: none; box-shadow: none; border: none; background: transparent; padding: 0.1rem 0.1rem; font-size: 0.82rem;
+}
+.todo-add-controls { flex-wrap: nowrap; gap: 0.35rem; }
+.todo-add-controls select {
+  padding: 0.28rem 1.5rem 0.28rem 0.5rem; font-size: 0.8rem; background-color: var(--surface);
+  background-position: calc(100% - 0.75rem) 52%, calc(100% - 0.45rem) 52%;
+}
+.todo-add-controls .btn { padding: 0.3rem 0.8rem; font-size: 0.82rem; }
+.todo-add-controls .link-btn { font-size: 0.8rem; white-space: nowrap; }
+
+/* ---------- modern dashboard layout ----------
+   Narrow: single column, Todos/Inbox are slide-over drawers.
+   >= 820px: feed becomes a multi-column masonry that fills the width.
+   >= 1100px: Todos docks as an always-visible right panel.
+   >= 1500px: Inbox docks as a left panel too; the feed fills the middle.
+   Docked panels are position:fixed so the sticky header keeps its layout;
+   body padding reserves the space. Breakpoints are mirrored in app.js
+   (dockTodos). */
+.side-drawer .drawer-close { flex-shrink: 0; }
+#sidebar { display: none; }
+.side-brand { display: none; align-items: center; gap: 0.45rem; margin: 0.5rem 0 1.6rem 0.7rem; font-size: 1.3rem; font-weight: 700; letter-spacing: -0.025em; color: var(--heading); }
+.side-brand::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 999px; background: var(--accent); }
+.side-nav {
+  display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left;
+  font: inherit; font-size: 0.9rem; color: var(--muted); background: none; border: none; cursor: pointer;
+  padding: 0.4rem 0.7rem; border-radius: var(--radius-sm);
+}
+.side-nav:hover { background: var(--surface-2); color: var(--text); }
+.side-nav.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.side-label { margin: 1.1rem 0 0.3rem 0.7rem; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.side-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0 0.4rem; }
+.pill-btn, .type-chip { border-radius: 999px; }
+.type-chip.active { box-shadow: 0 1px 6px color-mix(in srgb, var(--accent) 40%, transparent); }
+h1 { font-size: 1.3rem; }
+@media (min-width: 820px) {
+  body { max-width: 1800px; padding-left: 2rem; padding-right: 2rem; }
+  #header-row, #status, #capture-slot, #type-row, #filter-bar, #feed, #feed-empty { max-width: 820px; margin-left: auto; margin-right: auto; }
+  #site-header { margin-left: -2rem; margin-right: -2rem; padding-left: 2rem; padding-right: 2rem; }
+  /* collapsed one-line capture bar; expands over the feed while focused */
+  #capture-slot { height: calc(3.5rem + 2px); }
+  #site-header::before { height: 100%; }
+  #site-header { padding-bottom: 0.9rem; }
+  #capture { box-shadow: var(--shadow-md); }
+  #status.ok { color: var(--muted); }
+}
+@media (min-width: 1100px) {
+  :root { --dock-w: 360px; --gap: 1.25rem; --body-max: 1800px; }
+  body.dock-todos { padding-right: calc(var(--dock-w) + 2 * var(--gap)); }
+  body.dock-todos #site-header::before { right: calc(var(--dock-w) + 2 * var(--gap)); }
+  #site-header { margin-right: calc(-1 * (var(--dock-w) + 2 * var(--gap))); padding-right: calc(var(--dock-w) + 2 * var(--gap)); }
+  .side-drawer.docked {
+    position: fixed; top: 1rem; bottom: 1rem; height: auto; width: var(--dock-w);
+    transform: none; transition: none; z-index: 30; overflow: hidden;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md); backdrop-filter: none; -webkit-backdrop-filter: none;
+    padding: 1.1rem 1.1rem 0.6rem;
+  }
+  .side-drawer.docked .side-drawer-header { position: static; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .side-drawer.docked .drawer-close { display: none; }
+  .side-drawer.docked #todo-filter-row, .side-drawer.docked #todo-chip-filters { padding-left: 0; padding-right: 0; }
+  .side-drawer.docked #todo-list, .side-drawer.docked #inbox-list { margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; }
+  .side-drawer.docked #todo-list li { padding: 0.55rem 0.7rem; }
+  .side-drawer.docked #todo-add-row { margin: 0.6rem 0 0.5rem; }
+  .side-drawer.docked #todo-list, .side-drawer.docked #inbox-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .side-drawer.docked #todo-add-row { flex-shrink: 0; }
+  .side-drawer.docked.dock-right { right: calc(max(0px, (100% - var(--body-max)) / 2) + var(--gap)); }
+}
+@media (min-width: 1400px) {
+  :root { --side-w: 220px; }
+  body.dock-todos { padding-left: calc(var(--side-w) + 2 * var(--gap)); }
+  body.dock-todos #site-header::before { left: calc(var(--side-w) + 2 * var(--gap)); }
+  body.dock-todos #site-header { margin-left: calc(-1 * (var(--side-w) + 2 * var(--gap))); padding-left: calc(var(--side-w) + 2 * var(--gap)); }
+  #sidebar {
+    display: flex; flex-direction: column; gap: 0.1rem; position: fixed; z-index: 30; top: 1rem; bottom: 1rem;
+    width: var(--side-w); left: calc(max(0px, (100% - var(--body-max)) / 2) + var(--gap));
+    overflow-y: auto; padding: 0 0.2rem;
+  }
+  .pill-inbox, #type-row, #header-row h1 { display: none; }
+  #header-row { justify-content: flex-end; }
+  .side-brand { display: flex; }
+}
+@media (min-width: 1900px) {
+  :root { --dock-w: 400px; }
 }
 
 [hidden] { display: none !important; }

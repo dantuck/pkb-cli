@@ -451,6 +451,7 @@ def api_todo_create(h, root):
             root, title, description=payload.get("description"),
             priority=str(payload.get("priority", "2")),
             issue_type=payload.get("type", "task"), labels=payload.get("labels"),
+            due=(payload.get("due") or "").strip() or None,
         )
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
@@ -460,9 +461,9 @@ def api_todo_create(h, root):
 
 @route("PATCH", "/api/todo/{issue_id}")
 def api_todo_update(h, root, issue_id):
-    """Edit priority/type/description/assignee, or add/remove one label, on an
-    existing todo -- the fields bd_create sets at creation time but
-    bd_action's show/close/comment/reopen never touch."""
+    """Edit priority/type/description/assignee/due date, or add/remove one label, on
+    an existing todo -- the fields bd_create sets at creation time but
+    bd_action's show/close/comment/reopen never touch. due="" clears the due date."""
     kb = _kb()
     if not kb.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
@@ -474,14 +475,15 @@ def api_todo_update(h, root, issue_id):
     assignee = payload.get("assignee")
     add_label = payload.get("add_label")
     remove_label = payload.get("remove_label")
+    due = payload.get("due")
     if not any([priority is not None, issue_type is not None, description is not None,
-                assignee is not None, add_label, remove_label]):
+                assignee is not None, add_label, remove_label, due is not None]):
         h.send_json({"error": "nothing to update"}, status=400)
         return
     try:
         message = kb.bd_update(root, issue_id, priority=priority, issue_type=issue_type,
                                 description=description, assignee=assignee,
-                                add_label=add_label, remove_label=remove_label)
+                                add_label=add_label, remove_label=remove_label, due=due)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -568,12 +570,24 @@ def api_todo_deps_remove(h, root, issue_id, target_id):
 
 @route("POST", "/api/todo/{issue_id}/{action}")
 def api_todo_action(h, root, issue_id, action):
-    if action not in ("show", "close", "comment", "reopen"):
+    if action not in ("show", "close", "comment", "reopen", "snooze", "unsnooze"):
         h.send_json({"error": f"unknown action '{action}'"}, status=404)
         return
     kb = _kb()
     if not kb.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
+        return
+    if action in ("snooze", "unsnooze"):
+        until = ((h.read_json() or {}).get("until") or "").strip() if action == "snooze" else None
+        if action == "snooze" and not until:
+            h.send_json({"error": "missing until"}, status=400)
+            return
+        try:
+            message = kb.bd_snooze(root, issue_id, until) if action == "snooze" else kb.bd_unsnooze(root, issue_id)
+        except RuntimeError as e:
+            h.send_json({"error": str(e)}, status=502)
+            return
+        h.send_json({"message": message})
         return
     comment_text = None
     if action == "comment":

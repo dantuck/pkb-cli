@@ -136,6 +136,29 @@ class KbWebTest(unittest.TestCase):
         self.assertEqual((data["version"], data["sources"], data["busy"], data["root"]),
                          ("9.9.9", ["memos"], False, self.root))
 
+    # ---------- todo reminders ----------
+
+    def test_todo_snooze_and_unsnooze_route_to_bd_helpers(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.bd_available.return_value = True
+            kb.return_value.bd_snooze.return_value = "snoozed"
+            kb.return_value.bd_unsnooze.return_value = "woken"
+            self.assertEqual(self.json("POST", "/api/todo/t-1/snooze", {"until": "1h"}), (200, {"message": "snoozed"}))
+            kb.return_value.bd_snooze.assert_called_once_with(self.root, "t-1", "1h")
+            self.assertEqual(self.json("POST", "/api/todo/t-1/snooze", {})[0], 400)
+            self.assertEqual(self.json("POST", "/api/todo/t-1/unsnooze", {}), (200, {"message": "woken"}))
+            kb.return_value.bd_unsnooze.assert_called_once_with(self.root, "t-1")
+
+    def test_todo_due_flows_through_create_and_patch(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.bd_available.return_value = True
+            kb.return_value.bd_create.return_value = "created"
+            kb.return_value.bd_update.return_value = "updated"
+            self.assertEqual(self.json("POST", "/api/todo", {"title": "email", "due": " tomorrow "})[0], 201)
+            self.assertEqual(kb.return_value.bd_create.call_args.kwargs["due"], "tomorrow")
+            self.assertEqual(self.json("PATCH", "/api/todo/t-1", {"due": ""})[0], 200)  # "" clears, still an update
+            self.assertEqual(kb.return_value.bd_update.call_args.kwargs["due"], "")
+
     def test_mutating_requests_refuse_cross_origin(self):
         for headers in ({"Origin": "https://evil.example"}, {"Host": "evil.example"}):
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

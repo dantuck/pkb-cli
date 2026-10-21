@@ -7,7 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23ff8c00'/%3E%3Cpath d='M7 5h7a3 3 0 0 1 3 3v11H10a3 3 0 0 1-3-3z' fill='none' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3Cpath d='M7 16a3 3 0 0 1 3-3h7' fill='none' stroke='white' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
-<body x-data="kbApp()" x-init="init()" x-on:keydown.window="onKeydown($event)" x-on:click.window.capture="handleMediaClick($event)">
+<body :class="{ 'dock-todos': dockTodos }" x-data="kbApp()" x-init="init()" x-on:keydown.window="onKeydown($event)" x-on:click.window.capture="handleMediaClick($event)">
 
 <header id="site-header">
 <div id="header-row">
@@ -17,12 +17,12 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
       New
     </button>
-    <button class="pill-btn" title="Inbox" @click="inboxDrawerOpen = true">
+    <button class="pill-btn pill-inbox" title="Inbox" @click="inboxDrawerOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
       Inbox <span class="pill-count" :class="{ 'pill-count-hidden': !inboxLoaded, 'pill-count-empty': inboxLoaded && !inboxItems.length }"
                   x-text="inboxLoaded ? inboxItems.length : ''"></span>
     </button>
-    <button class="pill-btn" title="Todos" @click="todoDrawerOpen = true">
+    <button class="pill-btn" title="Todos" x-show="!dockTodos" @click="todoDrawerOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       Todos <span class="pill-count" :class="{ 'pill-count-hidden': !todoLoaded, 'pill-count-empty': todoLoaded && !todoItems.length }"
                   x-text="todoLoaded ? todoItems.length : ''"></span>
@@ -57,6 +57,31 @@
 </div>
 </div>
 </header>
+
+<aside id="sidebar" aria-label="Browse">
+  <div class="side-brand">kb</div>
+  <button class="side-nav" @click="inboxDrawerOpen = true">
+    <span>Inbox</span>
+    <span class="pill-count" :class="{ 'pill-count-hidden': !inboxLoaded, 'pill-count-empty': inboxLoaded && !inboxItems.length }"
+          x-text="inboxLoaded ? inboxItems.length : ''"></span>
+  </button>
+  <p class="side-label">Types</p>
+  <button class="side-nav" :class="{ active: !activeType }" @click="activeType && setTypeFilter(activeType)">All</button>
+  <template x-for="t in ALL_TYPES" :key="t">
+    <button class="side-nav" :class="{ active: activeType === t }" @click="setTypeFilter(t)" x-text="t"></button>
+  </template>
+  <template x-if="allTags.length">
+    <div>
+      <p class="side-label">Tags</p>
+      <div class="side-tags">
+        <template x-for="t in allTags" :key="t">
+          <button class="chip-filter" :class="{ active: activeTag === t }"
+                  @click="activeTag === t ? clearTagFilter() : setTagFilter(t)" x-text="t"></button>
+        </template>
+      </div>
+    </div>
+  </template>
+</aside>
 
 <div id="admin-backdrop" :class="{ open: adminOpen }" @click="adminOpen = false"></div>
 <div id="admin-drawer" :class="{ open: adminOpen }" :aria-hidden="!adminOpen" :inert="!adminOpen">
@@ -233,7 +258,7 @@
 <div class="side-drawer" :class="{ open: inboxDrawerOpen }" :aria-hidden="!inboxDrawerOpen" :inert="!inboxDrawerOpen">
   <div class="side-drawer-header">
     <strong>Inbox <span x-text="`(${inboxItems.length})`"></span></strong>
-    <button class="icon-btn" title="Close" @click="inboxDrawerOpen = false">
+    <button class="icon-btn drawer-close" title="Close" @click="inboxDrawerOpen = false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
@@ -261,13 +286,14 @@
 </div>
 
 <div class="drawer-backdrop" :class="{ open: todoDrawerOpen }" @click="todoDrawerOpen = false"></div>
-<div class="side-drawer" :class="{ open: todoDrawerOpen }" :aria-hidden="!todoDrawerOpen" :inert="!todoDrawerOpen">
+<div class="side-drawer dock-right" :class="{ open: todoDrawerOpen, docked: dockTodos }" :aria-hidden="!todoDrawerOpen && !dockTodos" :inert="!todoDrawerOpen && !dockTodos">
   <div class="side-drawer-header">
     <strong>Todos <span x-text="`(${todoItems.length})`"></span></strong>
-    <button class="icon-btn" title="Close" @click="todoDrawerOpen = false">
+    <button class="icon-btn drawer-close" title="Close" @click="todoDrawerOpen = false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
+  <div id="todo-list-view" x-show="!todoModalOpen">
   <div id="todo-filter-row">
     <input type="text" placeholder="filter by title, id, label..." x-model="todoFilter">
     <label class="todo-show-closed">
@@ -283,16 +309,18 @@
   </div>
   <ul id="todo-list">
     <template x-for="item in filteredTodos()" :key="item.id">
-      <li :class="[item.status === 'open' ? 'pri-' + priorityLevel(item.priority) : 'pri-closed', { closed: item.status !== 'open' }]"
+      <li :class="[item.status !== 'closed' ? 'pri-' + priorityLevel(item.priority) : 'pri-closed', { closed: item.status === 'closed', snoozed: isSnoozed(item) }]"
           @click="openTodoModal(item)">
         <span class="pri-dot" :title="`P${item.priority}`"></span>
         <span class="todo-title" x-text="item.title"></span>
         <span class="row-badge" :class="{ active: todoTypeFilter === item.type }" @click.stop="setTodoTypeFilter(item.type)" x-text="item.type"></span>
-        <span class="row-badge" x-show="item.status !== 'open'" x-text="item.status"></span>
-        <button class="icon-btn todo-close" title="Reopen" x-show="item.status !== 'open'" @click.stop="reopenTodo(item)">
+        <span class="row-badge" x-show="item.status === 'closed'" x-text="item.status"></span>
+        <span class="row-badge due-badge" :class="{ overdue: isOverdue(item), snoozed: isSnoozed(item) }"
+              x-show="dueLabel(item)" x-text="dueLabel(item)"></span>
+        <button class="icon-btn todo-close" title="Reopen" x-show="item.status === 'closed'" @click.stop="reopenTodo(item)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
         </button>
-        <button class="icon-btn todo-close" title="Close" x-show="item.status === 'open'" @click.stop="closeTodo(item)">
+        <button class="icon-btn todo-close" title="Close" x-show="item.status !== 'closed'" @click.stop="closeTodo(item)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </li>
@@ -302,6 +330,8 @@
   <p id="todo-empty" x-show="todoItems.length > 0 && filteredTodos().length === 0">No todos match this filter.</p>
   <div id="todo-add-row">
     <input id="todo-add-title" type="text" placeholder="new todo title..." x-model="todoAdd.title" @keydown.enter="addTodo()">
+    <input id="todo-add-due" type="text" placeholder="reminder (optional), e.g. 2h or tomorrow 9am" x-model="todoAdd.due"
+           @keydown.enter="addTodo()" title="optional: when to be reminded -- 30m, 2h, 3d, tomorrow, friday 5pm, 2026-11-02">
     <template x-if="todoAddExpanded">
       <div class="todo-add-details">
         <textarea rows="3" placeholder="description (optional)" x-model="todoAdd.description"></textarea>
@@ -322,16 +352,129 @@
       <button class="btn btn-primary" @click="addTodo()">Add</button>
     </div>
   </div>
+  </div>
+  <div id="todo-detail" x-show="todoModalOpen">
+    <div class="todo-detail-head">
+      <button class="icon-btn" title="Back to todos" aria-label="Back to todos" @click="closeTodoModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <strong class="todo-detail-title" x-text="todoModalItem ? todoModalItem.title : ''"></strong>
+    </div>
+    <template x-if="todoModalLoading">
+      <span>loading…</span>
+    </template>
+    <div class="edit-panel" x-show="!todoModalLoading">
+      <div class="row">
+        <span class="label">priority</span>
+        <select x-model="todoModalPriority" @change="updateTodoPriority()">
+          <option value="0">P0</option><option value="1">P1</option>
+          <option value="2">P2</option><option value="3">P3</option><option value="4">P4</option>
+        </select>
+        <span class="label">type</span>
+        <select x-model="todoModalType" @change="updateTodoType()">
+          <option value="task">task</option><option value="bug">bug</option>
+          <option value="feature">feature</option><option value="chore">chore</option>
+          <option value="epic">epic</option><option value="decision">decision</option>
+        </select>
+        <span class="edit-msg" :style="todoModalUpdateErr ? 'color:var(--danger-text)' : ''" x-text="todoModalUpdateMsg"></span>
+      </div>
+      <div class="row">
+        <span class="label">assignee</span>
+        <input type="text" placeholder="unassigned" x-model="todoModalAssignee" @blur="updateTodoAssignee()" @keydown.enter="$event.target.blur()">
+      </div>
+      <div class="row">
+        <span class="label">labels</span>
+        <span>
+          <template x-for="l in (todoModalItem ? todoModalItem.labels : []) || []" :key="l">
+            <span class="tag">
+              <span x-text="l"></span>
+              <span class="x" @click.stop="removeTodoLabel(l)">×</span>
+            </span>
+          </template>
+        </span>
+        <input type="text" placeholder="add label, enter" x-model="todoModalLabelInput" @keydown.enter="addTodoLabel()">
+      </div>
+      <textarea class="todo-description" rows="4" placeholder="description"
+                x-model="todoModalDescription" @blur="updateTodoDescription()"></textarea>
+
+      <div class="row">
+        <span class="label">blocked by</span>
+        <span>
+          <template x-for="d in todoModalBlockedBy" :key="d.id">
+            <span class="tag" :class="{ closed: d.status !== 'open' }" :title="d.title">
+              <span x-text="d.id"></span>
+              <span class="x" @click.stop="removeTodoDep(d.id, 'blocked_by')">×</span>
+            </span>
+          </template>
+          <span class="edit-msg" x-show="!todoModalDepsLoading && !todoModalBlockedBy.length">none</span>
+        </span>
+      </div>
+      <div class="row">
+        <span class="label">blocks</span>
+        <span>
+          <template x-for="d in todoModalBlocks" :key="d.id">
+            <span class="tag" :class="{ closed: d.status !== 'open' }" :title="d.title">
+              <span x-text="d.id"></span>
+              <span class="x" @click.stop="removeTodoDep(d.id, 'blocks')">×</span>
+            </span>
+          </template>
+          <span class="edit-msg" x-show="!todoModalDepsLoading && !todoModalBlocks.length">none</span>
+        </span>
+      </div>
+      <div class="row">
+        <select x-model="todoModalDepDirection">
+          <option value="blocked_by">is blocked by</option>
+          <option value="blocks">blocks</option>
+        </select>
+        <input type="text" placeholder="issue id, enter" x-model="todoModalDepInput" @keydown.enter="addTodoDep()">
+        <span class="edit-msg" style="color:var(--danger-text)" x-text="todoModalDepError"></span>
+      </div>
+
+      <div class="row">
+        <span class="label">remind</span>
+        <input type="text" placeholder="e.g. 2h or tomorrow 9am (none clears)" x-model="todoModalDue" @keydown.enter="saveTodoDue()">
+        <button class="btn" @click="saveTodoDue()">Set</button>
+        <span class="due-badge row-badge" :class="{ overdue: isOverdue(todoModalItem), snoozed: isSnoozed(todoModalItem) }"
+              x-show="todoModalItem && dueLabel(todoModalItem)" x-text="todoModalItem ? dueLabel(todoModalItem) : ''"></span>
+      </div>
+      <div class="row" x-show="todoModalItem && todoModalItem.status !== 'closed'">
+        <span class="label">snooze</span>
+        <button class="btn" @click="snoozeTodo('1h')">1 hour</button>
+        <button class="btn" @click="snoozeTodo('tomorrow 9am')">tomorrow</button>
+        <button class="btn" @click="snoozeTodo('next monday 9am')">next week</button>
+        <button class="btn" x-show="todoModalItem && isSnoozed(todoModalItem)" @click="unsnoozeTodo()">Wake now</button>
+      </div>
+
+      <pre class="todo-detail" x-text="todoModalDetail"></pre>
+      <div class="row">
+        <input type="text" placeholder="comment, enter" x-model="todoModalComment" @keydown.enter="submitTodoModalComment()">
+      </div>
+      <div class="row">
+        <button class="btn btn-danger" @click="closeTodoFromModal()" x-show="todoModalItem && todoModalItem.status !== 'closed'">Close todo</button>
+        <button class="btn" @click="reopenTodoFromModal()" x-show="todoModalItem && todoModalItem.status === 'closed'">Reopen todo</button>
+        <template x-if="!todoModalDeleteConfirm">
+          <button class="link-btn" style="color:var(--danger-text)" @click="todoModalDeleteConfirm = true">Delete permanently</button>
+        </template>
+        <template x-if="todoModalDeleteConfirm">
+          <span>
+            <span class="edit-msg" style="color:var(--danger-text)">Really delete? Can't be undone.</span>
+            <button class="link-btn" style="color:var(--danger-text)" @click="deleteTodoFromModal()">Yes, delete</button>
+            <button class="link-btn" @click="todoModalDeleteConfirm = false">Cancel</button>
+          </span>
+        </template>
+      </div>
+    </div>
+  </div>
 </div>
 
-<div class="modal-backdrop" :class="{ open: modalOpen }" @click="closeEntryModal()"></div>
-<div class="modal-panel" role="dialog" aria-modal="true" :class="{ open: modalOpen }" :aria-hidden="!modalOpen" :inert="!modalOpen">
+<div class="modal-backdrop" :class="{ open: modalOpen && !entryInline }" @click="requestCloseEntry()"></div>
+<div id="entry-panel" class="modal-panel" role="dialog" :aria-modal="!entryInline" :class="{ open: modalOpen, inline: entryInline, loading: modalLoading }" :aria-hidden="!modalOpen" :inert="!modalOpen" @click.stop>
   <div class="modal-panel-header">
     <span class="stamp" x-text="modalStamp"></span>
     <span id="entry-modal-actions">
-      <button class="link-btn" x-show="!modalLoadError && !modalReadonly" x-text="modalEditing ? 'done' : 'edit'"
-              @click="modalEditing ? showModalView() : showModalEdit()"></button>
-      <button class="icon-btn" title="Close" @click="closeEntryModal()">
+      <span class="edit-msg header-msg" :class="{ err: modalSaveErr }" x-show="!modalEditing && modalSaveMsg" x-text="modalSaveMsg" role="status"></span>
+      <button class="link-btn" x-show="!modalLoadError && !modalReadonly && !modalEditing" @click="showModalEdit()">edit</button>
+      <button class="icon-btn" title="Close" @click="requestCloseEntry()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </span>
@@ -348,19 +491,36 @@
       <a x-show="modalReadonly && modalReadonly.url" :href="modalReadonly && modalReadonly.url" target="_blank" rel="noopener">Edit at the source →</a>
     </div>
     <div class="edit-panel" :class="{ editing: modalEditing }" x-show="!modalLoading && !modalLoadError">
-      <div class="md-view" x-show="!modalEditing" x-html="modalViewHtml"></div>
+      <div class="md-view view-editable" :class="{ 'is-readonly': modalReadonly }" x-show="!modalEditing" x-html="modalViewHtml" @click="viewClick($event)"></div>
 
       <div class="edit-form" x-show="modalEditing">
-        <input type="text" class="edit-title" placeholder="title" x-model="modalTitle">
-        <textarea class="edit-body" rows="10" x-model="modalBody" x-show="!modalPreview"></textarea>
-        <div class="md-view" x-show="modalPreview" x-html="modalPreviewHtml"></div>
-
-        <div class="row">
-          <button class="btn btn-primary" @click="saveModalEntry()" :disabled="modalSaving">save</button>
-          <button class="link-btn" @click="showModalView()">cancel</button>
-          <button class="link-btn" @click="modalPreview = !modalPreview" x-text="modalPreview ? 'back to source' : 'preview'"></button>
-          <span class="edit-msg" :style="modalSaveErr ? 'color:var(--danger-text)' : ''" x-text="modalSaveMsg"></span>
+        <input type="text" class="edit-title" placeholder="title" x-model="modalTitle"
+               @keydown.enter.prevent="document.querySelector('#entry-panel .edit-body')?.focus()"
+               @keydown.meta.enter.prevent="saveModalEntry()" @keydown.ctrl.enter.prevent="saveModalEntry()">
+        <div class="edit-tabs" role="tablist">
+          <template x-for="m in [['rich', 'Visual'], ['split', 'Source']]" :key="m[0]">
+            <button role="tab" class="edit-tab" :class="{ active: modalMode === m[0] }" :aria-selected="modalMode === m[0]"
+                    @click="setEditMode(m[0])" x-text="m[1]"></button>
+          </template>
+          <span class="md-toolbar">
+            <template x-for="b in MD_TOOLS" :key="b.id">
+              <button type="button" class="md-tool" :class="{ ['md-tool-' + b.id]: true, active: mdActive[b.id] }" :aria-pressed="!!mdActive[b.id]" :title="b.title" :aria-label="b.title"
+                      @mousedown.prevent @click="toolAction(b.id)" x-text="b.label"></button>
+            </template>
+          </span>
         </div>
+        <div class="edit-split" :class="'mode-' + modalMode">
+        <textarea class="edit-body" rows="6" placeholder="Write in markdown..." x-model="modalBody" x-show="modalMode === 'split'"
+                  @input="autosizeTextarea($event.target); modalDiscardArmed = false"
+                  @keyup="updateToolActive()" @click="updateToolActive()" @select="updateToolActive()"
+                  @keydown="mdKeydown($event)" @paste="mdPaste($event)"
+                  @keydown.meta.enter.prevent="saveModalEntry()" @keydown.ctrl.enter.prevent="saveModalEntry()"></textarea>
+        <div class="md-view edit-live" x-show="modalMode === 'split'" x-html="modalPreviewHtml"></div>
+          <div class="md-view rich-edit" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Entry content"
+               x-show="modalMode === 'rich'"
+               @input="onRichInput()" @keydown="richKeydown($event)" @paste="richPaste($event)" @blur="richTidy()"></div>
+        </div>
+
 
         <div class="row">
           <span class="label">tags</span>
@@ -409,6 +569,13 @@
           </div>
         </div>
         <span style="color:var(--danger-text)" x-text="modalLinkError"></span>
+
+        <div class="edit-actions">
+          <button class="btn btn-primary" @click="saveModalEntry()" :disabled="modalSaving || !modalDirty">Save</button>
+          <button class="btn" @click="cancelModalEdit()">Cancel</button>
+          <span class="edit-msg" :class="{ err: modalSaveErr }" x-text="modalSaveMsg || (modalDirty ? 'Unsaved changes' : '')" role="status"></span>
+          <span class="edit-hint"><kbd>⌘</kbd><kbd>↵</kbd> save · <kbd>esc</kbd> cancel</span>
+        </div>
       </div>
     </div>
   </div>
@@ -434,7 +601,14 @@
           </select>
         </div>
         <input type="text" class="edit-title" placeholder="title" x-model="newEntryTitle" x-ref="newEntryTitleInput">
-        <textarea class="edit-body" rows="10" placeholder="body (markdown)..." x-model="newEntryBody" x-show="!newEntryPreview"></textarea>
+        <span class="md-toolbar md-toolbar-bare" x-show="!newEntryPreview">
+          <template x-for="b in MD_TOOLS" :key="b.id">
+              <button type="button" class="md-tool" :class="{ ['md-tool-' + b.id]: true, active: mdActive[b.id] }" :aria-pressed="!!mdActive[b.id]" :title="b.title" :aria-label="b.title"
+                      @mousedown.prevent @click="mdApply($el.closest('.edit-form').querySelector('textarea.edit-body'), b.id)" x-text="b.label"></button>
+            </template>
+        </span>
+        <textarea class="edit-body" rows="10" placeholder="body (markdown)..." x-model="newEntryBody" x-show="!newEntryPreview"
+                  @keydown="mdKeydown($event)" @paste="mdPaste($event)"></textarea>
         <div class="md-view" x-show="newEntryPreview" x-html="renderMarkdown(newEntryBody)"></div>
 
         <div class="row">
@@ -516,109 +690,6 @@
   <p class="palette-msg" x-show="!paletteQuery.trim() && !paletteResults.length">Type to search entries by title or content.</p>
 </div>
 
-<div class="modal-backdrop" :class="{ open: todoModalOpen }" @click="closeTodoModal()"></div>
-<div class="modal-panel" role="dialog" aria-modal="true" :class="{ open: todoModalOpen }" :aria-hidden="!todoModalOpen" :inert="!todoModalOpen">
-  <div class="modal-panel-header">
-    <span class="stamp" x-text="todoModalItem ? todoModalItem.title : ''"></span>
-    <span id="entry-modal-actions">
-      <button class="icon-btn" title="Close" @click="closeTodoModal()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-      </button>
-    </span>
-  </div>
-  <div class="modal-panel-body">
-    <template x-if="todoModalLoading">
-      <span>loading…</span>
-    </template>
-    <div class="edit-panel" x-show="!todoModalLoading">
-      <div class="row">
-        <span class="label">priority</span>
-        <select x-model="todoModalPriority" @change="updateTodoPriority()">
-          <option value="0">P0</option><option value="1">P1</option>
-          <option value="2">P2</option><option value="3">P3</option><option value="4">P4</option>
-        </select>
-        <span class="label">type</span>
-        <select x-model="todoModalType" @change="updateTodoType()">
-          <option value="task">task</option><option value="bug">bug</option>
-          <option value="feature">feature</option><option value="chore">chore</option>
-          <option value="epic">epic</option><option value="decision">decision</option>
-        </select>
-        <span class="edit-msg" :style="todoModalUpdateErr ? 'color:var(--danger-text)' : ''" x-text="todoModalUpdateMsg"></span>
-      </div>
-      <div class="row">
-        <span class="label">assignee</span>
-        <input type="text" placeholder="unassigned" x-model="todoModalAssignee" @blur="updateTodoAssignee()" @keydown.enter="$event.target.blur()">
-      </div>
-      <div class="row">
-        <span class="label">labels</span>
-        <span>
-          <template x-for="l in (todoModalItem ? todoModalItem.labels : []) || []" :key="l">
-            <span class="tag">
-              <span x-text="l"></span>
-              <span class="x" @click.stop="removeTodoLabel(l)">×</span>
-            </span>
-          </template>
-        </span>
-        <input type="text" placeholder="add label, enter" x-model="todoModalLabelInput" @keydown.enter="addTodoLabel()">
-      </div>
-      <textarea class="todo-description" rows="4" placeholder="description"
-                x-model="todoModalDescription" @blur="updateTodoDescription()"></textarea>
-
-      <div class="row">
-        <span class="label">blocked by</span>
-        <span>
-          <template x-for="d in todoModalBlockedBy" :key="d.id">
-            <span class="tag" :class="{ closed: d.status !== 'open' }" :title="d.title">
-              <span x-text="d.id"></span>
-              <span class="x" @click.stop="removeTodoDep(d.id, 'blocked_by')">×</span>
-            </span>
-          </template>
-          <span class="edit-msg" x-show="!todoModalDepsLoading && !todoModalBlockedBy.length">none</span>
-        </span>
-      </div>
-      <div class="row">
-        <span class="label">blocks</span>
-        <span>
-          <template x-for="d in todoModalBlocks" :key="d.id">
-            <span class="tag" :class="{ closed: d.status !== 'open' }" :title="d.title">
-              <span x-text="d.id"></span>
-              <span class="x" @click.stop="removeTodoDep(d.id, 'blocks')">×</span>
-            </span>
-          </template>
-          <span class="edit-msg" x-show="!todoModalDepsLoading && !todoModalBlocks.length">none</span>
-        </span>
-      </div>
-      <div class="row">
-        <select x-model="todoModalDepDirection">
-          <option value="blocked_by">is blocked by</option>
-          <option value="blocks">blocks</option>
-        </select>
-        <input type="text" placeholder="issue id, enter" x-model="todoModalDepInput" @keydown.enter="addTodoDep()">
-        <span class="edit-msg" style="color:var(--danger-text)" x-text="todoModalDepError"></span>
-      </div>
-
-      <pre class="todo-detail" x-text="todoModalDetail"></pre>
-      <div class="row">
-        <input type="text" placeholder="comment, enter" x-model="todoModalComment" @keydown.enter="submitTodoModalComment()">
-      </div>
-      <div class="row">
-        <button class="btn btn-danger" @click="closeTodoFromModal()" x-show="todoModalItem && todoModalItem.status === 'open'">Close todo</button>
-        <button class="btn" @click="reopenTodoFromModal()" x-show="todoModalItem && todoModalItem.status !== 'open'">Reopen todo</button>
-        <template x-if="!todoModalDeleteConfirm">
-          <button class="link-btn" style="color:var(--danger-text)" @click="todoModalDeleteConfirm = true">Delete permanently</button>
-        </template>
-        <template x-if="todoModalDeleteConfirm">
-          <span>
-            <span class="edit-msg" style="color:var(--danger-text)">Really delete? Can't be undone.</span>
-            <button class="link-btn" style="color:var(--danger-text)" @click="deleteTodoFromModal()">Yes, delete</button>
-            <button class="link-btn" @click="todoModalDeleteConfirm = false">Cancel</button>
-          </span>
-        </template>
-      </div>
-    </div>
-  </div>
-</div>
-
 <div id="type-row">
   <button class="type-chip" :class="{ active: !activeType }" @click="setTypeFilter(null)">All</button>
   <template x-for="t in ALL_TYPES" :key="t">
@@ -633,7 +704,7 @@
 
 <ul id="feed">
   <template x-for="item in feedItems" :key="item.id || item.title">
-    <li @click="item.id && openEntryModal(item)">
+    <li :data-id="item.id" :class="{ expanded: entryInline && modalEntryId === item.id && !modalLoading, editing: entryInline && modalEntryId === item.id && modalEditing }" @click="item.id && openEntryModal(item, $el)">
       <div class="meta">
         <span class="stamp" :title="item.created || ''" x-text="itemStamp(item)"></span>
       </div>
