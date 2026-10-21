@@ -62,6 +62,9 @@ the data repo.
   `kb todo -a "<title>" [-p 0-4] [-t bug|feature|task|epic|chore|decision]
   [-d "<description>"] [-l labels]` -- ticket-shaped in one call. Bare
   `kb todo -a` opens bd's own interactive form instead.
+  To be reminded, add `--due WHEN` (`30m`, `2h`, `tomorrow 9am`, `friday`);
+  `kb todo snooze <id> <when>` hides one until then and reminds again,
+  `kb remind` lists what's due now.
 - **See how entries connect**: `kb links <id>` prints forward links and
   backlinks for an entry (`--json` for machine-readable).
 - **Read an entry's content by id**: `kb show <id>` prints it directly --
@@ -118,8 +121,14 @@ kb link <id> [add|rm <id>...]     view/add/remove links, same reasoning
 kb rm <id> [--force]              delete an entry (--force also cleans up backlinks)
 kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
-kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
+kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
                                   quick-add a TODO; bare -a opens bd's interactive form
+kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
+kb todo unsnooze <id>             end a snooze early
+kb todo due <id> <when>|none      set or clear a TODO's reminder time
+kb remind [check|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
+                                  list what's due; `check` sends desktop notifications;
+                                  `install` runs `check` on a timer (launchd/systemd --user)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb validate                       frontmatter/id/link integrity check

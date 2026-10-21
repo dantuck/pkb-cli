@@ -19,8 +19,14 @@ kb rm <id> [--force]              delete an entry (refuses if other entries link
                                   unless --force, which also cleans up those links)
 kb mv <id> [--type T] [--title "<title>"]   recategorize and/or rename a core entry
 kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
-kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels]
+kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
                                   quick-add a TODO; bare -a opens bd's interactive form
+kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
+kb todo unsnooze <id>             end a snooze early
+kb todo due <id> <when>|none      set or clear a TODO's reminder time
+kb remind [check|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
+                                  list what's due; `check` sends desktop notifications;
+                                  `install` runs `check` on a timer (launchd/systemd --user)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb secrets                        edit encrypted memos/gitlab/github credentials via sops
@@ -36,7 +42,8 @@ kb service install|uninstall|status|refresh [--port PORT] [--repo DIR]
 kb sync-service install|uninstall|status [--interval-minutes MIN] [--repo DIR]
                                   run `kb sync` on a recurring interval (launchd/systemd --user)
 kb setup [--yes]                # guided onboarding: PATH, Claude Code skill, optional
-                                 # deps (asks before each), hook, index, bd store.
+                                 # deps (asks before each), hook, index, bd store, and (default no)
+                                 # the `kb remind` timer.
                                  # --yes skips prompts and accepts defaults (scripted installs)
 kb doctor                       # diagnose issues -- read-only, never writes anything
 kb update [--check]             # reinstall the latest release (via uv/pipx), refresh installed services, or git pull
@@ -90,6 +97,21 @@ running it, `/sync`, or your own cron entry by hand. Same per-user, no-root
 posture; also not supported on other platforms. On Linux, if the user isn't
 lingering, `install` prints the `loginctl enable-linger` command needed for
 the timer to survive logout/reboot.
+
+`kb remind` is the reminder side of `kb todo --due`. With no action it lists TODOs
+whose due date has passed. `kb remind check` posts one desktop notification per due TODO
+(`osascript` on macOS, `notify-send` on Linux; more than five collapse into a summary)
+and records when it did, so the same TODO isn't announced on every run; a TODO that stays
+overdue is announced again after `--repeat-hours` (default 4) until it's closed or
+snoozed. `kb remind install` runs `check` every `--interval-minutes` (default 5) the same
+way `kb sync-service` runs `kb sync`, and shares its `kb service refresh` and
+per-user/no-root behavior. The "already announced" record is per-machine, kept in
+`$XDG_STATE_HOME/pkb-cli/reminded.json` (default `~/.local/state/`), never in the data repo.
+See [how-to: get reminded about a TODO](../how-to/get-reminded-about-a-todo.md).
+
+`<when>` is anything `bd --due` takes -- `+6h`, `tomorrow`, `friday`, `5pm`,
+`tomorrow 9am`, `2026-11-02` -- plus `30m`/`2h`/`3d`/`1w` shorthand. Minutes are
+resolved by `kb` itself because bd reads a bare `m` as months.
 
 Search also works with zero setup via `rg`/`fzf` directly on a data repo's
 file tree — see [how-to: search without the

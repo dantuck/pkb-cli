@@ -78,6 +78,16 @@ class SetupBootstrapTest(unittest.TestCase):
 
         self.assertEqual(before, os.stat(git_dir).st_mtime_ns)
 
+    def test_yes_never_installs_the_reminder_job_but_points_at_it(self):
+        # a scheduled background job is opt-in: --yes accepts defaults, and the default is no
+        with mock.patch.object(kb_cli, "_interval_service_install") as install, \
+                mock.patch.object(kb_cli, "_service_state",
+                                  return_value={"installed": False, "running": False, "detail": "not installed"}):
+            output = self._run_setup()
+        install.assert_not_called()
+        if shutil.which("bd"):
+            self.assertIn("kb remind install", output)
+
     def test_existing_data_repo_elsewhere_is_not_overridden(self):
         # A repo found by walking up from cwd should win over bootstrapping a
         # central kb, same as pc.find_repo_root's normal precedence.

@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 from pkb_cli import pkb_common as pc  # noqa: E402
@@ -40,6 +41,16 @@ class DoctorChecksTest(unittest.TestCase):
         ok, todo = kb_cli.doctor_checks(self.root)
         self.assertTrue(any("data repo is clean" in line for line in ok))
         self.assertFalse(any("uncommitted change" in line for line in todo))
+
+    def test_reports_reminder_status_alongside_the_bd_store(self):
+        tools = {**kb_cli.tool_status(), "bd": True}
+        for healthy, bucket in ((True, "ok"), (False, "todo")):
+            with mock.patch.object(kb_cli, "tool_status", return_value=tools), \
+                    mock.patch.object(kb_cli, "bd_store_status", return_value=(True, True)), \
+                    mock.patch.object(kb_cli, "reminder_status_line", return_value=(healthy, "REMINDER LINE")):
+                ok, todo = kb_cli.doctor_checks(self.root)
+            self.assertIn("REMINDER LINE", {"ok": ok, "todo": todo}[bucket])
+            self.assertNotIn("REMINDER LINE", {"ok": todo, "todo": ok}[bucket])
 
     def test_dirty_repo_is_flagged(self):
         with open(os.path.join(self.root, "stray.md"), "w") as f:

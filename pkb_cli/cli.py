@@ -4,8 +4,10 @@ one-shot per invocation. Operates on a data repo (found by walking up from cwd t
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
 import calendar
+import contextlib
 import difflib
 import importlib
+import io
 import json
 import os
 import re
@@ -1245,24 +1247,28 @@ def bd_list(root, include_all=False):
     return json.loads(_bd_run(bd_args))
 
 
-def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None):
+def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None, due=None):
     """Create a bd issue, returning bd's own confirmation text. Raises
     RuntimeError(stderr) on failure. Shared by _todo_add (kb todo -a TITLE)
-    and kb web's POST /api/todo."""
+    and kb web's POST /api/todo. `due` is anything resolve_when() accepts."""
     bd_args = ["bd", "-C", root, "create", "--title", title, "--type", issue_type, "--priority", priority]
     if description:
         bd_args += ["--description", description]
     if labels:
         bd_args += ["--labels", labels]
+    if due:
+        bd_args += ["--due", resolve_when(due)]
     return _bd_run(bd_args)
 
 
 def bd_update(root, issue_id, priority=None, issue_type=None, description=None,
-              assignee=None, add_label=None, remove_label=None):
+              assignee=None, add_label=None, remove_label=None, due=None):
     """Update fields on an existing bd issue, returning bd's own stdout. Raises
     RuntimeError(stderr) on failure. Used by kb web's PATCH /api/todo/{id} for
     editing an already-created todo. add_label/remove_label touch one label at
-    a time, mirroring the tag chip add/remove UX used elsewhere in kb web."""
+    a time, mirroring the tag chip add/remove UX used elsewhere in kb web. `due`
+    is anything resolve_when() accepts, or "" to clear it; changing it re-arms the
+    reminder."""
     bd_args = ["bd", "-C", root, "update", issue_id]
     if priority is not None:
         bd_args += ["--priority", str(priority)]
@@ -1276,7 +1282,153 @@ def bd_update(root, issue_id, priority=None, issue_type=None, description=None,
         bd_args += ["--add-label", add_label]
     if remove_label:
         bd_args += ["--remove-label", remove_label]
+    if due is not None:
+        bd_args += ["--due", resolve_when(due) if due else ""]
+        reminder_forget(issue_id)
     return _bd_run(bd_args)
+
+
+def resolve_when(text):
+    """Turn a human "when" into something `bd --due/--until` reads correctly.
+    bd already takes +6h, +1d, +2w, tomorrow, friday, 5pm, 2026-01-15 and RFC 3339
+    timestamps, but reads a bare `m` as *months* -- so minutes are resolved here to
+    an absolute local timestamp, and a bare `2h`/`3d`/`1w` gets its missing `+`."""
+    text = text.strip()
+    m = re.fullmatch(r"\+?(\d+)\s*(m|min|mins|minute|minutes)", text, re.I)
+    if m:
+        return (datetime.now().astimezone() + timedelta(minutes=int(m.group(1)))).isoformat(timespec="seconds")
+    m = re.fullmatch(r"(\d+)\s*([hdw])", text, re.I)
+    if m:
+        return f"+{m.group(1)}{m.group(2).lower()}"
+    return text
+
+
+def bd_snooze(root, issue_id, until):
+    """Hide a todo until `until` (anything resolve_when() accepts), then bring it
+    back and remind again. Sets bd's defer date (hides it from `bd ready`, auto-wakes
+    it) *and* its due date, so a todo that never had a due date still comes due the
+    moment the snooze ends. Returns bd's own stdout; raises RuntimeError on failure."""
+    when = resolve_when(until)
+    output = _bd_run(["bd", "-C", root, "defer", issue_id, "--until", when])
+    _bd_run(["bd", "-C", root, "update", issue_id, "--due", when])
+    reminder_forget(issue_id)
+    return output
+
+
+def bd_unsnooze(root, issue_id):
+    """End a snooze early, returning bd's own stdout. Raises RuntimeError on failure."""
+    return _bd_run(["bd", "-C", root, "undefer", issue_id])
+
+
+def _bd_time(value):
+    """bd's RFC 3339 timestamp (or None/'') as an aware datetime, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def todo_is_snoozed(issue, now=None):
+    """True while a todo's snooze is still running (deferred with a future date)."""
+    until = _bd_time(issue.get("defer_until"))
+    return issue.get("status") == "deferred" and (until is None or until > (now or datetime.now().astimezone()))
+
+
+def todos_due(issues, now=None):
+    """Open todos whose due date has passed, most overdue first. Snoozed todos
+    don't count until their snooze ends (bd_snooze moves the due date there too)."""
+    now = now or datetime.now().astimezone()
+    due = []
+    for i in issues:
+        when = _bd_time(i.get("due_at"))
+        if i.get("status") == "closed" or when is None or when > now or todo_is_snoozed(i, now):
+            continue
+        due.append((when, i))
+    return [i for _, i in sorted(due, key=lambda pair: pair[0])]
+
+
+def format_due(issue, now=None):
+    """Short human label for a todo's due/snooze state ('due in 2h', 'overdue 3d',
+    'snoozed 1d'), or '' when it has neither."""
+    now = now or datetime.now().astimezone()
+    snoozed = todo_is_snoozed(issue, now)
+    when = _bd_time(issue.get("defer_until") if snoozed else issue.get("due_at"))
+    if when is None:
+        return ""
+    seconds = int((when - now).total_seconds())
+    span = abs(seconds)
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if span >= size:
+            amount = f"{span // size}{unit}"
+            break
+    else:
+        amount = "<1m"
+    if snoozed:
+        return f"snoozed {amount}"
+    return f"due in {amount}" if seconds > 0 else f"overdue {amount}"
+
+
+# Reminder state: when each todo was last announced, so `kb remind check` (run on a
+# timer) doesn't re-fire the same notification every few minutes. Lives outside the
+# data repo -- it's per-machine and must never be committed.
+
+def _reminder_state_path():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "pkb-cli", "reminded.json")
+
+
+def _reminder_load():
+    try:
+        with open(_reminder_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _reminder_save(state):
+    path = _reminder_state_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+
+
+def reminder_forget(issue_id):
+    """Re-arm one todo's reminder (called when its due date or snooze changes)."""
+    state = _reminder_load()
+    if state.pop(issue_id, None) is not None:
+        _reminder_save(state)
+
+
+def reminders_to_send(issues, repeat_hours=4, now=None):
+    """Due todos that haven't been announced yet, or whose last announcement is more
+    than `repeat_hours` old -- so an overdue todo keeps nudging until it's closed or
+    snoozed, without firing on every timer tick."""
+    now = now or datetime.now().astimezone()
+    state = _reminder_load()
+    out = []
+    for i in todos_due(issues, now):
+        last = _bd_time(state.get(i["id"]))
+        if last is None or now - last >= timedelta(hours=repeat_hours):
+            out.append(i)
+    return out
+
+
+def notify(title, message):
+    """Post a desktop notification (osascript on macOS, notify-send on Linux).
+    Returns False if no notifier is available or it failed. Text goes in as argv,
+    never interpolated into a script, so a todo title can't break out of it."""
+    if sys.platform == "darwin" and shutil.which("osascript"):
+        cmd = ["osascript", "-e", "on run argv", "-e",
+               "display notification (item 1 of argv) with title (item 2 of argv)",
+               "-e", "end run", message, title]
+    elif shutil.which("notify-send"):
+        cmd = ["notify-send", title, message]
+    else:
+        return False
+    return subprocess.run(cmd, capture_output=True).returncode == 0
 
 
 def bd_reopen(root, issue_id):
@@ -1336,6 +1488,9 @@ def cmd_todo(args):
 
     root = pc.get_repo_root()
 
+    if args.words:
+        return _todo_word_command(root, args.words)
+
     if args.add is not None:
         return _todo_add(root, args)
 
@@ -1344,6 +1499,9 @@ def cmd_todo(args):
     except RuntimeError as e:
         print(f"error: bd list failed: {e}", file=sys.stderr)
         return 1
+    if not args.all:
+        # snoozed todos are out of sight until the snooze ends (--all shows them)
+        issues = [i for i in issues if not todo_is_snoozed(i)]
 
     if args.json:
         import json
@@ -1362,14 +1520,44 @@ def cmd_todo(args):
         return _todo_interactive(root, issues)
 
     for i in issues:
-        status = f" [{i['status']}]" if args.all and i["status"] != "open" else ""
-        print(f"{i['id']:<10} P{i['priority']}  {i['title']}{status}")
+        status = f" [{i['status']}]" if args.all and i["status"] not in ("open", "deferred") else ""
+        print(f"{i['id']:<10} P{i['priority']}  {i['title']}{_due_suffix(i)}{status}")
 
     example = issues[0]["id"]
-    hint = f"\nact on one: kb bd show {example}  |  kb bd close {example}  |  kb bd comment {example} \"...\""
+    hint = (f"\nact on one: kb bd show {example}  |  kb bd close {example}  |  kb bd comment {example} \"...\""
+            f"  |  kb todo snooze {example} 1h")
     if not shutil.which("fzf"):
         hint += "  (install fzf for an interactive picker)"
     print(hint)
+    return 0
+
+
+def _due_suffix(issue):
+    label = format_due(issue)
+    return f"  ({label})" if label else ""
+
+
+def _todo_word_command(root, words):
+    """`kb todo snooze ID WHEN` / `due ID WHEN|none` / `unsnooze ID` -- the
+    reminder verbs, as positional words so they read like the rest of `kb todo`."""
+    verb, rest = words[0], words[1:]
+    try:
+        if verb == "snooze" and len(rest) == 2:
+            bd_snooze(root, rest[0], rest[1])
+            print(f"snoozed {rest[0]} until {rest[1]} -- it will come back and remind you then")
+        elif verb == "unsnooze" and len(rest) == 1:
+            print(bd_unsnooze(root, rest[0]))
+        elif verb == "due" and len(rest) == 2:
+            bd_update(root, rest[0], due="" if rest[1] in ("none", "clear") else rest[1])
+            print(f"{rest[0]}: due date cleared" if rest[1] in ("none", "clear")
+                  else f"{rest[0]}: due {rest[1]}")
+        else:
+            print("usage: kb todo snooze ID WHEN | kb todo unsnooze ID | kb todo due ID WHEN|none\n"
+                  "  WHEN: 30m, 2h, 3d, 1w, tomorrow, friday, 5pm, 2026-11-02", file=sys.stderr)
+            return 2
+    except RuntimeError as e:
+        print(f"error: {verb} failed: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1384,7 +1572,8 @@ def _todo_add(root, args):
 
     try:
         output = bd_create(root, args.add, description=args.description,
-                            priority=args.priority, issue_type=args.type, labels=args.labels)
+                            priority=args.priority, issue_type=args.type, labels=args.labels,
+                            due=args.due)
     except RuntimeError as e:
         print(f"error: bd create failed: {e}", file=sys.stderr)
         return 1
@@ -1398,8 +1587,8 @@ def _todo_interactive(root, issues):
     menu, since that's the same tool the user just used to pick the item."""
     lines, by_id = [], {}
     for i in issues:
-        status = f" [{i['status']}]" if i["status"] != "open" else ""
-        lines.append(f"{i['id']}\tP{i['priority']}\t{i['title']}{status}")
+        status = f" [{i['status']}]" if i["status"] not in ("open", "deferred") else ""
+        lines.append(f"{i['id']}\tP{i['priority']}\t{i['title']}{_due_suffix(i)}{status}")
         by_id[i["id"]] = i
 
     preview_cmd = f"bd -C {shlex.quote(root)} show {{1}}"
@@ -1410,9 +1599,9 @@ def _todo_interactive(root, issues):
     chosen_id = selected.split("\t", 1)[0].strip()
     chosen = by_id.get(chosen_id)
 
-    is_closed = chosen and chosen["status"] != "open"
+    is_closed = chosen and chosen["status"] == "closed"
     actions = ["show", "reopen", "comment", "delete", "cancel"] if is_closed else \
-        ["show", "close", "comment", "delete", "cancel"]
+        ["show", "close", "snooze", "set due", "comment", "delete", "cancel"]
     choice = _fzf_select(actions, f"{chosen_id}> ",
                           f"{chosen['title'] if chosen else chosen_id} -- choose an action")
     if choice is None:
@@ -1424,6 +1613,10 @@ def _todo_interactive(root, issues):
         subprocess.run(["bd", "-C", root, "close", chosen_id])
     elif choice == "reopen":
         subprocess.run(["bd", "-C", root, "reopen", chosen_id])
+    elif choice in ("snooze", "set due"):
+        when = input(f"{choice} {chosen_id} until (30m, 2h, tomorrow, friday, 5pm, ...): ").strip()
+        if when:
+            _todo_word_command(root, ["snooze" if choice == "snooze" else "due", chosen_id, when])
     elif choice == "comment":
         text = input(f"comment on {chosen_id}: ").strip()
         if text:
@@ -1434,6 +1627,89 @@ def _todo_interactive(root, issues):
             subprocess.run(["bd", "-C", root, "delete", chosen_id, "--force"])
         else:
             print("confirmation didn't match -- delete aborted", file=sys.stderr)
+    return 0
+
+
+def reminder_status_line(kind=None):
+    """(ok, message) describing the `kb remind` timer for setup/doctor -- ok is True
+    when it's scheduled and healthy, False when it needs attention or isn't on.
+    Read-only; never installs anything."""
+    kind = kind or _service_kind()
+    if kind is None:
+        return False, f"reminders can't be scheduled on {sys.platform} -- run `kb remind check` from your own scheduler"
+    info = _service_state(kind, "remind")
+    if not info["installed"]:
+        return False, ("TODO reminders aren't scheduled (optional) -- `kb remind install` sends a desktop "
+                       "notification when a TODO with a due date comes due")
+    if kind == "launchd" and info["detail"]:
+        return False, f"reminder job is {info['detail']}"
+    if kind == "systemd" and not info["running"]:
+        return False, f"reminder timer is {info['detail'] or 'inactive'} -- run `kb remind install` again"
+    notifier = "osascript" if kind == "launchd" else "notify-send"
+    if not shutil.which(notifier):
+        return False, f"reminders are scheduled but `{notifier}` isn't installed, so no notification can appear"
+    return True, "TODO reminders are scheduled (`kb remind status`)"
+
+
+def cmd_remind(args):
+    """`kb remind` -- list what's due; `check` notifies about it (run on a timer);
+    `install`/`uninstall`/`status` manage that timer."""
+    kind = _service_kind()
+    if args.action in ("install", "uninstall", "status"):
+        if kind is None:
+            print(f"error: `kb remind {args.action}` isn't supported on {sys.platform} -- only macOS "
+                  f"(launchd) and Linux (systemd --user). Run `kb remind check` from your own "
+                  f"scheduler instead.", file=sys.stderr)
+            return 1
+        if args.action == "install":
+            root = _resolve_agent_repo(args)
+            if root is None:
+                return 1
+            return _interval_service_install(kind, "remind", root, ["remind", "check"],
+                                              args.interval_minutes,
+                                              "kb remind -- notify about due TODOs")
+        if args.action == "uninstall":
+            return _interval_service_uninstall(kind, "remind")
+        return _interval_service_status(kind, "remind", "kb remind install")
+
+    if not shutil.which("bd"):
+        print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
+              "See `kb doctor`.", file=sys.stderr)
+        return 1
+    root = pc.get_repo_root()
+    try:
+        issues = bd_list(root)
+    except RuntimeError as e:
+        print(f"error: bd list failed: {e}", file=sys.stderr)
+        return 1
+
+    if args.action == "list":
+        due = todos_due(issues)
+        if not due:
+            print("nothing due")
+            return 0
+        for i in due:
+            print(f"{i['id']:<10} P{i['priority']}  {i['title']}{_due_suffix(i)}")
+        print(f"\nsnooze: kb todo snooze {due[0]['id']} 1h  |  done: kb bd close {due[0]['id']}")
+        return 0
+
+    # check
+    pending = reminders_to_send(issues, repeat_hours=args.repeat_hours)
+    state = _reminder_load()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    shown, rest = pending[:5], len(pending) - 5
+    for i in shown:
+        label = format_due(i)
+        print(f"{i['id']}  {i['title']}  ({label})")
+        notify(f"TODO {label}", f"{i['title']}  --  kb todo snooze {i['id']} 1h")
+        state[i["id"]] = now
+    if rest > 0:
+        # past the cap: one summary instead of a wall of notifications
+        notify("kb: more TODOs due", f"and {rest} more -- run `kb remind` to see them")
+        for i in pending[5:]:
+            state[i["id"]] = now
+    if pending:
+        _reminder_save(state)
     return 0
 
 
@@ -1884,6 +2160,27 @@ def cmd_setup(args):
                     ok.append("initialized a local bd store (--stealth: excluded from git)")
                 else:
                     todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
+            # 3b. TODO reminders -- opt-in, default no (a background job on a timer is
+            # not something to turn on unasked, including under --yes)
+            kind = _service_kind()
+            reminders_on, reminder_msg = reminder_status_line(kind)
+            if reminders_on:
+                ok.append(reminder_msg)
+            elif kind is not None and not _service_state(kind, "remind")["installed"]:
+                if _confirm("Check for due TODOs every 5 minutes and send desktop notifications "
+                            "(kb remind install)?", default=False, assume_yes=args.yes):
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        rc = _interval_service_install(kind, "remind", root, ["remind", "check"], 5,
+                                                       "kb remind -- notify about due TODOs")
+                    ok.append("installed the TODO reminder check (every 5 minutes)" if rc == 0
+                              else "TODO reminder install failed")
+                    if rc != 0:
+                        todo.append(f"kb remind install failed: {out.getvalue().strip()}")
+                else:
+                    todo.append(reminder_msg)
+            else:
+                todo.append(reminder_msg)
         else:
             todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
 
@@ -1955,6 +2252,12 @@ AGENTS = {
         "systemd_unit": "kb-sync.service",
         "systemd_timer": "kb-sync.timer",
         "log_name": "kb-sync",
+    },
+    "remind": {
+        "launchd_label": "dev.pkb-cli.remind",
+        "systemd_unit": "kb-remind.service",
+        "systemd_timer": "kb-remind.timer",
+        "log_name": "kb-remind",
     },
 }
 
@@ -2199,8 +2502,8 @@ def _service_state(kind, name):
     if kind == "launchd":
         installed, running, detail = _launchd_status(agent["launchd_label"], _agent_launchd_plist_path(name))
         return {"installed": installed, "running": bool(running), "detail": detail}
-    # the sync service is driven by its timer unit, not the oneshot service
-    path, unit = ((_agent_systemd_timer_path(name), agent["systemd_timer"]) if name == "sync"
+    # the sync/remind services are driven by their timer unit, not the oneshot service
+    path, unit = ((_agent_systemd_timer_path(name), agent["systemd_timer"]) if "systemd_timer" in agent
                   else (_agent_systemd_unit_path(name), agent["systemd_unit"]))
     if not os.path.exists(path):
         return {"installed": False, "running": False, "detail": "not installed"}
@@ -2291,7 +2594,7 @@ def _service_refresh(kind):
                 f.write(unit)
             subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
             error = None
-            if name == "web":  # the sync service is timer-driven: it picks up the new unit next run
+            if name == "web":  # the timer-driven services pick up the new unit next run
                 result = subprocess.run(["systemctl", "--user", "restart", agent["systemd_unit"]],
                                         capture_output=True, text=True)
                 error = result.stderr.strip() if result.returncode != 0 else None
@@ -2324,20 +2627,28 @@ def _sync_service_install(kind, args):
     root = _resolve_agent_repo(args)
     if root is None:
         return 1
+    return _interval_service_install(kind, "sync", root, ["sync"], args.interval_minutes,
+                                      "kb sync -- pull in pkb-cli sync sources")
 
-    agent = AGENTS["sync"]
+
+def _interval_service_install(kind, name, root, kb_args, interval_minutes, description):
+    """Install a job that runs `kb <kb_args>` every interval_minutes: a launchd
+    LaunchAgent with StartInterval, or a oneshot systemd --user service driven
+    by a timer unit. Shared by `kb sync-service` and `kb remind install`."""
+    agent = AGENTS[name]
+    shown = " ".join(kb_args)
 
     if kind == "launchd":
         import plistlib
         log_dir = os.path.expanduser("~/Library/Logs")
         os.makedirs(log_dir, exist_ok=True)
-        plist_path = _agent_launchd_plist_path("sync")
+        plist_path = _agent_launchd_plist_path(name)
         os.makedirs(os.path.dirname(plist_path), exist_ok=True)
         plist = {
             "Label": agent["launchd_label"],
-            "ProgramArguments": _kb_cmd("sync"),
+            "ProgramArguments": _kb_cmd(*kb_args),
             "WorkingDirectory": root,
-            "StartInterval": args.interval_minutes * 60,
+            "StartInterval": interval_minutes * 60,
             "StandardOutPath": os.path.join(log_dir, f"{agent['log_name']}.log"),
             "StandardErrorPath": os.path.join(log_dir, f"{agent['log_name']}.err.log"),
             # see _service_path_env() -- launchd's default PATH has no Homebrew
@@ -2350,23 +2661,23 @@ def _sync_service_install(kind, args):
         if error:
             print(f"error: launchctl bootstrap failed: {error}", file=sys.stderr)
             return 1
-        print(f"installed and started {agent['launchd_label']} -> `kb sync` every {args.interval_minutes}m")
+        print(f"installed and started {agent['launchd_label']} -> `kb {shown}` every {interval_minutes}m")
         print(f"  repo:  {root}")
         print(f"  plist: {plist_path}")
         print(f"  logs:  {log_dir}/{agent['log_name']}.log")
         return 0
 
     # systemd --user: a oneshot service triggered by a timer
-    service_path = _agent_systemd_unit_path("sync")
-    timer_path = _agent_systemd_timer_path("sync")
+    service_path = _agent_systemd_unit_path(name)
+    timer_path = _agent_systemd_timer_path(name)
     os.makedirs(os.path.dirname(service_path), exist_ok=True)
     service_unit = (
         "[Unit]\n"
-        "Description=kb sync -- pull in pkb-cli sync sources\n"
+        f"Description={description}\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
-        f"ExecStart={shlex.join(_kb_cmd('sync'))}\n"
+        f"ExecStart={shlex.join(_kb_cmd(*kb_args))}\n"
         f"WorkingDirectory={root}\n"
         f'Environment="PATH={_service_path_env()}"\n'
     )
@@ -2374,11 +2685,11 @@ def _sync_service_install(kind, args):
         f.write(service_unit)
     timer_unit = (
         "[Unit]\n"
-        "Description=run kb-sync.service on an interval\n"
+        f"Description=run {agent['systemd_unit']} on an interval\n"
         "\n"
         "[Timer]\n"
-        f"OnBootSec={args.interval_minutes}min\n"
-        f"OnUnitActiveSec={args.interval_minutes}min\n"
+        f"OnBootSec={interval_minutes}min\n"
+        f"OnUnitActiveSec={interval_minutes}min\n"
         "Persistent=true\n"
         "\n"
         "[Install]\n"
@@ -2390,7 +2701,7 @@ def _sync_service_install(kind, args):
     if error:
         print(f"error: systemctl enable --now failed: {error}", file=sys.stderr)
         return 1
-    print(f"installed and started {agent['systemd_timer']} -> `kb sync` every {args.interval_minutes}m")
+    print(f"installed and started {agent['systemd_timer']} -> `kb {shown}` every {interval_minutes}m")
     print(f"  repo:    {root}")
     print(f"  service: {service_path}")
     print(f"  timer:   {timer_path}")
@@ -2401,18 +2712,18 @@ def _sync_service_install(kind, args):
     return 0
 
 
-def _sync_service_uninstall(kind):
-    agent = AGENTS["sync"]
+def _interval_service_uninstall(kind, name):
+    agent = AGENTS[name]
     if kind == "launchd":
-        plist_path = _agent_launchd_plist_path("sync")
+        plist_path = _agent_launchd_plist_path(name)
         if _launchd_unload_and_remove(agent["launchd_label"], plist_path):
             print(f"stopped and removed {agent['launchd_label']} ({plist_path})")
         else:
             print(f"{agent['launchd_label']} wasn't installed")
         return 0
 
-    service_path = _agent_systemd_unit_path("sync")
-    timer_path = _agent_systemd_timer_path("sync")
+    service_path = _agent_systemd_unit_path(name)
+    timer_path = _agent_systemd_timer_path(name)
     if _systemd_disable_and_remove(agent["systemd_timer"], timer_path, service_path):
         print(f"stopped and removed {agent['systemd_timer']} ({timer_path})")
     else:
@@ -2420,20 +2731,28 @@ def _sync_service_uninstall(kind):
     return 0
 
 
-def _sync_service_status(kind):
-    info = _service_state(kind, "sync")
+def _interval_service_status(kind, name, install_cmd):
+    info = _service_state(kind, name)
     if not info["installed"]:
         print(info["detail"])
         return 1
     if kind == "launchd":
         if info["detail"]:
-            print(info["detail"].replace("`install`", "`kb sync-service install`"))
+            print(info["detail"].replace("`install`", f"`{install_cmd}`"))
             return 1
         # an interval job is only "running" while it's actually firing, so scheduled is healthy
-        print(f"installed and scheduled ({_agent_launchd_plist_path('sync')})")
+        print(f"installed and scheduled ({_agent_launchd_plist_path(name)})")
         return 0
-    print(f"installed ({_agent_systemd_timer_path('sync')}), timer {info['detail'] or 'active'}")
+    print(f"installed ({_agent_systemd_timer_path(name)}), timer {info['detail'] or 'active'}")
     return 0 if info["running"] else 1
+
+
+def _sync_service_uninstall(kind):
+    return _interval_service_uninstall(kind, "sync")
+
+
+def _sync_service_status(kind):
+    return _interval_service_status(kind, "sync", "kb sync-service install")
 
 
 def doctor_checks(root, push=None):
@@ -2575,6 +2894,8 @@ def doctor_checks(root, push=None):
                 todo.append(".beads/ exists but isn't in .git/info/exclude -- it may get committed accidentally")
             else:
                 ok.append("local bd store is present and git-excluded")
+            reminders_on, reminder_msg = reminder_status_line()
+            (ok if reminders_on else todo).append(reminder_msg)
         else:
             todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking")
 
@@ -2862,7 +3183,7 @@ kb operates on a data repo found by walking up from the current directory to a
 def main():
     commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
                 "links", "show", "tag", "link", "rm", "mv", "todo", "bd", "secrets", "config", "setup",
-                "web", "service", "sync-service", "doctor", "update", "push", "help"]
+                "web", "service", "sync-service", "remind", "doctor", "update", "push", "help"]
     parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
@@ -3131,7 +3452,36 @@ def main():
     p.add_argument("-t", "--type", default="task", metavar="TYPE",
                     help="issue type for -a/--add (bug|feature|task|epic|chore|decision; default: task)")
     p.add_argument("-l", "--labels", metavar="LABELS", help="comma-separated labels for -a/--add")
+    p.add_argument("--due", metavar="WHEN",
+                    help="due date to be reminded at, for -a/--add (30m, 2h, 3d, tomorrow, friday, 5pm, 2026-11-02)")
+    p.add_argument("words", nargs="*", metavar="snooze|unsnooze|due",
+                    help="`snooze ID WHEN`, `unsnooze ID`, or `due ID WHEN|none`")
     p.set_defaults(func=cmd_todo)
+
+    p = sub.add_parser(
+        "remind", help="list or announce TODOs that are due; schedule the check (launchd/systemd)",
+        description="Remind you of TODOs that have come due. With no action, lists them. "
+                     "`check` posts a desktop notification for each one not yet announced "
+                     "(overdue ones repeat every --repeat-hours until closed or snoozed) -- "
+                     "`install` schedules it on a timer.",
+        epilog=(
+            "  kb todo -a \"review the vendor email\" --due 'tomorrow 9am'\n"
+            "  kb remind                           what's due right now\n"
+            "  kb remind install                   check every 5 minutes, notify on due\n"
+            "  kb todo snooze <id> 1h              hide it, remind me again in an hour\n"
+            "  kb remind status | uninstall"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("action", nargs="?", default="list",
+                    choices=["list", "check", "install", "uninstall", "status"])
+    p.add_argument("--interval-minutes", type=int, default=5, metavar="MIN",
+                    help="how often to run `kb remind check` (default: 5; install only)")
+    p.add_argument("--repeat-hours", type=float, default=4, metavar="H",
+                    help="re-announce a still-overdue TODO after this long (default: 4; check only)")
+    p.add_argument("--repo", metavar="DIR",
+                    help="data repo to watch (default: cwd's repo, falling back to the central ~/.pkb; install only)")
+    p.set_defaults(func=cmd_remind)
 
     p = sub.add_parser("bd", help="run any bd command against the resolved data repo "
                                    "(e.g. kb bd show kb-nux, kb bd close kb-nux)")
