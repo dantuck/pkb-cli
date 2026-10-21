@@ -26,9 +26,31 @@ When a TODO comes due you get a desktop notification with its title. An
 overdue TODO nudges again every 4 hours until you close or snooze it.
 Change the check frequency with `--interval-minutes`.
 
-On macOS, notifications are posted through `osascript`, so allow
-notifications for **Script Editor** in System Settings → Notifications if
-nothing appears. Linux needs `notify-send`.
+### macOS: allow the notifications
+
+With [`terminal-notifier`](https://github.com/julienXX/terminal-notifier)
+installed (`kb setup` offers it, or `brew install terminal-notifier`),
+`kb remind install` builds a small app, `~/Applications/kb reminders.app`, so
+notifications carry kb's own icon and name. macOS then asks for permission
+for **kb reminders** separately. `kb remind install` finishes by sending a test
+notification, and if macOS isn't allowing it yet, says so and opens System
+Settings for you:
+
+> System Settings → Notifications → **kb reminders** → Allow Notifications
+
+If you clicked *Don't Allow* the first time, that setting is the only place
+to undo it (or `tccutil reset UserNotification dev.pkb-cli.notifier` to be
+asked again). Check at any time with:
+
+```bash
+kb remind test      # sends a test notification, or tells you what to fix
+kb doctor           # reports the permission state too
+```
+
+Without `terminal-notifier`, notifications fall back to `osascript` and show
+Script Editor's icon — allow **Script Editor** instead. On Linux they use
+`notify-send`. A Focus / Do Not Disturb mode will hold notifications back
+silently.
 
 ## Snooze it
 

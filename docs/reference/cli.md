@@ -24,7 +24,7 @@ kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN]
 kb todo snooze <id> <when>        hide a TODO until <when>, then remind again
 kb todo unsnooze <id>             end a snooze early
 kb todo due <id> <when>|none      set or clear a TODO's reminder time
-kb remind [check|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
+kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
@@ -100,13 +100,21 @@ the timer to survive logout/reboot.
 
 `kb remind` is the reminder side of `kb todo --due`. With no action it lists TODOs
 whose due date has passed. `kb remind check` posts one desktop notification per due TODO
-(`osascript` on macOS, `notify-send` on Linux; more than five collapse into a summary)
+(more than five collapse into a summary)
 and records when it did, so the same TODO isn't announced on every run; a TODO that stays
 overdue is announced again after `--repeat-hours` (default 4) until it's closed or
 snoozed. `kb remind install` runs `check` every `--interval-minutes` (default 5) the same
 way `kb sync-service` runs `kb sync`, and shares its `kb service refresh` and
 per-user/no-root behavior. The "already announced" record is per-machine, kept in
 `$XDG_STATE_HOME/pkb-cli/reminded.json` (default `~/.local/state/`), never in the data repo.
+On macOS the notification is posted by `~/Applications/kb reminders.app`, a copy of
+`terminal-notifier.app` with kb's icon and its own bundle id (`dev.pkb-cli.notifier`) that
+`kb remind install` builds when `terminal-notifier` is installed (`kb setup` offers it);
+without it, `osascript` is used and macOS shows Script Editor's icon. Because it is a separate
+app, macOS asks for notification permission for "kb reminders" on its own: `install` ends by
+sending a test notification, opening System Settings if it was denied, and `kb remind test`
+repeats that check (exit 1 when it didn't work). `uninstall` removes the app. On Linux,
+`notify-send` is used. `kb doctor` reports the permission state.
 See [how-to: get reminded about a TODO](../how-to/get-reminded-about-a-todo.md).
 
 `<when>` is anything `bd --due` takes -- `+6h`, `tomorrow`, `friday`, `5pm`,
