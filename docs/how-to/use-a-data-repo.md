@@ -68,7 +68,7 @@ remote has diverged it warns before attempting, but still lets git itself
 decide whether the push is rejected (no force-push, ever). A local-only
 data repo (no remote at all) is a perfectly normal setup — auto-commit's
 durability doesn't depend on pushing anywhere, and `kb doctor`/the web UI's
-Admin panel only mention push status once an upstream actually exists.
+Manage panel only mention push status once an upstream actually exists.
 
 To push automatically after every auto-commit instead of running `kb push`
 by hand, set this in `.pkb/config.yml` (committed, so it applies to every
@@ -80,11 +80,11 @@ auto_push: true
 
 Auto-push is best-effort: a failed push (offline, no upstream, rejected)
 never blocks the write that triggered it, and never retries on its own —
-`kb doctor` and the Admin panel's badge will show commits piling up
+`kb doctor` and the Manage panel's badge will show commits piling up
 unpushed if it keeps failing, at which point `kb push` surfaces the real
 error.
 
-The web UI's Admin panel mirrors all of this: it shows ahead/behind status
+The web UI's Manage panel mirrors all of this: it shows ahead/behind status
 next to the other auto-refreshed checks, and a **Push** button appears
 whenever there's something to push.
 

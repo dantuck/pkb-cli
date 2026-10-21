@@ -159,6 +159,100 @@ class KbWebTest(unittest.TestCase):
             self.assertEqual(self.json("PATCH", "/api/todo/t-1", {"due": ""})[0], 200)  # "" clears, still an update
             self.assertEqual(kb.return_value.bd_update.call_args.kwargs["due"], "")
 
+    def test_index_html_tags_balance_and_scripts_are_not_inside_a_template(self):
+        """A dropped </template> swallows everything after it -- including the <script>
+        tags -- so the page loads blank with no error anywhere. Catch that statically."""
+        from html.parser import HTMLParser
+        void = {"meta", "link", "input", "br", "img", "hr", "source", "area", "base", "col", "embed", "wbr"}
+
+        class Check(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack, self.problems, self.script_depths = [], [], []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "script":
+                    self.script_depths.append([t for t in self.stack if t == "template"])
+                if tag not in void:
+                    self.stack.append(tag)
+
+            def handle_endtag(self, tag):
+                if tag in void:
+                    return
+                if not self.stack or self.stack[-1] != tag:
+                    self.problems.append(f"</{tag}> at line {self.getpos()[0]} closes <{self.stack[-1] if self.stack else None}>")
+                    if tag in self.stack:
+                        while self.stack.pop() != tag:
+                            pass
+                else:
+                    self.stack.pop()
+
+        path = os.path.join(os.path.dirname(kb_web.__file__), "templates", "web", "index.html")
+        with open(path, encoding="utf-8") as f:
+            check = Check()
+            check.feed(f.read())
+        self.assertEqual(check.problems, [])
+        self.assertEqual(check.stack, [])
+        self.assertTrue(check.script_depths)
+        self.assertTrue(all(not inside for inside in check.script_depths))
+
+    def _reminders(self, **over):
+        info = {"supported": True, "kind": "launchd", "installed": True, "running": False, "detail": None,
+                "healthy": False, "message": "m", "interval_minutes": 5,
+                "notifier": {"app_built": True, "terminal_notifier": True,
+                             "authorization": "denied", "allowed": False}}
+        info.update(over)
+        return info
+
+    def test_reminders_state_and_action_validation(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.reminders_info.return_value = self._reminders()
+            status, data = self.json("GET", "/api/admin/reminders")
+            self.assertEqual((status, data["notifier"]["authorization"]), (200, "denied"))
+            self.assertEqual(self.json("POST", "/api/admin/reminders/bogus", {})[0], 404)
+            for bad in (0, "x", 10081):
+                self.assertEqual(self.json("POST", "/api/admin/reminders/install", {"interval_minutes": bad})[0], 400, bad)
+            kb.return_value.reminders_info.return_value = {"supported": False}
+            self.assertEqual(self.json("POST", "/api/admin/reminders/test", {})[0], 400)
+
+    def test_reminders_test_reports_the_notifications_outcome_and_fresh_state(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.reminders_info.return_value = self._reminders()
+            kb.return_value.send_test_notification.return_value = (False, "allow it in Settings")
+            status, data = self.json("POST", "/api/admin/reminders/test", {})
+        self.assertEqual(status, 200)
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["message"], "allow it in Settings")
+        self.assertIn("reminders", data)
+
+    def test_reminders_open_settings_only_on_macos_and_forces_the_open(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.reminders_info.return_value = self._reminders()
+            kb.return_value.open_notification_settings.return_value = True
+            self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {}), (200, {"ok": True}))
+            kb.return_value.open_notification_settings.assert_called_once_with(force=True)
+            kb.return_value.open_notification_settings.return_value = False
+            self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {})[0], 502)
+            kb.return_value.reminders_info.return_value = self._reminders(kind="systemd")
+            self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {})[0], 400)
+
+    def test_reminders_install_passes_interval_and_reports_the_permission_result(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.reminders_info.return_value = self._reminders(installed=False)
+            kb.return_value.reminders_install.return_value = (0, False, "macOS isn't allowing it yet")
+            status, data = self.json("POST", "/api/admin/reminders/install", {"interval_minutes": 10})
+        self.assertEqual(status, 200)
+        kb.return_value.reminders_install.assert_called_once_with(self.root, 10)
+        self.assertEqual((data["ok"], data["notifications_ok"]), (True, False))
+        self.assertIn("isn't allowing", data["output"])
+
+    def test_reminders_install_failure_is_not_ok(self):
+        with mock.patch.object(kb_web, "_kb") as kb:
+            kb.return_value.reminders_info.return_value = self._reminders(installed=False)
+            kb.return_value.reminders_install.return_value = (1, False, "")
+            status, data = self.json("POST", "/api/admin/reminders/install", {})
+        self.assertEqual((status, data["ok"]), (200, False))
+
     def test_mutating_requests_refuse_cross_origin(self):
         for headers in ({"Origin": "https://evil.example"}, {"Host": "evil.example"}):
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

@@ -772,6 +772,60 @@ def api_admin_service_action(h, root, name, action):
     _admin_task(h, kb.cmd_sync_service, args)
 
 
+@route("GET", "/api/admin/reminders")
+def api_admin_reminders(h, root):
+    """State of the TODO reminder timer and, on macOS, the "kb reminders" notifier's
+    notification permission. Read-only: never prompts or posts a notification."""
+    h.send_json(_kb().reminders_info())
+
+
+@route("POST", "/api/admin/reminders/{action}")
+def api_admin_reminders_action(h, root, action):
+    """install/uninstall the reminder timer, send a test notification, or open the
+    System Settings pane where the person allows notifications. Each is a button
+    click: nothing here runs on its own."""
+    kb = _kb()
+    if action not in ("install", "uninstall", "test", "open-settings"):
+        h.send_json({"error": f"no such reminders action: {action}"}, status=404)
+        return
+    info = kb.reminders_info()
+    if not info["supported"]:
+        h.send_json({"error": f"reminders aren't supported on {sys.platform}"}, status=400)
+        return
+    if action == "test":
+        ok, message = kb.send_test_notification()
+        h.send_json({"ok": ok, "message": message, "reminders": kb.reminders_info()})
+        return
+    if action == "open-settings":
+        if info["kind"] != "launchd":
+            h.send_json({"error": "System Settings only exists on macOS"}, status=400)
+            return
+        if not kb.open_notification_settings(force=True):
+            h.send_json({"error": "couldn't open System Settings"}, status=502)
+            return
+        h.send_json({"ok": True})
+        return
+    if action == "uninstall":
+        _admin_task(h, kb.cmd_remind, types.SimpleNamespace(action="uninstall"))
+        return
+    payload = h.read_json() or {}
+    try:
+        interval = int(payload.get("interval_minutes", 5))
+    except (TypeError, ValueError):
+        interval = 0
+    if not 1 <= interval <= 10080:
+        h.send_json({"error": "interval_minutes must be between 1 and 10080"}, status=400)
+        return
+
+    def install():
+        rc, notifications_ok, message = kb.reminders_install(root, interval)
+        if message:
+            print(message)
+        return rc, notifications_ok
+
+    _admin_task(h, install, extra=lambda notifications_ok: {"notifications_ok": bool(notifications_ok)})
+
+
 def _editor_config():
     editor, source = pc.resolve_editor()
     return {"editor": editor, "saved": pc.load_kb_config().get("editor", ""), "source": source}
@@ -799,7 +853,7 @@ def api_admin_status(h, root):
     reports, as data instead of printed text, plus inbox/todo counts, push
     status, version and the available sync sources. Cheap enough (a few
     file/sqlite checks, no network) that the web UI polls this on a timer to
-    surface "needs attention" without anyone opening Admin and clicking Doctor
+    surface "needs attention" without anyone opening Manage and clicking Doctor
     themselves."""
     kb = _kb()
     push = kb.push_status(root)

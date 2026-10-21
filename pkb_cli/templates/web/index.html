@@ -13,10 +13,6 @@
 <div id="header-row">
   <h1>kb</h1>
   <span>
-    <button class="pill-btn" title="New entry" @click="openNewEntryModal()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-      New
-    </button>
     <button class="pill-btn pill-inbox" title="Inbox" @click="inboxDrawerOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
       Inbox <span class="pill-count" :class="{ 'pill-count-hidden': !inboxLoaded, 'pill-count-empty': inboxLoaded && !inboxItems.length }"
@@ -27,9 +23,9 @@
       Todos <span class="pill-count" :class="{ 'pill-count-hidden': !todoLoaded, 'pill-count-empty': todoLoaded && !todoItems.length }"
                   x-text="todoLoaded ? todoItems.length : ''"></span>
     </button>
-    <button class="pill-btn" title="Admin" @click="adminOpen = true">
+    <button class="pill-btn" title="Manage" @click="adminOpen = true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      Admin <span class="pill-count" :class="{ 'pill-count-hidden': !adminStatusLoaded, 'pill-count-empty': adminStatusLoaded && !adminStatus.needs_attention, 'pill-count-warn': adminStatus.needs_attention }"
+      Manage <span class="pill-count" :class="{ 'pill-count-hidden': !adminStatusLoaded, 'pill-count-empty': adminStatusLoaded && !adminStatus.needs_attention, 'pill-count-warn': adminStatus.needs_attention }"
                   x-text="adminStatusLoaded ? adminStatus.todo.length : ''"></span>
     </button>
     <button class="icon-btn" :title="themeLabel" @click="toggleTheme()">
@@ -50,7 +46,11 @@
             x-model="captureText" @focus="captureOpen = true" @keydown="captureKeydown($event)"></textarea>
   <div class="capture-controls-wrap" :inert="captureCompact">
     <div class="capture-controls">
-      <span id="capture-msg" x-text="captureMsg"></span>
+      <span class="capture-left">
+        <button class="link-btn" type="button" @click="openNewEntryModal()"
+                title="Create a titled tutorial, how-to, reference or explanation entry">Write a full entry…</button>
+        <span id="capture-msg" x-text="captureMsg"></span>
+      </span>
       <button class="btn btn-primary" @click="capture()" :disabled="captureBusy">Add</button>
     </div>
   </div>
@@ -86,7 +86,7 @@
 <div id="admin-backdrop" :class="{ open: adminOpen }" @click="adminOpen = false"></div>
 <div id="admin-drawer" :class="{ open: adminOpen }" :aria-hidden="!adminOpen" :inert="!adminOpen">
   <div id="admin-drawer-header">
-    <strong>Admin</strong>
+    <strong>Manage</strong>
     <button class="icon-btn" title="Close" @click="adminOpen = false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
@@ -142,6 +142,7 @@
       </ul>
       <button class="btn" x-show="adminStatus.needs_attention" @click="adminSetup()" :disabled="adminBusy"
               x-text="adminConfirm === 'setup' ? 'Click again to run setup' : 'Fix with setup'"></button>
+      <button class="btn" x-show="adminTodoMentionsReminders()" @click="adminSetTab('services')">Fix reminders…</button>
     </div>
   </div>
 
@@ -225,6 +226,45 @@
             <button class="btn btn-danger" x-show="adminServices.sync.installed" @click="adminService('sync', 'uninstall')" :disabled="adminBusy"
                     x-text="adminConfirm === 'sync:uninstall' ? 'Click again to remove' : 'Uninstall'"></button>
           </div>
+        </div>
+      </div>
+    </template>
+    <template x-if="adminReminders && adminReminders.supported">
+      <div class="admin-card" id="reminders-card">
+        <div class="admin-card-head">
+          <strong>TODO reminders</strong>
+          <span class="admin-badge" :class="reminderState().cls" x-text="reminderState().label"></span>
+        </div>
+        <p class="admin-hint">Sends a desktop notification when a todo with a due date comes due
+          (<code>kb todo -a "…" --due 2h</code>), and again after a snooze ends.</p>
+        <template x-if="adminReminders.kind === 'launchd' && !adminReminders.notifier.terminal_notifier">
+          <p class="admin-hint">Install <code>terminal-notifier</code> (<code>brew install terminal-notifier</code>), then
+            reinstall, for notifications with kb's own icon. Until then they come from Script Editor.</p>
+        </template>
+        <template x-if="reminderNeedsPermission()">
+          <div class="admin-steps">
+            <p class="admin-hint warn">macOS isn't allowing notifications from <strong>kb reminders</strong>
+              (<span x-text="adminReminders.notifier.authorization || 'unknown'"></span>).</p>
+            <ol>
+              <li>Open System Settings → Notifications → <strong>kb reminders</strong>.
+                <button class="btn" @click="adminReminderOpenSettings()">Open System Settings</button></li>
+              <li>Turn on <strong>Allow Notifications</strong>.</li>
+              <li>Come back here — this card re-checks on its own — or
+                <button class="btn" @click="adminReminderTest()" :disabled="adminBusy">Send test notification</button></li>
+            </ol>
+            <p class="admin-hint">Clicked <em>Don't Allow</em> earlier? Settings is the only place to undo it, or run
+              <code>tccutil reset UserNotification dev.pkb-cli.notifier</code> in a terminal to be asked again.</p>
+          </div>
+        </template>
+        <p class="admin-hint" x-show="adminReminderTestMsg" :class="{ warn: !adminReminderTestOk }"
+           x-text="adminReminderTestMsg"></p>
+        <div class="admin-row">
+          <label class="admin-check">check every <input type="number" min="1" max="10080" x-model="adminReminderInterval" class="admin-num"> min</label>
+          <button class="btn btn-primary" @click="adminReminderInstall()" :disabled="adminBusy"
+                  x-text="adminReminders.installed ? 'Update schedule' : 'Turn on reminders'"></button>
+          <button class="btn" x-show="adminReminders.installed && !reminderNeedsPermission()" @click="adminReminderTest()" :disabled="adminBusy">Send test notification</button>
+          <button class="btn btn-danger" x-show="adminReminders.installed" @click="adminReminderUninstall()" :disabled="adminBusy"
+                  x-text="adminConfirm === 'remind:uninstall' ? 'Click again to remove' : 'Turn off'"></button>
         </div>
       </div>
     </template>

@@ -2768,7 +2768,7 @@ def _service_uninstall(kind, agent_name):
 
 def _service_state(kind, name):
     """{installed, running, detail} for one installed-or-not service --
-    what `kb service status`, `kb sync-service status` and kb web's Admin panel
+    what `kb service status`, `kb sync-service status` and kb web's Manage panel
     all report, so they can't disagree. `detail` is a human string for the
     not-installed / not-loaded / not-active cases; On systemd it's the unit's active state ("inactive", "failed", ...)."""
     agent = AGENTS[name]
@@ -2816,7 +2816,7 @@ def _timer_interval_minutes(kind, name):
 
 
 def service_info():
-    """Structured `kb service status` / `kb sync-service status` for kb web's Admin
+    """Structured `kb service status` / `kb sync-service status` for kb web's Manage
     panel: {supported, kind, web: {...}, sync: {...}}, each service reporting
     {installed, running, detail}. Never writes anything."""
     kind = _service_kind()
@@ -3031,7 +3031,7 @@ def _sync_service_status(kind):
 
 def doctor_checks(root, push=None):
     """(ok, todo) lists of human-readable status lines -- the actual health
-    check logic behind `kb doctor`, factored out so `kb web`'s Admin panel can
+    check logic behind `kb doctor`, factored out so `kb web`'s Manage panel can
     show (and poll) the exact same read-only checks as data instead of parsing
     printed output. Never writes anything. root may be None (tool-level checks
     -- glab/rg/fzf, pkb-cli's own update status -- don't need a data repo;
@@ -3253,7 +3253,7 @@ def cmd_doctor(args):
 
 def plan_update():
     """Decide what `kb update` would do, without doing it -- the single source of
-    truth for `kb update`, `kb update --check` and kb web's Admin panel, so they
+    truth for `kb update`, `kb update --check` and kb web's Manage panel, so they
     can't disagree about whether an update is available or allowed. Touches the
     network (git fetch / GitHub releases API) but never writes to the install.
 
@@ -3343,7 +3343,7 @@ class _UpdateOpts(typing.NamedTuple):
     # print the installer's output (so a caller can capture it) instead of letting
     # it stream straight to the terminal -- see _run_captured
     capture: bool = False
-    # leave restarting the login services to the caller: kb web's Admin panel
+    # leave restarting the login services to the caller: kb web's Manage panel
     # can't have its own service restarted underneath an in-flight request
     defer_refresh: bool = False
 

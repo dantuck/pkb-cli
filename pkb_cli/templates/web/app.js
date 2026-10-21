@@ -1679,8 +1679,12 @@ document.addEventListener("alpine:init", () => {
     adminUpdate: null, // /api/admin/update result; null until checked
     adminUpdateChecking: false,
     adminServices: null, // /api/admin/services result; null until loaded
+    adminReminders: null, // /api/admin/reminders result; null until loaded
+    adminReminderInterval: 5,
+    adminReminderTestMsg: "",
+    adminReminderTestOk: true,
     // Populated by /api/admin/status -- the same read-only checks `kb doctor`
-    // reports, polled on a timer so the Admin badge and drawer reflect what
+    // reports, polled on a timer so the Manage badge and drawer reflect what
     // needs attention without anyone clicking "Doctor" themselves.
     adminStatus: { ok: [], todo: [], needs_attention: false, version: "", root: "", sources: [], push: { is_git: false, upstream: null, ahead: null, behind: null } },
     adminStatusLoaded: false,
@@ -1693,6 +1697,74 @@ document.addEventListener("alpine:init", () => {
     async loadAdminServices() {
       const { ok, data } = await apiFetch("/api/admin/services", "GET");
       if (ok) this.adminServices = data;
+    },
+    async loadAdminReminders() {
+      const { ok, data } = await apiFetch("/api/admin/reminders", "GET");
+      if (ok) {
+        this.adminReminders = data;
+        if (data.interval_minutes) this.adminReminderInterval = data.interval_minutes;
+        // the permission was granted since the last look: drop the stale failed test
+        if (this.reminderNotifierAllowed()) this.adminReminderTestMsg = this.adminReminderTestOk ? this.adminReminderTestMsg : "";
+      }
+    },
+    // The doctor line about reminders can't be fixed by "Fix with setup" -- it's a macOS
+    // setting -- so the Overview offers a shortcut to the card that walks through it.
+    adminTodoMentionsReminders() {
+      return (this.adminStatus.todo || []).some((line) => /reminder/i.test(line));
+    },
+    reminderNeedsPermission() {
+      const n = this.adminReminders && this.adminReminders.notifier;
+      return !!(this.adminReminders && this.adminReminders.installed && n && n.app_built && !n.allowed);
+    },
+    reminderNotifierAllowed() {
+      const n = this.adminReminders && this.adminReminders.notifier;
+      return !n || !n.app_built || n.allowed;
+    },
+    reminderState() {
+      const r = this.adminReminders;
+      if (!r || !r.installed) return { label: "off", cls: "off" };
+      if (r.detail) return { label: "needs attention", cls: "off" };
+      if (this.reminderNeedsPermission()) return { label: "needs permission", cls: "off" };
+      return { label: r.interval_minutes ? `every ${r.interval_minutes}m` : "on", cls: "ok" };
+    },
+    async adminReminderInstall() {
+      const interval = Number(this.adminReminderInterval);
+      const data = await this.adminRun("reminders install",
+        () => apiFetch("/api/admin/reminders/install", "POST", { interval_minutes: interval }));
+      if (data && data.ok && data.notifications_ok === false) {
+        this.adminSay("reminders installed -- but macOS isn't allowing notifications yet, see the steps below", true);
+      }
+      this.adminReminderTestMsg = "";
+      this.loadAdminReminders();
+      this.loadAdminStatus();
+    },
+    async adminReminderUninstall() {
+      if (this.adminNeedsConfirm("remind:uninstall")) return;
+      await this.adminRun("reminders uninstall", () => apiFetch("/api/admin/reminders/uninstall", "POST"));
+      this.adminReminderTestMsg = "";
+      this.loadAdminReminders();
+      this.loadAdminStatus();
+    },
+    async adminReminderTest() {
+      if (this.adminBusy) return;
+      this.adminBusy = true;
+      try {
+        const { ok, data } = await apiFetch("/api/admin/reminders/test", "POST");
+        this.adminReminderTestOk = ok && !!data.ok;
+        this.adminReminderTestMsg = ok ? data.message : ((data && data.error) || "test failed");
+        if (ok && data.reminders) this.adminReminders = data.reminders;
+        // the steps are already on screen: don't repeat them as a wall of red text
+        if (!this.adminReminderTestOk && this.reminderNeedsPermission()) {
+          this.adminReminderTestMsg = "Still blocked -- macOS hasn't been told to allow it yet. Follow the steps above.";
+        }
+      } finally {
+        this.adminBusy = false;
+      }
+      this.loadAdminStatus();
+    },
+    async adminReminderOpenSettings() {
+      const { ok, data } = await apiFetch("/api/admin/reminders/open-settings", "POST");
+      if (!ok) this.adminSay((data && data.error) || "couldn't open System Settings", true);
     },
     async loadAdminJournalMonths() {
       const { ok, data } = await apiFetch("/api/admin/journal-months", "GET");
@@ -1715,11 +1787,11 @@ document.addEventListener("alpine:init", () => {
       this.adminUpdateChecking = false;
     },
     // Called when the drawer opens, and when switching tabs: refreshes just what
-    // the visible tab shows, so opening Admin doesn't fire every request at once.
+    // the visible tab shows, so opening Manage doesn't fire every request at once.
     adminTabOpened() {
       if (this.adminTab === "overview" && !this.adminUpdate && !this.adminUpdateChecking) this.checkAdminUpdate();
       if (this.adminTab === "maintenance") this.loadAdminJournalMonths();
-      if (this.adminTab === "services") this.loadAdminServices();
+      if (this.adminTab === "services") { this.loadAdminServices(); this.loadAdminReminders(); }
       if (this.adminTab === "settings") this.loadAdminConfig();
     },
     adminSay(msg, err = false) {
@@ -1965,6 +2037,14 @@ document.addEventListener("alpine:init", () => {
       this.$watch("adminOpen", (open) => {
         if (open) { this.loadAdminStatus(); this.adminTabOpened(); } else this.adminConfirm = "";
       });
+      // Coming back from System Settings: re-check the notification permission so the
+      // steps clear on their own once it's allowed (read-only; never prompts).
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && this.adminOpen && this.adminTab === "services") {
+          this.loadAdminReminders();
+          this.loadAdminStatus();
+        }
+      });
       this.$watch("inboxDrawerOpen", updateBodyScrollLock);
       this.$watch("todoDrawerOpen", updateBodyScrollLock);
       this.$watch("paletteOpen", updateBodyScrollLock);
@@ -1998,7 +2078,7 @@ document.addEventListener("alpine:init", () => {
 
       this.refreshAll();
 
-      // Admin health checks are read-only and cheap (file/sqlite checks, no
+      // Manage health checks are read-only and cheap (file/sqlite checks, no
       // network) -- poll them the whole time the tab is open, not just while
       // the drawer is open, so the header badge can flag "needs attention"
       // before anyone thinks to look.

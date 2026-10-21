@@ -1,6 +1,6 @@
 """Tests for pkb_cli/cli.py's doctor_checks -- the read-only health-check logic
 behind `kb doctor`, factored out so kb web's GET /api/admin/status can return
-it as data (for the Admin panel's badge/auto-status) instead of parsing
+it as data (for the Manage panel's badge/auto-status) instead of parsing
 printed output. Only covers the checks that matter to that panel; the rest
 of doctor_checks is exercised end-to-end by `kb doctor` itself.
 """

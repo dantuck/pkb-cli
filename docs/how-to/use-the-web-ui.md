@@ -60,7 +60,8 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   editing the file plus `kb tag`/`kb link` — never hand-edited frontmatter.
   Entries mirrored from an external source (`sources/…`) are read-only: the
   modal shows a banner linking to the origin instead of an edit button.
-- **New** (header button) — opens a modal to create an entry: pick a Diataxis
+- **Write a full entry…** (link beside the Jot box's **Add** button) — opens a modal to
+  create an entry: pick a Diataxis
   type, title, markdown body (with a preview toggle), tags, and links, then
   **create**. Equivalent to `kb new <type> "<title>" --tags ... --links ...`.
 - **Search (⌘K)** — a command-palette-style jump-to-entry search over title
@@ -77,7 +78,7 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   labels), and open one to change priority/type/assignee/labels/description,
   manage `blocked by`/`blocks` dependencies, add comments, and close, reopen,
   or permanently delete it.
-- **Admin** (header button) — a tabbed panel that can run nearly everything
+- **Manage** (header button) — a tabbed panel that can run nearly everything
   `kb` can manage, with command output shown inline. Only one task runs at a
   time; a second request is refused until the first finishes.
   - **Overview** — kb's version with **Check for updates** / **Update now**
@@ -86,7 +87,7 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
     unpushed commits (see [how to use a data repo](use-a-data-repo.md)), and
     the same read-only checks `kb doctor` reports. Those are polled every
     couple of minutes while the tab is open and surfaced as a red count on the
-    Admin button itself, so you don't need to click Doctor to find out;
+    Manage button itself, so you don't need to click Doctor to find out;
     **Fix with setup** appears when something needs attention.
   - **Maintenance** — **Reindex** (with a full-rebuild option), **Sync**
     against a chosen source (`kb sync [memos|gitlab|github|beads|all]`),
