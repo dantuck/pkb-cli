@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/dantuck/pkb-cli/compare/v0.3.0...v0.4.0) (2026-10-21)
+
+
+### Features
+
+* **remind:** show reminders with kb's own icon and guide permission ([c61a92d](https://github.com/dantuck/pkb-cli/commit/c61a92d15cf83e00a9c1bd9d600504fcbd625e7b))
+* **todo:** add due dates, snooze and desktop reminders ([4ee765f](https://github.com/dantuck/pkb-cli/commit/4ee765fa433b1f118208e86bbbefd782f5e463a4))
+* **web:** add reminder and snooze controls to the todo panel ([f2cde84](https://github.com/dantuck/pkb-cli/commit/f2cde84bb2f63255dd29408798ba756098624eba))
+* **web:** add Reminders card, Manage rename and loading spinner ([c74ac37](https://github.com/dantuck/pkb-cli/commit/c74ac3749db596f0148f37bd7924215d7c356a2e))
+
+
+### Bug Fixes
+
+* **service:** retry launchd bootstrap after bootout ([3bc737d](https://github.com/dantuck/pkb-cli/commit/3bc737de8a4456515a44848a73c6e633589ebcb1))
+
 ## [0.3.0](https://github.com/dantuck/pkb-cli/compare/v0.2.0...v0.3.0) (2026-10-03)
 
 
