@@ -160,17 +160,32 @@ h1::before {
 .pill-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-strong); }
 .pill-btn svg { width: 14px; height: 14px; }
 .pill-count {
-  display: inline-block; min-width: 1.35rem; box-sizing: border-box; text-align: center;
+  display: inline-block; min-width: 1.5rem; box-sizing: border-box; text-align: center;
   font-size: 0.7rem; font-weight: 600; background: var(--accent-soft); color: var(--accent-text);
   padding: 0.05rem 0.4rem; border-radius: var(--radius-xs); font-variant-numeric: tabular-nums;
+  /* always reserve the border the "0" state draws, so no state is taller than another */
+  border: 1px solid transparent;
 }
-/* visibility, not x-show/display:none -- so the badge keeps reserving its
-   width and the pill button doesn't jump wider the moment the count loads. */
-.pill-count-hidden { visibility: hidden; }
+/* Still loading: a small spinner in the badge's own box, so the pill keeps its
+   width (no jump) and the number simply replaces it when it arrives. */
+.pill-count-hidden { position: relative; background: transparent; color: transparent; }
+/* a zero-width space keeps the badge's line height, so it is exactly as tall as a real count */
+.pill-count-hidden::before { content: "\200b"; }
+.pill-count-hidden::after {
+  content: ""; position: absolute; top: 50%; left: 50%; width: 0.65rem; height: 0.65rem;
+  margin: -0.325rem 0 0 -0.325rem; box-sizing: border-box;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent-text);
+  border-radius: 50%; animation: pill-spin 0.7s linear infinite;
+}
+@keyframes pill-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  /* a static ring instead of a spinning one */
+  .pill-count-hidden::after { animation: none; border-top-color: var(--border-strong); }
+}
 /* Zero is still an answer -- once loaded, a genuinely empty inbox/todo list
    gets a flat "0" instead of either an alarming accent badge or nothing. */
-.pill-count-empty { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-/* Admin's badge is a "needs attention" flag, not a neutral count -- red only
+.pill-count-empty { background: transparent; color: var(--muted); border-color: var(--border); }
+/* Manage's badge is a "needs attention" flag, not a neutral count -- red only
    when doctor-style checks actually found something. */
 .pill-count-warn { background: var(--danger-soft); color: var(--danger-text); }
 
@@ -200,6 +215,8 @@ h1::before {
   height: 2.9rem; padding-top: 0.6rem;
   display: flex; justify-content: space-between; align-items: center;
 }
+.capture-left { display: flex; align-items: center; gap: 0.8rem; min-width: 0; }
+.capture-left .link-btn { font-size: 0.8rem; white-space: nowrap; }
 /* Only while focus/click opens or closes the box (see app.js) */
 #site-header.snap::before, #site-header.snap #capture, #site-header.snap textarea, #site-header.snap .capture-controls-wrap {
   transition: padding 0.25s ease, height 0.25s ease, opacity 0.2s ease;
@@ -566,10 +583,10 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .modal-backdrop { z-index: 50; background: rgba(10, 10, 16, 0.6); backdrop-filter: blur(3px); }
 #admin-backdrop.open, .drawer-backdrop.open, .modal-backdrop.open { opacity: 1; pointer-events: auto; }
 
-/* Admin, Inbox and Todos all share this same slide-from-the-right panel --
+/* Manage, Inbox and Todos all share this same slide-from-the-right panel --
    one place they're each a quick side trip out of the main feed rather than
    competing for space in it, instead of Inbox/Todos being inline sections
-   and Admin alone getting the drawer treatment. */
+   and Manage alone getting the drawer treatment. */
 #admin-drawer, .side-drawer {
   position: fixed; top: 0; right: 0; height: 100%; width: min(420px, 88vw);
   background: var(--glass-bg); color: var(--text);
@@ -604,7 +621,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
 }
 #admin-drawer-header strong, .side-drawer-header strong { font-size: 1.02rem; color: var(--heading); }
-/* Admin is tabbed -- one section visible at a time -- and wider than the
+/* Manage is tabbed -- one section visible at a time -- and wider than the
    Inbox/Todos drawers since its cards hold inputs next to buttons. */
 #admin-drawer { width: min(480px, 92vw); }
 #admin-tabs {
@@ -637,9 +654,11 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   background: var(--surface); color: var(--muted); border: 1px solid var(--border);
 }
 .admin-badge.ok { color: var(--ok); border-color: currentColor; }
+.admin-steps ol { margin: 0.4rem 0; padding-left: 1.3rem; font-size: 0.85rem; line-height: 1.9; }
+.admin-steps .btn { margin-left: 0.4rem; padding: 0.15rem 0.6rem; font-size: 0.78rem; }
 #admin-msg { color: var(--muted); font-size: 0.82rem; margin: 0.8rem 0 0; }
 /* Auto-refreshed doctor-style checks -- populated on open and on a timer, so
-   Admin surfaces what needs attention without a manual "Doctor" click. */
+   Manage surfaces what needs attention without a manual "Doctor" click. */
 #admin-status { padding-top: 0.2rem; }
 #admin-status .btn { margin-top: 0.7rem; }
 #admin-status-summary { font-size: 0.85rem; font-weight: 600; color: var(--ok); margin: 0 0 0.6rem; }
