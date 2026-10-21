@@ -330,6 +330,7 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #todo-list li.pri-mid .pri-dot { background: var(--accent); }
 #todo-list .todo-title { flex: 1; font-size: 0.9rem; }
 #todo-list .todo-close { flex-shrink: 0; width: 1.6rem; height: 1.6rem; }
+#todo-list .todo-close.confirming { background: var(--danger-soft); color: var(--danger); }
 #todo-list .todo-close svg { width: 13px; height: 13px; }
 .badge-pri-high { background: var(--danger-soft); color: var(--danger-text); }
 .badge-pri-mid { background: var(--accent-soft); color: var(--accent-text); }
