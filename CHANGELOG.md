@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/dantuck/pkb-cli/compare/v0.6.0...v0.6.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **web:** size and wrap setup output in Manage panel ([4a35237](https://github.com/dantuck/pkb-cli/commit/4a3523737af0f09869ce5d906a79c17d2a86fe61))
+
 ## [0.6.0](https://github.com/dantuck/pkb-cli/compare/v0.5.0...v0.6.0) (2026-10-21)
 
 
