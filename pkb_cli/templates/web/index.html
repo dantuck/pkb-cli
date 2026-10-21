@@ -360,7 +360,9 @@
         <button class="icon-btn todo-close" title="Reopen" x-show="item.status === 'closed'" @click.stop="reopenTodo(item)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
         </button>
-        <button class="icon-btn todo-close" title="Close" x-show="item.status !== 'closed'" @click.stop="closeTodo(item)">
+        <button class="icon-btn todo-close" :class="{ confirming: todoConfirmId === item.id }"
+                :title="todoConfirmId === item.id ? 'Click again to close' : 'Close'"
+                x-show="item.status !== 'closed'" @click.stop="confirmCloseTodo(item)" @mouseleave="todoConfirmId = ''">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </li>

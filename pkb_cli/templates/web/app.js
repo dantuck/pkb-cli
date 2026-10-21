@@ -755,6 +755,16 @@ document.addEventListener("alpine:init", () => {
         else this.todoItems = this.todoItems.filter((i) => i.id !== item.id);
       }
     },
+    // The row X closes a todo, so it needs a second click on the same button.
+    confirmCloseTodo(item) {
+      if (this.todoConfirmId !== item.id) {
+        this.todoConfirmId = item.id;
+        setTimeout(() => { if (this.todoConfirmId === item.id) this.todoConfirmId = ""; }, 4000);
+        return;
+      }
+      this.todoConfirmId = "";
+      this.closeTodo(item);
+    },
     async reopenTodo(item) {
       const r = await this.todoAction(item.id, "reopen");
       if (r) item.status = "open";
@@ -1668,6 +1678,7 @@ document.addEventListener("alpine:init", () => {
     adminMsgErr: false,
     adminOutput: "",
     adminBusy: false,
+    todoConfirmId: "", // todo whose row X was clicked once and awaits a second click
     adminConfirm: "", // key of the destructive/heavy action awaiting its second click
     adminSyncSource: "all",
     adminIndexFull: false,
