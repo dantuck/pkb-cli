@@ -6,7 +6,8 @@ writing for four different needs.
 - **[Tutorials](tutorials/)** — learning-oriented. Start here if you're new:
   [getting started](tutorials/getting-started.md).
 - **[How-to guides](how-to/)** — task-oriented steps for a specific goal
-  (pointing `kb` at a data repo, searching without the CLI, triaging the
+  (pointing `kb` at a data repo, searching without the CLI, searching by
+  meaning, triaging the
   inbox, setting up ingestion credentials, installing the Claude Code skill,
   using the web UI).
 - **[Reference](reference/)** — information-oriented lookup: the full CLI

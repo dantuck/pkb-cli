@@ -10,6 +10,7 @@ import sqlite3
 import sys
 
 from . import pkb_common as pc
+from . import semantic
 
 
 def get_db(root):
@@ -23,18 +24,25 @@ def get_db(root):
     return conn
 
 
-def index_repo(root, full=False):
+def index_repo(root, full=False, quiet=False, allow_download=False):
+    """Bring the keyword index -- and, when the `semantic` extra and its model are
+    available, the embeddings -- in line with the files on disk. `allow_download`
+    lets a missing embedding model be fetched once (kb index / kb setup only)."""
     conn = get_db(root)
     cur = conn.cursor()
 
     if full:
         cur.execute("DELETE FROM fts")
         cur.execute("DELETE FROM files")
+        # embeddings are kept: they're keyed by text hash + model, so sync_embeddings
+        # reuses the unchanged ones and drops the rest
 
     cur.execute("SELECT id, path, indexed_updated FROM files")
     indexed = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
+    model_ref = semantic.active_model(root)
     seen_ids = set()
+    wanted = {}  # id -> text to embed (only when semantic is on); hash-compared later, not `updated`
     added, updated, skipped = 0, 0, 0
 
     for path in pc.iter_markdown_files(root):
@@ -47,6 +55,8 @@ def index_repo(root, full=False):
         if not entry_id:
             continue
         seen_ids.add(entry_id)
+        if model_ref:
+            wanted[entry_id] = semantic.entry_text(fm, body)
 
         prev = indexed.get(entry_id)
         current_updated = fm.get("updated") or ""
@@ -88,14 +98,34 @@ def index_repo(root, full=False):
         cur.execute("DELETE FROM files WHERE id = ?", (stale_id,))
 
     conn.commit()
+    embedded, note = _embed(conn, model_ref, wanted, allow_download)
     conn.close()
-    print(f"index: {added} added, {updated} updated, {len(stale_ids)} pruned, {skipped} unchanged")
+    if not quiet:
+        extra = f", {embedded} embedded" if embedded else ""
+        print(f"index: {added} added, {updated} updated, {len(stale_ids)} pruned, {skipped} unchanged{extra}")
+        if note:
+            print(f"semantic index skipped: {note}", file=sys.stderr)
+
+
+def _embed(conn, model_ref, wanted, allow_download):
+    """(entries embedded, why not) -- never raises: the keyword index is already
+    committed, and a missing optional extra or model must not fail a write."""
+    if not model_ref:
+        return 0, None  # not opted in / extra not installed: stay silent
+    try:
+        if allow_download:
+            # kb index / kb setup: make sure the model is on disk even when no entry needs
+            # embedding (a cleared cache, a new machine with a copied db), so search works after
+            semantic.check_model(model_ref, allow_download=True)
+        return semantic.sync_embeddings(conn, model_ref, wanted, allow_download=allow_download), None
+    except semantic.SemanticUnavailable as e:
+        return 0, str(e)
 
 
 def main():
     root = pc.get_repo_root()
     full = "--full" in sys.argv[1:]
-    index_repo(root, full=full)
+    index_repo(root, full=full, allow_download=True)
 
 
 if __name__ == "__main__":
