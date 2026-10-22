@@ -8,3 +8,5 @@ dist/
 build/
 *.egg-info/
 node_modules/
+pnpm-lock.yaml
+uv.lock
