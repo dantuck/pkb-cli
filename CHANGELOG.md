@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/dantuck/pkb-cli/compare/v0.6.1...v0.7.0) (2026-10-28)
+
+
+### Features
+
+* **remind:** push due TODOs to your phone via a Cloudflare Worker ([040da12](https://github.com/dantuck/pkb-cli/commit/040da1281580ebbce061d77e6ab7b60f7ea27f37))
+* **web:** sort todos by due date within each priority ([f71ce59](https://github.com/dantuck/pkb-cli/commit/f71ce5952a3aa1271b32c94fd67d2024df1b35fe))
+
+
+### Documentation
+
+* document phone reminders ([df0a762](https://github.com/dantuck/pkb-cli/commit/df0a7622b7897b58d8da5ac30e62589ed3a76dae))
+
 ## [0.6.1](https://github.com/dantuck/pkb-cli/compare/v0.6.0...v0.6.1) (2026-10-21)
 
 
