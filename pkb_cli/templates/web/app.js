@@ -735,7 +735,7 @@ document.addEventListener("alpine:init", () => {
     setTodoLabelFilter(l) { this.todoLabelFilter = this.todoLabelFilter === l ? "" : l; },
     filteredTodos() {
       const q = this.todoFilter.trim().toLowerCase();
-      return this.todoItems.filter((i) => {
+      const matches = this.todoItems.filter((i) => {
         if (this.todoTypeFilter && i.type !== this.todoTypeFilter) return false;
         if (this.todoLabelFilter && !(i.labels || []).includes(this.todoLabelFilter)) return false;
         if (!q) return true;
@@ -743,6 +743,10 @@ document.addEventListener("alpine:init", () => {
           i.id.toLowerCase().includes(q) ||
           (i.labels || []).some((l) => l.toLowerCase().includes(q));
       });
+      // bd already sorts by priority; within a priority, soonest due first and
+      // undated last. Array.sort is stable, so ties keep bd's order.
+      const key = (i) => [Number(i.priority), i.due_at ? new Date(i.due_at).getTime() : Infinity];
+      return matches.map((i) => [key(i), i]).sort(([a], [b]) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0)).map(([, i]) => i);
     },
     async todoAction(id, action, body) {
       const { ok, data } = await apiFetch(`/api/todo/${encodeURIComponent(id)}/${action}`, "POST", body);
