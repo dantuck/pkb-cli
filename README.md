@@ -53,9 +53,9 @@ pkb-cli/
     skills/kb/          Claude Code skill (SKILL.md), `kb setup` offers to install it
     templates/          schema.sql (loaded at runtime, never copied into a data repo),
                         secrets.env.example (documentation only), and web/ (the
-                        `kb web` front end: plain HTML/CSS/JS + vendored Alpine)
-  cloudflare/           optional Worker for phone reminders (Web Push); see
-                        docs/how-to/get-phone-reminders.md
+                        `kb web` front end: plain HTML/CSS/JS + vendored Alpine), and
+                        worker/ (optional Cloudflare Worker for phone reminders; see
+                        docs/how-to/get-phone-reminders.md)
   tests/                stdlib unittest suite
   docs/                 tutorials/, how-to/, reference/, explanation/
   install.sh

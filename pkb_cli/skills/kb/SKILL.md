@@ -69,7 +69,7 @@ the data repo.
   `kb todo -a` opens bd's own interactive form instead.
   To be reminded, add `--due WHEN` (`30m`, `2h`, `tomorrow 9am`, `friday`);
   `kb todo snooze <id> <when>` hides one until then and reminds again,
-  `kb remind` lists what's due now. `kb remind push setup <worker-url>|sync|
+  `kb remind` lists what's due now. `kb remind push init|setup <worker-url>|sync|
   status|off` also pushes due TODOs (ids only) to the user's phone via their
   own Cloudflare Worker -- run `setup` only when asked, it needs their token.
 - **See how entries connect**: `kb links <id>` prints forward links and
@@ -194,7 +194,7 @@ kb todo due <id> <when>|none [--json]   set or clear a TODO's reminder time
 kb remind [list|check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
-kb remind push setup <worker-url>|sync|status|off
+kb remind push init [dir]|setup <worker-url>|sync|status|off
                                   phone push via the user's Cloudflare Worker (ids only)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
