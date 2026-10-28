@@ -87,6 +87,53 @@ class ConfigTest(unittest.TestCase):
             self.assertIsNone(remind_push.get_config())
 
 
+class InitWorkerTest(unittest.TestCase):
+    def setUp(self):
+        self.dest = os.path.join(tempfile.mkdtemp(), "worker")
+
+    def test_copies_the_source_and_records_the_kb_version(self):
+        info = remind_push.init_worker(self.dest)
+        self.assertEqual(info["previous"], None)
+        for rel in ("wrangler.jsonc", "src/index.ts", "migrations/0001_init.sql", "public/sw.js"):
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, rel)), rel)
+        with open(os.path.join(self.dest, remind_push.VERSION_FILE)) as f:
+            self.assertEqual(f.read().strip(), remind_push.__version__)
+
+    def test_dev_artifacts_are_not_copied(self):
+        info = remind_push.init_worker(self.dest)
+        for name in ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml"):
+            self.assertFalse(os.path.exists(os.path.join(info["dest"], name)), name)
+
+    def test_refresh_keeps_the_database_id_and_installed_dependencies(self):
+        remind_push.init_worker(self.dest)
+        config = os.path.join(self.dest, "wrangler.jsonc")
+        db_id = "0a1b2c3d-0000-4000-8000-123456789abc"
+        with open(config) as f:
+            text = f.read()
+        with open(config, "w") as f:
+            f.write(text.replace(remind_push._DB_NAME_LINE, f'{remind_push._DB_NAME_LINE} "database_id": "{db_id}",'))
+        os.makedirs(os.path.join(self.dest, "node_modules", "x"))
+        with open(os.path.join(self.dest, remind_push.VERSION_FILE), "w") as f:
+            f.write("0.0.1\n")
+        with open(os.path.join(self.dest, "src", "index.ts"), "w") as f:
+            f.write("// stale")
+
+        info = remind_push.init_worker(self.dest)
+
+        self.assertEqual(info["previous"], "0.0.1")
+        with open(config) as f:
+            self.assertEqual(f.read().count(db_id), 1)
+        self.assertTrue(os.path.isdir(os.path.join(self.dest, "node_modules", "x")))
+        with open(os.path.join(self.dest, "src", "index.ts")) as f:
+            self.assertNotIn("stale", f.read())
+
+    def test_reports_migrations_added_since_the_last_copy(self):
+        remind_push.init_worker(self.dest)
+        os.remove(os.path.join(self.dest, "migrations", "0001_init.sql"))
+        self.assertEqual(remind_push.init_worker(self.dest)["new_migrations"], ["0001_init.sql"])
+        self.assertEqual(remind_push.init_worker(self.dest)["new_migrations"], [])
+
+
 class SyncTest(unittest.TestCase):
     CONFIG = ("https://w.example", "tok")
 
@@ -137,6 +184,24 @@ class StatusTest(unittest.TestCase):
         ok, msg = self.check({"subscriptions": 0, "reminders": 0})
         self.assertFalse(ok)
         self.assertIn("Enable notifications", msg)
+
+
+class UpdateRefreshesWorkerTest(unittest.TestCase):
+    """`kb update` refreshes a Worker copied out with `push init`, and never deploys it."""
+
+    def run_refresh(self, exists):
+        opts = kb_cli._UpdateOpts(False, False, False)
+        with mock.patch.object(kb_cli.os.path, "isdir", return_value=exists), \
+                mock.patch.object(kb_cli, "installed_kb_argv", side_effect=lambda *a: ["kb", *a]), \
+                mock.patch.object(kb_cli, "_run_update_step") as step:
+            kb_cli._refresh_worker_after_update(opts)
+        return step
+
+    def test_refreshes_the_copy_with_the_freshly_installed_kb(self):
+        self.run_refresh(True).assert_called_once_with(["kb", "remind", "push", "init"], mock.ANY)
+
+    def test_does_nothing_when_the_worker_was_never_copied_out(self):
+        self.run_refresh(False).assert_not_called()
 
 
 class CheckSyncsTest(unittest.TestCase):

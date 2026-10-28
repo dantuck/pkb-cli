@@ -35,6 +35,11 @@ packages = ["pkb_cli"]
 [tool.setuptools.package-data]
 pkb_cli = ["templates/**/*", "skills/**/*"]
 
+# a dev checkout may have installed or generated these in the Worker's directory
+[tool.setuptools.exclude-package-data]
+pkb_cli = ["templates/worker/node_modules/*", "templates/worker/.wrangler/*",
+           "templates/worker/pnpm-lock.yaml", "templates/worker/worker-configuration.d.ts"]
+
 [tool.ruff]
 target-version = "py39"
 line-length = 120

@@ -2057,6 +2057,19 @@ def cmd_remind(args):
     return 0
 
 
+def _print_worker_init(info):
+    dest = info["dest"]
+    if info["previous"] is None:
+        print(f"copied the Worker to {dest}\nnext: `cd {shlex.quote(dest)} && pnpm install`, then follow "
+              f"https://github.com/dantuck/pkb-cli/blob/main/docs/how-to/get-phone-reminders.md")
+        return
+    note = "" if info["previous"] == __version__ else f" (from kb {info['previous']} to {__version__})"
+    print(f"refreshed the Worker in {dest}{note}")
+    if info["new_migrations"]:
+        print("new database migrations: run `pnpm wrangler d1 migrations apply kb-reminders --remote` first")
+    print(f"to put it live: cd {shlex.quote(dest)} && pnpm install && pnpm deploy")
+
+
 def _remind_issues():
     """Open bd issues for the reminder commands, or None after printing why not."""
     if not shutil.which("bd"):
@@ -2071,9 +2084,13 @@ def _remind_issues():
 
 
 def cmd_remind_push(args):
-    """`kb remind push setup <url> | sync | status | off` -- phone reminders through the
-    kb-push Cloudflare Worker (cloudflare/, docs/how-to/get-phone-reminders.md)."""
+    """`kb remind push init [dir] | setup <url> | sync | status | off` -- phone reminders
+    through the kb-push Cloudflare Worker (templates/worker, docs/how-to/get-phone-reminders.md)."""
     sub = args.rest[0] if args.rest else "status"
+    if sub == "init":
+        info = remind_push.init_worker(args.rest[1] if len(args.rest) > 1 else None)
+        _print_worker_init(info)
+        return 0
     if sub == "status":
         ok, msg = remind_push.status()
         _print_result(ok, msg)
@@ -2109,7 +2126,7 @@ def cmd_remind_push(args):
         if not payload.get("subscriptions"):
             print(f"next: open {url} on your phone and tap Enable notifications")
         return 0
-    print(f"error: unknown push action '{sub}' -- use setup, sync, status or off", file=sys.stderr)
+    print(f"error: unknown push action '{sub}' -- use init, setup, sync, status or off", file=sys.stderr)
     return 1
 
 
@@ -3566,6 +3583,7 @@ def apply_update(check=False, capture=False, defer_refresh=False):
     if rc != 0:
         return rc, False
     _refresh_services_after_update(opts)
+    _refresh_worker_after_update(opts)
     if plan["mode"] == "legacy":
         print(f"migrated. future `kb update`s use {plan['installer']}; run `kb setup` to refresh the hook and "
               f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
@@ -3588,6 +3606,14 @@ def _refresh_services_after_update(opts):
     point at the new install itself."""
     if not opts.defer_refresh and _service_kind():
         _run_update_step(installed_kb_argv("service", "refresh"), opts)
+
+
+def _refresh_worker_after_update(opts):
+    """If the phone-reminder Worker was copied out with `kb remind push init`, refresh that
+    copy from the freshly installed kb and say how to redeploy. Only local files change --
+    putting it live on Cloudflare stays an explicit step."""
+    if os.path.isdir(remind_push.worker_dir()):
+        _run_update_step(installed_kb_argv("remind", "push", "init"), opts)
 
 
 def installed_kb_argv(*args):
@@ -3936,7 +3962,8 @@ def main():
             "  kb remind install                   check every 5 minutes, notify on due\n"
             "  kb remind test                      send a test notification (and say how to fix it if not)\n"
             "  kb todo snooze <id> 1h              hide it, remind me again in an hour\n"
-            "  kb remind push setup <url>          also push to your phone via a Cloudflare Worker\n"
+            "  kb remind push init                 copy out the Cloudflare Worker that pushes to your phone\n"
+            "  kb remind push setup <url>          then point kb at it once it's deployed\n"
             "  kb remind status | uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3944,7 +3971,7 @@ def main():
     p.add_argument("action", nargs="?", default="list",
                     choices=["list", "check", "test", "install", "uninstall", "status", "push"])
     p.add_argument("rest", nargs="*", metavar="ARG",
-                    help="for `push`: setup <worker-url> | sync | status | off")
+                    help="for `push`: init [dir] | setup <worker-url> | sync | status | off")
     p.add_argument("--interval-minutes", type=int, default=5, metavar="MIN",
                     help="how often to run `kb remind check` (default: 5; install only)")
     p.add_argument("--repeat-hours", type=float, default=4, metavar="H",
