@@ -7,7 +7,7 @@ import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
