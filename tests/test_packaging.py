@@ -2,7 +2,9 @@
 (`python -m pkb_cli.<module>`), in-process imports of sibling modules, and
 bundled data files all have to resolve the same way from a wheel as from a
 source checkout."""
+import contextlib
 import importlib.resources
+import io
 import os
 import subprocess
 import sys
@@ -14,6 +16,13 @@ from pkb_cli import __version__, cli, pkb_common as pc, pkb_entries
 
 
 class PackagingTest(unittest.TestCase):
+    def setUp(self):
+        # kb's own progress lines ("refreshed dev.pkb-cli.web", "kb 999.0.0 is available", ...)
+        # come from code these tests mock out; printed, they read like a real service restart
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+
     def test_python_dash_m_entry_point_runs(self):
         out = subprocess.run([sys.executable, "-m", "pkb_cli", "--version"], capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stderr)
