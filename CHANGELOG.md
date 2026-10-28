@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/dantuck/pkb-cli/compare/v0.7.0...v0.8.0) (2026-10-28)
+
+
+### Features
+
+* **remind:** deploy and update the Worker from kb ([c8bb316](https://github.com/dantuck/pkb-cli/commit/c8bb3160caf1a70c54b4d9783addee0d248aa23d))
+* **remind:** ship the Worker in the package; add kb remind push init ([128c336](https://github.com/dantuck/pkb-cli/commit/128c3360924b3208fe914fa7fe107b04b69ceb8e))
+
+
+### Bug Fixes
+
+* **remind:** reject --ask outside kb remind push deploy ([c31feec](https://github.com/dantuck/pkb-cli/commit/c31feec59b20f80d4487c2019b8fa20f9a8dd1ee))
+
+
+### Documentation
+
+* deploy and upgrade the phone-reminder Worker from the package ([8ef19bc](https://github.com/dantuck/pkb-cli/commit/8ef19bca2ee2792e873c42fe0561d919831f075d))
+* document deploying and updating the Worker with kb ([3ce21eb](https://github.com/dantuck/pkb-cli/commit/3ce21eb963c824e5b8ebb6c92d4f879a672994cf))
+
 ## [0.7.0](https://github.com/dantuck/pkb-cli/compare/v0.6.1...v0.7.0) (2026-10-28)
 
 
