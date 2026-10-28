@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from . import pkb_common as pc
 from . import index_fts
 from . import remind_push
+from . import worker_deploy
 from . import semantic
 from . import __version__
 from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
@@ -2084,9 +2085,12 @@ def _remind_issues():
 
 
 def cmd_remind_push(args):
-    """`kb remind push init [dir] | setup <url> | sync | status | off` -- phone reminders
-    through the kb-push Cloudflare Worker (templates/worker, docs/how-to/get-phone-reminders.md)."""
+    """`kb remind push init [dir] | deploy | setup <url> | sync | status | off` -- phone
+    reminders through the kb-push Cloudflare Worker (templates/worker,
+    docs/how-to/get-phone-reminders.md)."""
     sub = args.rest[0] if args.rest else "status"
+    if sub == "deploy":
+        return worker_deploy.deploy(ask=args.ask)
     if sub == "init":
         info = remind_push.init_worker(args.rest[1] if len(args.rest) > 1 else None)
         _print_worker_init(info)
@@ -2126,7 +2130,7 @@ def cmd_remind_push(args):
         if not payload.get("subscriptions"):
             print(f"next: open {url} on your phone and tap Enable notifications")
         return 0
-    print(f"error: unknown push action '{sub}' -- use init, setup, sync, status or off", file=sys.stderr)
+    print(f"error: unknown push action '{sub}' -- use init, deploy, setup, sync, status or off", file=sys.stderr)
     return 1
 
 
@@ -3609,11 +3613,16 @@ def _refresh_services_after_update(opts):
 
 
 def _refresh_worker_after_update(opts):
-    """If the phone-reminder Worker was copied out with `kb remind push init`, refresh that
-    copy from the freshly installed kb and say how to redeploy. Only local files change --
-    putting it live on Cloudflare stays an explicit step."""
-    if os.path.isdir(remind_push.worker_dir()):
-        _run_update_step(installed_kb_argv("remind", "push", "init"), opts)
+    """Carry the phone-reminder Worker along with the release, using the freshly installed
+    kb: update it if kb is pointed at one and its source changed, else offer to set one up
+    (once). It needs a terminal -- wrangler may log in or prompt -- so an update run from
+    the web UI or a script only says what to do."""
+    if opts.capture or opts.defer_refresh or not worker_deploy.interactive():
+        if remind_push.get_config():
+            print("the phone-reminder Worker wasn't updated here -- run `kb remind push deploy` "
+                  "in a terminal to update it")
+        return
+    _run_update_step(installed_kb_argv("remind", "push", "deploy", "--ask"), opts)
 
 
 def installed_kb_argv(*args):
@@ -3962,8 +3971,9 @@ def main():
             "  kb remind install                   check every 5 minutes, notify on due\n"
             "  kb remind test                      send a test notification (and say how to fix it if not)\n"
             "  kb todo snooze <id> 1h              hide it, remind me again in an hour\n"
-            "  kb remind push init                 copy out the Cloudflare Worker that pushes to your phone\n"
-            "  kb remind push setup <url>          then point kb at it once it's deployed\n"
+            "  kb remind push deploy               set up (or update) the Cloudflare Worker that pushes to your phone\n"
+            "  kb remind push init                 just copy its source out, to deploy by hand\n"
+            "  kb remind push setup <url>          point kb at a Worker you deployed yourself\n"
             "  kb remind status | uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3971,7 +3981,8 @@ def main():
     p.add_argument("action", nargs="?", default="list",
                     choices=["list", "check", "test", "install", "uninstall", "status", "push"])
     p.add_argument("rest", nargs="*", metavar="ARG",
-                    help="for `push`: init [dir] | setup <worker-url> | sync | status | off")
+                    help="for `push`: init [dir] | deploy | setup <worker-url> | sync | status | off")
+    p.add_argument("--ask", action="store_true", help=argparse.SUPPRESS)  # `kb update`: offer, don't just do
     p.add_argument("--interval-minutes", type=int, default=5, metavar="MIN",
                     help="how often to run `kb remind check` (default: 5; install only)")
     p.add_argument("--repeat-hours", type=float, default=4, metavar="H",

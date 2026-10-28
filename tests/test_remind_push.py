@@ -186,24 +186,6 @@ class StatusTest(unittest.TestCase):
         self.assertIn("Enable notifications", msg)
 
 
-class UpdateRefreshesWorkerTest(unittest.TestCase):
-    """`kb update` refreshes a Worker copied out with `push init`, and never deploys it."""
-
-    def run_refresh(self, exists):
-        opts = kb_cli._UpdateOpts(False, False, False)
-        with mock.patch.object(kb_cli.os.path, "isdir", return_value=exists), \
-                mock.patch.object(kb_cli, "installed_kb_argv", side_effect=lambda *a: ["kb", *a]), \
-                mock.patch.object(kb_cli, "_run_update_step") as step:
-            kb_cli._refresh_worker_after_update(opts)
-        return step
-
-    def test_refreshes_the_copy_with_the_freshly_installed_kb(self):
-        self.run_refresh(True).assert_called_once_with(["kb", "remind", "push", "init"], mock.ANY)
-
-    def test_does_nothing_when_the_worker_was_never_copied_out(self):
-        self.run_refresh(False).assert_not_called()
-
-
 class CheckSyncsTest(unittest.TestCase):
     """`kb remind check` mirrors to the Worker on every run, and a failure never breaks it."""
 
