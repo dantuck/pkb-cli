@@ -3,7 +3,7 @@
 `kb remind` notifies your desktop when a TODO comes due, and only while the
 machine is awake. This adds a push notification to your phone that arrives
 either way, using a small Cloudflare Worker you deploy to your own account
-(`cloudflare/` in this repo).
+(its source ships inside `kb`).
 
 ## How it works
 
@@ -24,45 +24,74 @@ reminders](../explanation/design.md#phone-reminders). Flags and config keys:
 
 ## Deploy the Worker
 
-You need a Cloudflare account, Node, and pnpm.
+You need a Cloudflare account and Node with pnpm (or npm). One command does it all:
 
 ```bash
-cd cloudflare
-pnpm install
-pnpm wrangler login
-pnpm wrangler d1 create kb-reminders     # add the printed database_id to wrangler.jsonc
-pnpm wrangler d1 migrations apply kb-reminders --remote
-pnpm deploy
+kb remind push deploy
 ```
 
-Then generate and store its four secrets. `gen:keys` prints them and writes
-nothing to disk; keep the two tokens in your password manager.
+It copies the Worker's source to `~/.local/share/pkb-cli/worker`, installs its
+dependencies, logs you in to Cloudflare if needed, creates the `kb-reminders` D1
+database and applies its migrations, generates the Worker's keys and tokens, and
+deploys it. It then saves the Worker's URL and the sync token in kb's config and prints
+the **subscribe token** once, because your phone needs it and kb doesn't keep it. Save
+it in your password manager.
 
-```bash
-pnpm gen:keys
-pnpm wrangler secret put VAPID_PUBLIC_KEY      # paste each value when asked
-pnpm wrangler secret put VAPID_PRIVATE_KEY
-pnpm wrangler secret put SYNC_TOKEN            # lets `kb` upload reminders
-pnpm wrangler secret put SUBSCRIBE_TOKEN       # lets your phone subscribe, nothing else
-```
+(`kb update` also offers to run this, once, if you haven't set it up; say no and it won't
+ask again.)
 
-Deploy only needs repeating when you change the Worker. Rotate a token by
-generating a new one and running `secret put` again.
+## Connect your phone
 
-## Connect kb and your phone
-
-```bash
-kb remind push setup https://kb-push.<your-subdomain>.workers.dev   # asks for SYNC_TOKEN
-```
-
-On your Android phone, open the same URL in Chrome, enter the `SUBSCRIBE_TOKEN`,
-tap **Enable notifications**, and allow the permission. Adding the page to your
-home screen (Chrome menu, Install app) is optional.
+On your Android phone, open the Worker's URL in Chrome, enter the subscribe token, tap
+**Enable notifications**, and allow the permission. Adding the page to your home screen
+(Chrome menu, Install app) is optional.
 
 ```bash
 kb remind push status    # worker reachable, token accepted, phone subscribed
 kb remind test           # desktop test, then a test push to your phone
 ```
+
+## Upgrading
+
+The Worker's source is part of each `kb` release. When you run `kb update` in a
+terminal and kb is already pointed at a Worker, it compares the new source with what
+you last deployed and, if it changed, redeploys it, so there is nothing else to do. A
+release that doesn't touch the Worker skips it, so no login or Node is needed. To do it
+by hand, or when `kb update` ran somewhere without a terminal (the web UI's update
+button, a script), run:
+
+```bash
+kb remind push deploy
+```
+
+Your secrets and database stay on Cloudflare and the database id is kept in the copied
+Worker, so nothing is re-entered, and migrations a release adds are applied before the
+deploy.
+
+## Deploy by hand
+
+Prefer to run wrangler yourself, or to use a different Cloudflare account setup?
+
+```bash
+kb remind push init       # copies the source to ~/.local/share/pkb-cli/worker (or pass a directory)
+cd ~/.local/share/pkb-cli/worker
+pnpm install
+pnpm wrangler login
+pnpm wrangler d1 create kb-reminders     # add the printed database_id to wrangler.jsonc
+pnpm wrangler d1 migrations apply kb-reminders --remote
+pnpm deploy
+pnpm gen:keys            # prints the four secrets; nothing is written to disk
+pnpm wrangler secret put VAPID_PUBLIC_KEY      # paste each value when asked
+pnpm wrangler secret put VAPID_PRIVATE_KEY
+pnpm wrangler secret put SYNC_TOKEN            # lets `kb` upload reminders
+pnpm wrangler secret put SUBSCRIBE_TOKEN       # lets your phone subscribe, nothing else
+kb remind push setup https://kb-push.<your-subdomain>.workers.dev   # asks for SYNC_TOKEN
+```
+
+Rotate a token by generating a new one and running `secret put` again. After a `kb update`,
+`kb remind push init` refreshes the copy (keeping `node_modules` and the database id); then
+`pnpm install`, `pnpm wrangler d1 migrations apply kb-reminders --remote` and `pnpm deploy`
+as above.
 
 ## Everyday use
 

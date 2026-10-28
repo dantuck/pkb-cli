@@ -87,6 +87,45 @@ class ConfigTest(unittest.TestCase):
             self.assertIsNone(remind_push.get_config())
 
 
+class InitWorkerTest(unittest.TestCase):
+    def setUp(self):
+        self.dest = os.path.join(tempfile.mkdtemp(), "worker")
+
+    def test_copies_the_source_and_returns_where(self):
+        self.assertEqual(remind_push.init_worker(self.dest), self.dest)
+        for rel in ("wrangler.jsonc", "src/index.ts", "migrations/0001_init.sql", "public/sw.js"):
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, rel)), rel)
+
+    def test_dev_artifacts_are_not_copied(self):
+        remind_push.init_worker(self.dest)
+        for name in ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml"):
+            self.assertFalse(os.path.exists(os.path.join(self.dest, name)), name)
+
+    def test_refresh_keeps_the_database_id_and_installed_dependencies(self):
+        remind_push.init_worker(self.dest)
+        config = os.path.join(self.dest, "wrangler.jsonc")
+        db_id = "0a1b2c3d-0000-4000-8000-123456789abc"
+        self.assertTrue(remind_push.set_database_id(config, db_id))
+        os.makedirs(os.path.join(self.dest, "node_modules", "x"))
+        with open(os.path.join(self.dest, "src", "index.ts"), "w") as f:
+            f.write("// stale")
+
+        remind_push.init_worker(self.dest)
+
+        with open(config) as f:
+            self.assertEqual(f.read().count(db_id), 1)
+        self.assertTrue(os.path.isdir(os.path.join(self.dest, "node_modules", "x")))
+        with open(os.path.join(self.dest, "src", "index.ts")) as f:
+            self.assertNotIn("stale", f.read())
+
+    def test_set_database_id_reports_when_the_config_no_longer_has_its_anchor(self):
+        remind_push.init_worker(self.dest)
+        config = os.path.join(self.dest, "wrangler.jsonc")
+        with open(config, "w") as f:
+            f.write("{}")
+        self.assertFalse(remind_push.set_database_id(config, "0a1b2c3d-0000-4000-8000-123456789abc"))
+
+
 class SyncTest(unittest.TestCase):
     CONFIG = ("https://w.example", "tok")
 
@@ -139,11 +178,34 @@ class StatusTest(unittest.TestCase):
         self.assertIn("Enable notifications", msg)
 
 
+class AskFlagTest(unittest.TestCase):
+    """--ask is `kb update`'s way of asking for deploy-if-stale; nothing else takes it."""
+
+    def run_remind(self, action, rest):
+        err = io.StringIO()
+        args = SimpleNamespace(action=action, rest=rest, ask=True)
+        with redirect_stderr(err), mock.patch.object(kb_cli.worker_deploy, "deploy", return_value=0) as deploy:
+            rc = kb_cli.cmd_remind(args)
+        return rc, deploy, err.getvalue()
+
+    def test_rejected_for_other_actions(self):
+        for action, rest in (("check", []), ("test", []), ("push", ["sync"]), ("push", [])):
+            rc, deploy, err = self.run_remind(action, rest)
+            self.assertEqual(rc, 2, (action, rest))
+            self.assertIn("--ask only applies to `kb remind push deploy`", err)
+            deploy.assert_not_called()
+
+    def test_accepted_for_push_deploy(self):
+        rc, deploy, _ = self.run_remind("push", ["deploy"])
+        self.assertEqual(rc, 0)
+        deploy.assert_called_once_with(ask=True)
+
+
 class CheckSyncsTest(unittest.TestCase):
     """`kb remind check` mirrors to the Worker on every run, and a failure never breaks it."""
 
     def run_check(self, sync_result):
-        args = SimpleNamespace(action="check", rest=[], repeat_hours=4)
+        args = SimpleNamespace(action="check", rest=[], repeat_hours=4, ask=False)
         err = io.StringIO()
         with mock.patch.object(kb_cli, "_service_kind", return_value="launchd"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/bd"), \

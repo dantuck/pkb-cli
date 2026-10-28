@@ -1,12 +1,17 @@
 """Phone reminders: upload each TODO's id + due time to the kb-push Cloudflare Worker
-(see cloudflare/), which sends the Web Push when it comes due -- so a reminder still
+(templates/worker), which sends the Web Push when it comes due -- so a reminder still
 arrives while this machine is asleep. Only ids, due times and priorities leave the
 machine; titles and descriptions never do.
 
 The Worker's URL and sync token live in kb's machine-local config (never a data repo,
-which is committed), with KB_PUSH_URL / KB_PUSH_TOKEN as overrides."""
+which is committed), with KB_PUSH_URL / KB_PUSH_TOKEN as overrides. The Worker's source
+ships inside this package (templates/worker); `init_worker` copies it out to deploy."""
+import functools
+import hashlib
 import json
 import os
+import re
+import shutil
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -14,6 +19,86 @@ from urllib.parse import urlparse
 from . import pkb_common as pc
 
 TIMEOUT_SECONDS = 15
+WORKER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "worker")
+# not part of the source: a dev checkout may have installed or built these in place
+_NOT_SOURCE_NAMES = ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml",
+                     "worker-configuration.d.ts", "__pycache__")
+_NOT_SOURCE = shutil.ignore_patterns(*_NOT_SOURCE_NAMES)
+# the one line of wrangler.jsonc that `wrangler d1 create`'s id is added to
+_DB_NAME_LINE = '"database_name": "kb-reminders",'
+_DB_ID = re.compile(r'"database_id"\s*:\s*"([0-9A-Fa-f-]{36})"')
+
+
+def worker_dir():
+    """Where `kb remind push init` puts the Worker by default, kept across kb upgrades."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "pkb-cli", "worker")
+
+
+def get_database_id(config):
+    """The D1 database id in a copied-out wrangler.jsonc, or None before it has one."""
+    try:
+        with open(config, encoding="utf-8") as f:
+            found = _DB_ID.search(f.read())
+    except OSError:
+        return None
+    return found.group(1) if found else None
+
+
+def set_database_id(config, database_id):
+    """Add the D1 database id to a copied-out wrangler.jsonc. False if the file no longer
+    has the line it is added after (so a caller can say so instead of deploying without it)."""
+    with open(config, encoding="utf-8") as f:
+        text = f.read()
+    if _DB_ID.search(text) is not None:
+        return True
+    if _DB_NAME_LINE not in text:
+        return False
+    with open(config, "w", encoding="utf-8") as f:
+        f.write(text.replace(_DB_NAME_LINE, f'{_DB_NAME_LINE} "database_id": "{database_id}",', 1))
+    return True
+
+
+@functools.lru_cache(maxsize=None)
+def source_hash():
+    """Fingerprint of the packaged Worker source, so `kb update` can tell whether what
+    was last deployed is still current without touching Cloudflare. The package doesn't
+    change while kb runs, so it's computed once."""
+    digest = hashlib.sha256()
+    for root, dirs, files in os.walk(WORKER_SRC):
+        dirs[:] = sorted(d for d in dirs if d not in _NOT_SOURCE_NAMES)
+        for name in sorted(files):
+            if name in _NOT_SOURCE_NAMES:
+                continue
+            path = os.path.join(root, name)
+            digest.update(os.path.relpath(path, WORKER_SRC).encode())
+            with open(path, "rb") as f:
+                digest.update(f.read())
+    return digest.hexdigest()
+
+
+def offer_declined():
+    return bool(pc.load_kb_config().get("push_offer_declined"))
+
+
+def decline_offer():
+    """Remember that the user said no to `kb update`'s offer, so it asks only once."""
+    cfg = pc.load_kb_config()
+    cfg["push_offer_declined"] = True
+    pc.save_kb_config(cfg)
+
+
+def init_worker(dest=None):
+    """Copy the packaged Worker source into `dest` (default: worker_dir()), refreshing it
+    on a later run: sources are overwritten, while node_modules and the database id in
+    wrangler.jsonc (added by `wrangler d1 create`) are kept. Returns the directory."""
+    dest = os.path.abspath(os.path.expanduser(dest or worker_dir()))
+    config = os.path.join(dest, "wrangler.jsonc")
+    database_id = get_database_id(config)
+    shutil.copytree(WORKER_SRC, dest, ignore=_NOT_SOURCE, dirs_exist_ok=True)
+    if database_id:
+        set_database_id(config, database_id)
+    return dest
 
 
 def _norm(url):

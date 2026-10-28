@@ -27,7 +27,7 @@ kb todo due <id> <when>|none [--json]      set or clear a TODO's reminder time
 kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
-kb remind push setup <worker-url>|sync|status|off
+kb remind push deploy|init [dir]|setup <worker-url>|sync|status|off
                                   also push due TODOs to your phone through your own
                                   Cloudflare Worker (setup asks for its sync token)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
@@ -131,7 +131,20 @@ repeats that check (exit 1 when it didn't work). `uninstall` removes the app. On
 See [how-to: get reminded about a TODO](../how-to/get-reminded-about-a-todo.md).
 
 `kb remind push` adds phone notifications, even while the machine is asleep, through a
-Worker you deploy yourself (`cloudflare/`). Once `push setup <worker-url>` has verified the
+Worker you deploy yourself. `push deploy` sets the Worker up on your Cloudflare account, or updates
+it, by driving `wrangler`: it copies the source (which ships inside the package) to
+`$XDG_DATA_HOME/pkb-cli/worker` (normally `~/.local/share/pkb-cli/worker`), installs its
+dependencies with pnpm or npm, logs in if needed, finds or creates the `kb-reminders` D1
+database, applies migrations, and deploys, uploading freshly generated secrets with the
+first deploy through a private temp file. A first deploy saves the Worker URL and sync
+token (see below) and prints the subscribe token once; a later one only redeploys.
+`kb update` runs it in a terminal: with a Worker already set up it redeploys only when
+the packaged source changed since the last deploy (recorded as a hash in
+`.kb-deployed`), and without one it offers setup once (a no is remembered as
+`push_offer_declined` in the machine-local config). Without a terminal (the web UI's
+update, a script) it only says to run `kb remind push deploy`. `push init [dir]` copies
+the source out without deploying, for deploying by hand; run again it refreshes the
+source, keeping `node_modules` and the `database_id` in `wrangler.jsonc`. Once `push setup <worker-url>` has verified the
 Worker's URL and sync token (prompted for, or read from `$KB_PUSH_TOKEN` or stdin) and
 saved them to the machine-local `push` key in `~/.config/kb/config.json` (see
 [config](config.md#machine-local-preferences)), every `kb remind check` run replaces the
