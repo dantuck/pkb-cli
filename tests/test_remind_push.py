@@ -178,11 +178,34 @@ class StatusTest(unittest.TestCase):
         self.assertIn("Enable notifications", msg)
 
 
+class AskFlagTest(unittest.TestCase):
+    """--ask is `kb update`'s way of asking for deploy-if-stale; nothing else takes it."""
+
+    def run_remind(self, action, rest):
+        err = io.StringIO()
+        args = SimpleNamespace(action=action, rest=rest, ask=True)
+        with redirect_stderr(err), mock.patch.object(kb_cli.worker_deploy, "deploy", return_value=0) as deploy:
+            rc = kb_cli.cmd_remind(args)
+        return rc, deploy, err.getvalue()
+
+    def test_rejected_for_other_actions(self):
+        for action, rest in (("check", []), ("test", []), ("push", ["sync"]), ("push", [])):
+            rc, deploy, err = self.run_remind(action, rest)
+            self.assertEqual(rc, 2, (action, rest))
+            self.assertIn("--ask only applies to `kb remind push deploy`", err)
+            deploy.assert_not_called()
+
+    def test_accepted_for_push_deploy(self):
+        rc, deploy, _ = self.run_remind("push", ["deploy"])
+        self.assertEqual(rc, 0)
+        deploy.assert_called_once_with(ask=True)
+
+
 class CheckSyncsTest(unittest.TestCase):
     """`kb remind check` mirrors to the Worker on every run, and a failure never breaks it."""
 
     def run_check(self, sync_result):
-        args = SimpleNamespace(action="check", rest=[], repeat_hours=4)
+        args = SimpleNamespace(action="check", rest=[], repeat_hours=4, ask=False)
         err = io.StringIO()
         with mock.patch.object(kb_cli, "_service_kind", return_value="launchd"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/bd"), \

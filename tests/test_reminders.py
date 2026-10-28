@@ -185,7 +185,7 @@ class RemindCheckTest(unittest.TestCase):
         with mock.patch.object(kb_cli, "bd_list", return_value=issues), \
                 mock.patch.object(kb_cli, "notify", return_value=True) as notify, \
                 redirect_stdout(io.StringIO()):
-            rc = kb_cli.cmd_remind(mock.Mock(action="check", repeat_hours=4))
+            rc = kb_cli.cmd_remind(mock.Mock(action="check", repeat_hours=4, ask=False))
         return rc, notify
 
     def test_notifies_once_then_stays_quiet(self):
@@ -307,7 +307,7 @@ class NotifierTest(unittest.TestCase):
         for ok, code in ((True, 0), (False, 1)):
             with mock.patch.object(kb_cli, "send_test_notification", return_value=(ok, "m")), \
                     redirect_stdout(io.StringIO()), mock.patch.object(kb_cli.sys, "stderr", io.StringIO()):
-                self.assertEqual(kb_cli.cmd_remind(mock.Mock(action="test")), code)
+                self.assertEqual(kb_cli.cmd_remind(mock.Mock(action="test", ask=False)), code)
 
 
 @unittest.skipUnless(sys.platform == "darwin" and shutil.which("terminal-notifier") and shutil.which("codesign"),
