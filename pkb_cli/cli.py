@@ -2058,19 +2058,6 @@ def cmd_remind(args):
     return 0
 
 
-def _print_worker_init(info):
-    dest = info["dest"]
-    if info["previous"] is None:
-        print(f"copied the Worker to {dest}\nnext: `cd {shlex.quote(dest)} && pnpm install`, then follow "
-              f"https://github.com/dantuck/pkb-cli/blob/main/docs/how-to/get-phone-reminders.md")
-        return
-    note = "" if info["previous"] == __version__ else f" (from kb {info['previous']} to {__version__})"
-    print(f"refreshed the Worker in {dest}{note}")
-    if info["new_migrations"]:
-        print("new database migrations: run `pnpm wrangler d1 migrations apply kb-reminders --remote` first")
-    print(f"to put it live: cd {shlex.quote(dest)} && pnpm install && pnpm deploy")
-
-
 def _remind_issues():
     """Open bd issues for the reminder commands, or None after printing why not."""
     if not shutil.which("bd"):
@@ -2092,8 +2079,9 @@ def cmd_remind_push(args):
     if sub == "deploy":
         return worker_deploy.deploy(ask=args.ask)
     if sub == "init":
-        info = remind_push.init_worker(args.rest[1] if len(args.rest) > 1 else None)
-        _print_worker_init(info)
+        dest = remind_push.init_worker(args.rest[1] if len(args.rest) > 1 else None)
+        print(f"copied the Worker to {dest}\nto put it live: `kb remind push deploy`, or by hand from "
+              f"https://github.com/dantuck/pkb-cli/blob/main/docs/how-to/get-phone-reminders.md")
         return 0
     if sub == "status":
         ok, msg = remind_push.status()
@@ -2196,22 +2184,7 @@ def cmd_config(args):
     return 0
 
 
-def _confirm(prompt, default, assume_yes=False):
-    """Yes/no prompt for `kb setup`'s guided flow. Auto-accepts `default`
-    without asking when `assume_yes` (--yes) is set, or when stdin isn't a
-    tty (e.g. a scripted install, where there's no terminal to read
-    from) -- so scripted/non-interactive invocations still get a sane,
-    fully-automated setup instead of hanging on input()."""
-    if assume_yes or not sys.stdin.isatty():
-        return default
-    suffix = "Y/n" if default else "y/N"
-    try:
-        resp = input(f"{prompt} [{suffix}] ").strip().lower()
-    except EOFError:
-        return default
-    if not resp:
-        return default
-    return resp.startswith("y")
+_confirm = pc.confirm
 
 
 # --- shared status checks, used by both `kb setup` (which acts on them) and
@@ -3617,7 +3590,7 @@ def _refresh_worker_after_update(opts):
     kb: update it if kb is pointed at one and its source changed, else offer to set one up
     (once). It needs a terminal -- wrangler may log in or prompt -- so an update run from
     the web UI or a script only says what to do."""
-    if opts.capture or opts.defer_refresh or not worker_deploy.interactive():
+    if opts.capture or opts.defer_refresh or not pc.is_interactive():
         if remind_push.get_config():
             print("the phone-reminder Worker wasn't updated here -- run `kb remind push deploy` "
                   "in a terminal to update it")

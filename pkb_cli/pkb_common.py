@@ -759,7 +759,7 @@ def get_editor(prompt_if_missing=True):
     if editor:
         return editor
 
-    if not prompt_if_missing or not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not prompt_if_missing or not is_interactive():
         return None
 
     print("$EDITOR isn't set. Enter an editor command for kb to use (e.g. vim, nano, 'code -w'),")
@@ -793,6 +793,28 @@ def warn_if_editor_missing(editor):
 
 
 @functools.lru_cache(maxsize=None)
+def is_interactive():
+    """True when there's a terminal to prompt on (stdin and stdout are both ttys)."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def confirm(prompt, default, assume_yes=False):
+    """Yes/no prompt. Auto-accepts `default` without asking when `assume_yes` (--yes) is
+    set, or when stdin isn't a tty (e.g. a scripted install, where there's no terminal to
+    read from) -- so scripted/non-interactive invocations still get a sane, fully-automated
+    outcome instead of hanging on input()."""
+    if assume_yes or not sys.stdin.isatty():
+        return default
+    suffix = "Y/n" if default else "y/N"
+    try:
+        resp = input(f"{prompt} [{suffix}] ").strip().lower()
+    except EOFError:
+        return default
+    if not resp:
+        return default
+    return resp.startswith("y")
+
+
 def bd_time(value):
     """bd's RFC 3339 timestamp (or None/'') as an aware datetime, or None."""
     if not value:

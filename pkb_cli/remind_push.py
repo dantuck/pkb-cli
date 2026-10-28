@@ -6,6 +6,7 @@ machine; titles and descriptions never do.
 The Worker's URL and sync token live in kb's machine-local config (never a data repo,
 which is committed), with KB_PUSH_URL / KB_PUSH_TOKEN as overrides. The Worker's source
 ships inside this package (templates/worker); `init_worker` copies it out to deploy."""
+import functools
 import hashlib
 import json
 import os
@@ -15,12 +16,10 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from . import __version__
 from . import pkb_common as pc
 
 TIMEOUT_SECONDS = 15
 WORKER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "worker")
-VERSION_FILE = ".kb-version"
 # not part of the source: a dev checkout may have installed or built these in place
 _NOT_SOURCE_NAMES = ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml",
                      "worker-configuration.d.ts", "__pycache__")
@@ -47,17 +46,24 @@ def get_database_id(config):
 
 
 def set_database_id(config, database_id):
+    """Add the D1 database id to a copied-out wrangler.jsonc. False if the file no longer
+    has the line it is added after (so a caller can say so instead of deploying without it)."""
     with open(config, encoding="utf-8") as f:
         text = f.read()
-    if _DB_ID.search(text) is None:
-        text = text.replace(_DB_NAME_LINE, f'{_DB_NAME_LINE} "database_id": "{database_id}",', 1)
+    if _DB_ID.search(text) is not None:
+        return True
+    if _DB_NAME_LINE not in text:
+        return False
     with open(config, "w", encoding="utf-8") as f:
-        f.write(text)
+        f.write(text.replace(_DB_NAME_LINE, f'{_DB_NAME_LINE} "database_id": "{database_id}",', 1))
+    return True
 
 
+@functools.lru_cache(maxsize=None)
 def source_hash():
     """Fingerprint of the packaged Worker source, so `kb update` can tell whether what
-    was last deployed is still current without touching Cloudflare."""
+    was last deployed is still current without touching Cloudflare. The package doesn't
+    change while kb runs, so it's computed once."""
     digest = hashlib.sha256()
     for root, dirs, files in os.walk(WORKER_SRC):
         dirs[:] = sorted(d for d in dirs if d not in _NOT_SOURCE_NAMES)
@@ -82,33 +88,17 @@ def decline_offer():
     pc.save_kb_config(cfg)
 
 
-def _migrations(root):
-    path = os.path.join(root, "migrations")
-    return set(os.listdir(path)) if os.path.isdir(path) else set()
-
-
 def init_worker(dest=None):
-    """Copy the packaged Worker source into `dest` (default: worker_dir()), refreshing
-    it on a later run: sources are overwritten, while node_modules and the database id
-    in wrangler.jsonc (added by `wrangler d1 create`) are kept. Returns
-    {dest, previous (kb version it was last copied by, or None), new_migrations}."""
+    """Copy the packaged Worker source into `dest` (default: worker_dir()), refreshing it
+    on a later run: sources are overwritten, while node_modules and the database id in
+    wrangler.jsonc (added by `wrangler d1 create`) are kept. Returns the directory."""
     dest = os.path.abspath(os.path.expanduser(dest or worker_dir()))
     config = os.path.join(dest, "wrangler.jsonc")
     database_id = get_database_id(config)
-    previous = None
-    try:
-        with open(os.path.join(dest, VERSION_FILE), encoding="utf-8") as f:
-            previous = f.read().strip() or None
-    except OSError:
-        pass
-    before = _migrations(dest)
-
     shutil.copytree(WORKER_SRC, dest, ignore=_NOT_SOURCE, dirs_exist_ok=True)
     if database_id:
         set_database_id(config, database_id)
-    with open(os.path.join(dest, VERSION_FILE), "w", encoding="utf-8") as f:
-        f.write(__version__ + "\n")
-    return {"dest": dest, "previous": previous, "new_migrations": sorted(_migrations(dest) - before)}
+    return dest
 
 
 def _norm(url):
