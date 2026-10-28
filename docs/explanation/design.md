@@ -55,6 +55,10 @@ design choices, and what each one trades away:
   encrypts the payload to the phone's own key, so the push service only relays
   ciphertext, and nothing is deliverable without a subscription the phone made.
   The cost is a PWA on the phone and VAPID keys to keep.
+- **`kb update` carries the Worker along, but only where someone is there.** The Worker
+  runs in the user's own account, so deploying is a change to their infrastructure:
+  `kb update` updates an existing one only when its source changed, offers setup once,
+  and does nothing from the web UI or a script, where wrangler couldn't prompt or log in.
 - **Only ids, due times and priorities leave the machine.** Todo titles can be
   sensitive (rotating a key, a medical appointment), so the Worker never receives
   them and the push reads `kb-qjp, kb-e3s`, not a title. The price is that a
