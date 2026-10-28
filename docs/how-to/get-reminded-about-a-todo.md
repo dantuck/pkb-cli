@@ -77,3 +77,6 @@ kb remind uninstall
 ```
 
 Reference: [`kb remind` and `kb todo`](../reference/cli.md).
+
+To get the same reminders on your phone, even while this machine is asleep, see
+[get phone reminders](get-phone-reminders.md).

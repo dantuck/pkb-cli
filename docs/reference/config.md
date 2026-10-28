@@ -22,7 +22,15 @@ rest.
 | `sync.beads.cli` | `bd` | Beads executable to invoke. |
 | `sync.beads.inbox_all` | `false` | Send every synced bead to the inbox. |
 
-Machine-local preferences that should *not* be committed (currently the
-editor) are set with `kb config editor`, not here. Credentials never go in
-this file; see [how-to: set up ingestion
+## Machine-local preferences
+
+Settings that should *not* be committed live in `~/.config/kb/config.json`
+(`$KB_CONFIG_DIR/config.json`), not in `config.yml`.
+
+| Key | Set with | Meaning |
+|---|---|---|
+| `editor` | `kb config editor` | Editor kb spawns when `$EDITOR` isn't set. |
+| `push.url`, `push.sync_token` | `kb remind push setup` (cleared by `push off`) | The phone-reminder Worker's URL and the token `kb remind check` uploads with. The token is a secret, so the file is created owner-only. `$KB_PUSH_URL` / `$KB_PUSH_TOKEN` override both. See [how-to: get TODO reminders on your phone](../how-to/get-phone-reminders.md). |
+
+Ingestion credentials never go in either file; see [how-to: set up ingestion
 credentials](../how-to/set-up-ingestion-credentials.md).

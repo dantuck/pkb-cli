@@ -18,7 +18,7 @@ kb link <id> [add|rm <id>...] [--json]     view/add/remove links, same reasoning
 kb rm <id> [--force] [--json]              delete an entry (refuses if other entries link to it,
                                   unless --force, which also cleans up those links)
 kb mv <id> [--type T] [--title "<title>"] [--json]   recategorize and/or rename a core entry
-kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
+kb todo [--all] [--plain] [--json]   open bd TODOs, by priority then soonest due (undated last)
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN] [--json]
                                   quick-add a TODO; bare -a opens bd's interactive form
 kb todo snooze <id> <when> [--json]        hide a TODO until <when>, then remind again
@@ -27,6 +27,9 @@ kb todo due <id> <when>|none [--json]      set or clear a TODO's reminder time
 kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
+kb remind push setup <worker-url>|sync|status|off
+                                  also push due TODOs to your phone through your own
+                                  Cloudflare Worker (setup asks for its sync token)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb secrets                        edit encrypted memos/gitlab/github credentials via sops
@@ -126,6 +129,21 @@ sending a test notification, opening System Settings if it was denied, and `kb r
 repeats that check (exit 1 when it didn't work). `uninstall` removes the app. On Linux,
 `notify-send` is used. `kb doctor` reports the permission state.
 See [how-to: get reminded about a TODO](../how-to/get-reminded-about-a-todo.md).
+
+`kb remind push` adds phone notifications, even while the machine is asleep, through a
+Worker you deploy yourself (`cloudflare/`). Once `push setup <worker-url>` has verified the
+Worker's URL and sync token (prompted for, or read from `$KB_PUSH_TOKEN` or stdin) and
+saved them to the machine-local `push` key in `~/.config/kb/config.json` (see
+[config](config.md#machine-local-preferences)), every `kb remind check` run replaces the
+Worker's reminders with the current set. Only each unclosed TODO's id, due time and priority
+are uploaded, never titles or descriptions; a snoozed TODO reports when its snooze ends. The
+Worker sends one push per run, listing ids only, and repeats an overdue one every 4 hours.
+A failed upload prints a warning to stderr and never fails `check`. `push sync` uploads
+immediately, `push status` reports whether the Worker is reachable, the token accepted and a
+phone subscribed (exit 1 if not), and `push off` stops uploading. `kb remind test` and
+`kb remind status` also cover the phone. `$KB_PUSH_URL` and `$KB_PUSH_TOKEN` override the
+saved values. See [how-to: get TODO reminders on your phone](../how-to/get-phone-reminders.md)
+and [explanation: phone reminders](../explanation/design.md#phone-reminders).
 
 `<when>` is anything `bd --due` takes -- `+6h`, `tomorrow`, `friday`, `5pm`,
 `tomorrow 9am`, `2026-11-02` -- plus `30m`/`2h`/`3d`/`1w` shorthand. Minutes are
