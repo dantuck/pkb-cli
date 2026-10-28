@@ -1981,6 +1981,9 @@ def reminder_status_line(kind=None):
 def cmd_remind(args):
     """`kb remind` -- list what's due; `check` notifies about it (run on a timer);
     `install`/`uninstall`/`status` manage that timer."""
+    if args.ask and not (args.action == "push" and args.rest[:1] == ["deploy"]):
+        print("error: --ask only applies to `kb remind push deploy`", file=sys.stderr)
+        return 2
     kind = _service_kind()
     if args.action == "test":
         ok, msg = send_test_notification()
