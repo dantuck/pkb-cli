@@ -27,7 +27,7 @@ kb todo due <id> <when>|none [--json]      set or clear a TODO's reminder time
 kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
-kb remind push setup <worker-url>|sync|status|off
+kb remind push init [dir]|setup <worker-url>|sync|status|off
                                   also push due TODOs to your phone through your own
                                   Cloudflare Worker (setup asks for its sync token)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
@@ -131,7 +131,12 @@ repeats that check (exit 1 when it didn't work). `uninstall` removes the app. On
 See [how-to: get reminded about a TODO](../how-to/get-reminded-about-a-todo.md).
 
 `kb remind push` adds phone notifications, even while the machine is asleep, through a
-Worker you deploy yourself (`cloudflare/`). Once `push setup <worker-url>` has verified the
+Worker you deploy yourself. `push init [dir]` copies the Worker's source, which ships inside
+the package, to `dir` (default `$XDG_DATA_HOME/pkb-cli/worker`, normally
+`~/.local/share/pkb-cli/worker`); run again it refreshes the source, keeping `node_modules`
+and the `database_id` in `wrangler.jsonc`, and reports migrations added since the last copy.
+`kb update` does that refresh for you when the directory exists, but never deploys. Once
+`push setup <worker-url>` has verified the
 Worker's URL and sync token (prompted for, or read from `$KB_PUSH_TOKEN` or stdin) and
 saved them to the machine-local `push` key in `~/.config/kb/config.json` (see
 [config](config.md#machine-local-preferences)), every `kb remind check` run replaces the

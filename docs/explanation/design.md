@@ -40,7 +40,8 @@ framework itself.
 `kb remind` notifies the desktop only while the machine is awake, so a TODO due
 at 9am is missed if the laptop is closed. [Phone
 reminders](../how-to/get-phone-reminders.md) fix that with a small Cloudflare
-Worker the user deploys to their own account (`cloudflare/`). It is optional and
+Worker the user deploys to their own account (its source ships in the package, at
+`pkb_cli/templates/worker`, and `kb remind push init` copies it out). It is optional and
 off by default, which keeps the "no required server" rule below intact. The
 design choices, and what each one trades away:
 

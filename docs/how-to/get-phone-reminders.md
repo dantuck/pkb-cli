@@ -3,7 +3,7 @@
 `kb remind` notifies your desktop when a TODO comes due, and only while the
 machine is awake. This adds a push notification to your phone that arrives
 either way, using a small Cloudflare Worker you deploy to your own account
-(`cloudflare/` in this repo).
+(its source ships inside `kb`).
 
 ## How it works
 
@@ -24,10 +24,17 @@ reminders](../explanation/design.md#phone-reminders). Flags and config keys:
 
 ## Deploy the Worker
 
-You need a Cloudflare account, Node, and pnpm.
+You need a Cloudflare account, Node, and pnpm. First copy the Worker's source out
+of your `kb` install:
 
 ```bash
-cd cloudflare
+kb remind push init       # copies it to ~/.local/share/pkb-cli/worker (or pass a directory)
+cd ~/.local/share/pkb-cli/worker
+```
+
+Then deploy it:
+
+```bash
 pnpm install
 pnpm wrangler login
 pnpm wrangler d1 create kb-reminders     # add the printed database_id to wrangler.jsonc
@@ -63,6 +70,26 @@ home screen (Chrome menu, Install app) is optional.
 kb remind push status    # worker reachable, token accepted, phone subscribed
 kb remind test           # desktop test, then a test push to your phone
 ```
+
+## Upgrading
+
+The Worker's source is part of each `kb` release, but nothing deploys it for you: it
+runs in your Cloudflare account, so putting a new version live is a step you take.
+
+```bash
+kb update                 # also refreshes your copy of the Worker, if you ran `kb remind push init`
+kb remind push init       # or refresh it by hand
+cd ~/.local/share/pkb-cli/worker
+pnpm install && pnpm deploy
+```
+
+`init` overwrites the source but keeps your `node_modules` and the `database_id` in
+`wrangler.jsonc`, and your secrets stay on Cloudflare, so there is nothing to
+re-enter. It says when the release added a database migration; if so, run
+`pnpm wrangler d1 migrations apply kb-reminders --remote` before `pnpm deploy`. Redeploy
+only when `init` reports a change from your previous kb version: the API between `kb`
+and the Worker is just `/api/sync`, `/api/status` and `/api/test`, so most releases
+won't touch it.
 
 ## Everyday use
 
