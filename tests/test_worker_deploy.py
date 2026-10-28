@@ -60,15 +60,15 @@ class DeployTest(unittest.TestCase):
                     self.secrets_seen = json.load(f)
             return 0, "Deployed kb-push\n  https://kb-push.me.workers.dev\n"
 
-        def confirm(question):
+        def confirm(question, default=False):
             self.questions.append(question)
             return self.answers.pop(0)
 
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(wd, "_tools", return_value=(["pnpm", "install"], ["pnpm", "exec", "wrangler"])), \
                 mock.patch.object(wd, "_stream", stream), mock.patch.object(wd, "_capture", capture), \
-                mock.patch.object(wd, "_tee", tee), mock.patch.object(wd, "_confirm", confirm), \
-                mock.patch.object(wd, "interactive", return_value=self.interactive), \
+                mock.patch.object(wd, "_tee", tee), mock.patch.object(wd.pc, "confirm", confirm), \
+                mock.patch.object(wd.pc, "is_interactive", return_value=self.interactive), \
                 mock.patch.object(rp, "verify", return_value=(True, "", {})), \
                 mock.patch.object(rp, "status", return_value=(True, "phone reminders: 1 phone(s) subscribed")), \
                 mock.patch.object(wd.time, "sleep"), \
@@ -119,6 +119,24 @@ class DeployTest(unittest.TestCase):
         self.assertIn("not logged in", self.err)
         self.assertFalse(any(s[0] in ("deploy", "d1") for s in self.wrangler_calls()))
         self.assertIsNone(rp.get_config())
+
+    def test_a_reformatted_wrangler_config_stops_the_deploy_with_instructions(self):
+        self.databases = [{"name": wd.DB_NAME, "uuid": DB_ID}]
+        real_init = rp.init_worker
+
+        def init_then_reformat(dest=None):
+            path = real_init(dest)
+            config = os.path.join(path, "wrangler.jsonc")
+            with open(config) as f:
+                text = f.read()
+            with open(config, "w") as f:
+                f.write(text.replace(rp._DB_NAME_LINE, '"database_name": "other",'))
+            return path
+
+        with mock.patch.object(rp, "init_worker", init_then_reformat):
+            self.assertEqual(self.run_deploy(), 1)
+        self.assertIn("database_id", self.err)
+        self.assertFalse(any(s[0] == "deploy" for s in self.wrangler_calls()))
 
     def test_a_missing_node_is_a_clear_error(self):
         with mock.patch.object(wd.shutil, "which", return_value=None), \
@@ -187,7 +205,7 @@ class UpdateFlowTest(unittest.TestCase):
         from pkb_cli import cli as kb_cli
         opts = kb_cli._UpdateOpts(False, capture, defer)
         out = io.StringIO()
-        with mock.patch.object(wd, "interactive", return_value=tty), \
+        with mock.patch.object(wd.pc, "is_interactive", return_value=tty), \
                 mock.patch.object(kb_cli, "installed_kb_argv", side_effect=lambda *a: ["kb", *a]), \
                 mock.patch.object(kb_cli.remind_push, "get_config", return_value=("u", "t") if configured else None), \
                 mock.patch.object(kb_cli, "_run_update_step") as step, redirect_stdout(out):

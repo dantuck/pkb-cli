@@ -91,47 +91,39 @@ class InitWorkerTest(unittest.TestCase):
     def setUp(self):
         self.dest = os.path.join(tempfile.mkdtemp(), "worker")
 
-    def test_copies_the_source_and_records_the_kb_version(self):
-        info = remind_push.init_worker(self.dest)
-        self.assertEqual(info["previous"], None)
+    def test_copies_the_source_and_returns_where(self):
+        self.assertEqual(remind_push.init_worker(self.dest), self.dest)
         for rel in ("wrangler.jsonc", "src/index.ts", "migrations/0001_init.sql", "public/sw.js"):
             self.assertTrue(os.path.isfile(os.path.join(self.dest, rel)), rel)
-        with open(os.path.join(self.dest, remind_push.VERSION_FILE)) as f:
-            self.assertEqual(f.read().strip(), remind_push.__version__)
 
     def test_dev_artifacts_are_not_copied(self):
-        info = remind_push.init_worker(self.dest)
+        remind_push.init_worker(self.dest)
         for name in ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml"):
-            self.assertFalse(os.path.exists(os.path.join(info["dest"], name)), name)
+            self.assertFalse(os.path.exists(os.path.join(self.dest, name)), name)
 
     def test_refresh_keeps_the_database_id_and_installed_dependencies(self):
         remind_push.init_worker(self.dest)
         config = os.path.join(self.dest, "wrangler.jsonc")
         db_id = "0a1b2c3d-0000-4000-8000-123456789abc"
-        with open(config) as f:
-            text = f.read()
-        with open(config, "w") as f:
-            f.write(text.replace(remind_push._DB_NAME_LINE, f'{remind_push._DB_NAME_LINE} "database_id": "{db_id}",'))
+        self.assertTrue(remind_push.set_database_id(config, db_id))
         os.makedirs(os.path.join(self.dest, "node_modules", "x"))
-        with open(os.path.join(self.dest, remind_push.VERSION_FILE), "w") as f:
-            f.write("0.0.1\n")
         with open(os.path.join(self.dest, "src", "index.ts"), "w") as f:
             f.write("// stale")
 
-        info = remind_push.init_worker(self.dest)
+        remind_push.init_worker(self.dest)
 
-        self.assertEqual(info["previous"], "0.0.1")
         with open(config) as f:
             self.assertEqual(f.read().count(db_id), 1)
         self.assertTrue(os.path.isdir(os.path.join(self.dest, "node_modules", "x")))
         with open(os.path.join(self.dest, "src", "index.ts")) as f:
             self.assertNotIn("stale", f.read())
 
-    def test_reports_migrations_added_since_the_last_copy(self):
+    def test_set_database_id_reports_when_the_config_no_longer_has_its_anchor(self):
         remind_push.init_worker(self.dest)
-        os.remove(os.path.join(self.dest, "migrations", "0001_init.sql"))
-        self.assertEqual(remind_push.init_worker(self.dest)["new_migrations"], ["0001_init.sql"])
-        self.assertEqual(remind_push.init_worker(self.dest)["new_migrations"], [])
+        config = os.path.join(self.dest, "wrangler.jsonc")
+        with open(config, "w") as f:
+            f.write("{}")
+        self.assertFalse(remind_push.set_database_id(config, "0a1b2c3d-0000-4000-8000-123456789abc"))
 
 
 class SyncTest(unittest.TestCase):

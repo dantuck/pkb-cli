@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 
+from . import pkb_common as pc
 from . import remind_push as rp
 
 DB_NAME = "kb-reminders"
@@ -70,17 +71,6 @@ def _tee(argv):
     return proc.wait(), ANSI_RE.sub("", b"".join(chunks).decode("utf-8", "replace"))
 
 
-def _confirm(question):
-    try:
-        return input(question).strip().lower() in ("y", "yes")
-    except EOFError:
-        return False
-
-
-def interactive():
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
 # --- steps -------------------------------------------------------------------------
 
 def _tools():
@@ -113,14 +103,17 @@ def _must(rc, what):
 
 
 def _ensure_login(dest, wrangler):
-    if _capture(_in(dest, [*wrangler, "whoami", "--json"]))[0] == 0:
+    def logged_in():
+        return _capture(_in(dest, [*wrangler, "whoami", "--json"]))[0] == 0
+
+    if logged_in():
         return
-    if not interactive():
+    if not pc.is_interactive():
         raise DeployError("not logged in to Cloudflare -- run `kb remind push deploy` in a terminal "
                           "(or `wrangler login` first)")
     print("Logging in to Cloudflare...")
     _must(_stream(_in(dest, [*wrangler, "login"])), "wrangler login")
-    if _capture(_in(dest, [*wrangler, "whoami", "--json"]))[0] != 0:
+    if not logged_in():
         raise DeployError("still not logged in to Cloudflare")
 
 
@@ -144,15 +137,17 @@ def _ensure_database(dest, wrangler):
     if database_id is None:
         raise DeployError(f"couldn't find the id of the '{DB_NAME}' D1 database -- add it to "
                           f"{config} as \"database_id\" (see `wrangler d1 list`) and run this again")
-    rp.set_database_id(config, database_id)
+    if not rp.set_database_id(config, database_id):
+        raise DeployError(f"couldn't add the D1 database id to {config} -- add \"database_id\": "
+                          f"\"{database_id}\" to its d1_databases entry and run this again")
 
 
 def _generate_secrets(dest):
-    """The Worker's four secrets, from its own gen-keys script (Node has the P-256 support)."""
+    """The Worker's secrets, as its own gen-keys script prints them (Node has the P-256
+    support). kb itself needs only the two tokens."""
     rc, out = _capture(_in(dest, ["node", "scripts/gen-keys.mjs"]))
     secrets = dict(line.split("=", 1) for line in out.splitlines() if re.match(r"^[A-Z_]+=", line))
-    names = {"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "SYNC_TOKEN", "SUBSCRIBE_TOKEN"}
-    if rc != 0 or set(secrets) != names:
+    if rc != 0 or not {"SYNC_TOKEN", "SUBSCRIBE_TOKEN"} <= set(secrets):
         raise DeployError("couldn't generate the Worker's keys")
     return secrets
 
@@ -216,8 +211,7 @@ def _is_current(dest):
 
 def _run(dest, configured):
     install, wrangler = _tools()
-    info = rp.init_worker(dest)
-    print(f"Worker source: {info['dest']}")
+    print(f"Worker source: {rp.init_worker(dest)}")
     _must(_stream(_in(dest, install)), "installing the Worker's dependencies")
     _ensure_login(dest, wrangler)
     _ensure_database(dest, wrangler)
@@ -256,8 +250,8 @@ def deploy(ask=False):
         else:
             if rp.offer_declined():
                 return 0
-            if not _confirm("Set up phone reminders? This deploys a small Worker to your Cloudflare "
-                            "account (needs Node and a login). [y/N] "):
+            if not pc.confirm("Set up phone reminders? This deploys a small Worker to your Cloudflare "
+                              "account (needs Node and a login).", False):
                 rp.decline_offer()
                 print("ok -- `kb remind push deploy` sets it up any time")
                 return 0
