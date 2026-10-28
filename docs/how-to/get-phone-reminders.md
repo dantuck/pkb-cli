@@ -24,47 +24,27 @@ reminders](../explanation/design.md#phone-reminders). Flags and config keys:
 
 ## Deploy the Worker
 
-You need a Cloudflare account, Node, and pnpm. First copy the Worker's source out
-of your `kb` install:
+You need a Cloudflare account and Node with pnpm (or npm). One command does it all:
 
 ```bash
-kb remind push init       # copies it to ~/.local/share/pkb-cli/worker (or pass a directory)
-cd ~/.local/share/pkb-cli/worker
+kb remind push deploy
 ```
 
-Then deploy it:
+It copies the Worker's source to `~/.local/share/pkb-cli/worker`, installs its
+dependencies, logs you in to Cloudflare if needed, creates the `kb-reminders` D1
+database and applies its migrations, generates the Worker's keys and tokens, and
+deploys it. It then saves the Worker's URL and the sync token in kb's config and prints
+the **subscribe token** once, because your phone needs it and kb doesn't keep it. Save
+it in your password manager.
 
-```bash
-pnpm install
-pnpm wrangler login
-pnpm wrangler d1 create kb-reminders     # add the printed database_id to wrangler.jsonc
-pnpm wrangler d1 migrations apply kb-reminders --remote
-pnpm deploy
-```
+(`kb update` also offers to run this, once, if you haven't set it up; say no and it won't
+ask again.)
 
-Then generate and store its four secrets. `gen:keys` prints them and writes
-nothing to disk; keep the two tokens in your password manager.
+## Connect your phone
 
-```bash
-pnpm gen:keys
-pnpm wrangler secret put VAPID_PUBLIC_KEY      # paste each value when asked
-pnpm wrangler secret put VAPID_PRIVATE_KEY
-pnpm wrangler secret put SYNC_TOKEN            # lets `kb` upload reminders
-pnpm wrangler secret put SUBSCRIBE_TOKEN       # lets your phone subscribe, nothing else
-```
-
-Deploy only needs repeating when you change the Worker. Rotate a token by
-generating a new one and running `secret put` again.
-
-## Connect kb and your phone
-
-```bash
-kb remind push setup https://kb-push.<your-subdomain>.workers.dev   # asks for SYNC_TOKEN
-```
-
-On your Android phone, open the same URL in Chrome, enter the `SUBSCRIBE_TOKEN`,
-tap **Enable notifications**, and allow the permission. Adding the page to your
-home screen (Chrome menu, Install app) is optional.
+On your Android phone, open the Worker's URL in Chrome, enter the subscribe token, tap
+**Enable notifications**, and allow the permission. Adding the page to your home screen
+(Chrome menu, Install app) is optional.
 
 ```bash
 kb remind push status    # worker reachable, token accepted, phone subscribed
@@ -73,23 +53,44 @@ kb remind test           # desktop test, then a test push to your phone
 
 ## Upgrading
 
-The Worker's source is part of each `kb` release, but nothing deploys it for you: it
-runs in your Cloudflare account, so putting a new version live is a step you take.
+The Worker's source is part of each `kb` release. When you run `kb update` in a
+terminal and kb is already pointed at a Worker, it compares the new source with what
+you last deployed and, if it changed, redeploys it, so there is nothing else to do. A
+release that doesn't touch the Worker skips it, so no login or Node is needed. To do it
+by hand, or when `kb update` ran somewhere without a terminal (the web UI's update
+button, a script), run:
 
 ```bash
-kb update                 # also refreshes your copy of the Worker, if you ran `kb remind push init`
-kb remind push init       # or refresh it by hand
-cd ~/.local/share/pkb-cli/worker
-pnpm install && pnpm deploy
+kb remind push deploy
 ```
 
-`init` overwrites the source but keeps your `node_modules` and the `database_id` in
-`wrangler.jsonc`, and your secrets stay on Cloudflare, so there is nothing to
-re-enter. It says when the release added a database migration; if so, run
-`pnpm wrangler d1 migrations apply kb-reminders --remote` before `pnpm deploy`. Redeploy
-only when `init` reports a change from your previous kb version: the API between `kb`
-and the Worker is just `/api/sync`, `/api/status` and `/api/test`, so most releases
-won't touch it.
+Your secrets and database stay on Cloudflare and the database id is kept in the copied
+Worker, so nothing is re-entered, and migrations a release adds are applied before the
+deploy.
+
+## Deploy by hand
+
+Prefer to run wrangler yourself, or to use a different Cloudflare account setup?
+
+```bash
+kb remind push init       # copies the source to ~/.local/share/pkb-cli/worker (or pass a directory)
+cd ~/.local/share/pkb-cli/worker
+pnpm install
+pnpm wrangler login
+pnpm wrangler d1 create kb-reminders     # add the printed database_id to wrangler.jsonc
+pnpm wrangler d1 migrations apply kb-reminders --remote
+pnpm deploy
+pnpm gen:keys            # prints the four secrets; nothing is written to disk
+pnpm wrangler secret put VAPID_PUBLIC_KEY      # paste each value when asked
+pnpm wrangler secret put VAPID_PRIVATE_KEY
+pnpm wrangler secret put SYNC_TOKEN            # lets `kb` upload reminders
+pnpm wrangler secret put SUBSCRIBE_TOKEN       # lets your phone subscribe, nothing else
+kb remind push setup https://kb-push.<your-subdomain>.workers.dev   # asks for SYNC_TOKEN
+```
+
+Rotate a token by generating a new one and running `secret put` again. After a `kb update`,
+`kb remind push init` refreshes the copy (keeping `node_modules` and the database id) and
+says when a migration was added; then `pnpm install && pnpm deploy` as above.
 
 ## Everyday use
 
