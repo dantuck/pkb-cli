@@ -35,10 +35,50 @@ page, and an explanation page answer different questions and shouldn't be
 smashed into one README. See [diataxis.fr](https://diataxis.fr/) for the
 framework itself.
 
+## Phone reminders
+
+`kb remind` notifies the desktop only while the machine is awake, so a TODO due
+at 9am is missed if the laptop is closed. [Phone
+reminders](../how-to/get-phone-reminders.md) fix that with a small Cloudflare
+Worker the user deploys to their own account (`cloudflare/`). It is optional and
+off by default, which keeps the "no required server" rule below intact. The
+design choices, and what each one trades away:
+
+- **Something outside the machine has to send it.** Anything that fires while the
+  laptop is asleep must run elsewhere. A Worker with a cron trigger is the
+  smallest such thing: no server to patch, free-tier sized, and in the user's own
+  account rather than a third party's.
+- **Web Push, not a notification service.** A relay such as ntfy.sh identifies a
+  channel by a topic name that works as a password (anyone who learns it can read
+  and forge notifications), and the operator can read every message. Web Push
+  encrypts the payload to the phone's own key, so the push service only relays
+  ciphertext, and nothing is deliverable without a subscription the phone made.
+  The cost is a PWA on the phone and VAPID keys to keep.
+- **Only ids, due times and priorities leave the machine.** Todo titles can be
+  sensitive (rotating a key, a medical appointment), so the Worker never receives
+  them and the push reads `kb-qjp, kb-e3s`, not a title. The price is that a
+  notification is a prompt to run `kb remind`, not the whole message.
+- **The machine uploads a full snapshot, not changes.** Each `kb remind check`
+  replaces the Worker's reminders with the current set. A closed, deleted, or
+  re-dated TODO then needs no special handling and a missed upload heals on the
+  next one. The cost is a copy that can lag by up to one interval: a TODO closed
+  just before it came due can still produce one last push.
+- **The Worker is a mirror, not a store of record.** It keeps the latest snapshot and
+  when each reminder was last sent, nothing else, so beads stays the single source
+  of truth and phone alerts are one-way. Closing or snoozing still happens in `kb`.
+- **Two tokens, so a leak is small.** The phone's token can only add a
+  subscription (capped, and only to known push services, so it can't aim the
+  Worker at arbitrary URLs); the sync token, which lives only in kb's
+  machine-local config, is the one that can change reminders.
+- **One rule for "when is it due".** The desktop notification, the due label, the
+  phone upload and the list order all read `todo_remind_at`, so a snoozed TODO
+  can't be quiet on one device and loud on another.
+
 ## Explicit non-goals (v1)
 
 - No required server process — the CLI is file-based and one-shot. `kb web`
-  is an optional local UI that runs only while you want it.
+  is an optional local UI that runs only while you want it, and the phone-reminder
+  Worker is an optional add-on.
 - No real-time sync/webhooks from usememos/GitLab/GitHub/beads — polling/cursor-based
   batch sync only.
 - No automatic Diataxis classification of inbox content — triage is

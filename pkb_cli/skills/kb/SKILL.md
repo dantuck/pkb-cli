@@ -62,14 +62,16 @@ the data repo.
   directly instead: `kb inbox <id> promote <type>` / `kb inbox <id> redirect`
   / `kb inbox <id> discard`.
 - **Check TODOs**: `kb todo` lists open items from `bd` (beads), sorted by
-  priority (`--json` for machine-readable). Act on one with `kb bd show <id>`
+  priority then soonest due (`--json` for machine-readable). Act on one with `kb bd show <id>`
   / `kb bd close <id>` / `kb bd comment <id> "..."`. Add one with
   `kb todo -a "<title>" [-p 0-4] [-t bug|feature|task|epic|chore|decision]
   [-d "<description>"] [-l labels]` -- ticket-shaped in one call. Bare
   `kb todo -a` opens bd's own interactive form instead.
   To be reminded, add `--due WHEN` (`30m`, `2h`, `tomorrow 9am`, `friday`);
   `kb todo snooze <id> <when>` hides one until then and reminds again,
-  `kb remind` lists what's due now.
+  `kb remind` lists what's due now. `kb remind push setup <worker-url>|sync|
+  status|off` also pushes due TODOs (ids only) to the user's phone via their
+  own Cloudflare Worker -- run `setup` only when asked, it needs their token.
 - **See how entries connect**: `kb links <id>` prints forward links and
   backlinks for an entry (`--json` for machine-readable).
 - **Read an entry's content by id**: `kb show <id>` prints it directly --
@@ -183,7 +185,7 @@ kb tag <id> [add|rm <tag>...] [--json]   view/add/remove tags (never hand-edit f
 kb link <id> [add|rm <id>...] [--json]   view/add/remove links, same reasoning
 kb rm <id> [--force] [--json]     delete an entry (--force also cleans up backlinks)
 kb mv <id> [--type T] [--title "<title>"] [--json]   recategorize and/or rename a core entry
-kb todo [--all] [--plain] [--json]   open bd TODOs, sorted by priority
+kb todo [--all] [--plain] [--json]   open bd TODOs, by priority then soonest due
 kb todo -a ["<title>"] [-p 0-4] [-t TYPE] [-d TEXT] [-l labels] [--due WHEN] [--json]
                                   quick-add a TODO; bare -a opens bd's interactive form
 kb todo snooze <id> <when> [--json]   hide a TODO until <when>, then remind again
@@ -192,6 +194,8 @@ kb todo due <id> <when>|none [--json]   set or clear a TODO's reminder time
 kb remind [list|check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
+kb remind push setup <worker-url>|sync|status|off
+                                  phone push via the user's Cloudflare Worker (ids only)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb validate                       frontmatter/id/link integrity check
