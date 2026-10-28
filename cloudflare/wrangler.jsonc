@@ -1,0 +1,33 @@
+// Web Push reminders for kb TODOs. The Mac uploads each TODO's id + due time
+// (`kb remind check`); a cron trigger here sends the push, so reminders still
+// arrive while the Mac is asleep. Setup: docs/how-to/get-phone-reminders.md
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kb-push",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-28",
+  "assets": {
+    "directory": "./public",
+    // only /api/* runs the Worker; the PWA files are served straight from assets
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    // add "database_id" here after `wrangler d1 create kb-reminders` (it prints the id);
+    // recent Wrangler can also provision the database on deploy when it's left out
+    { "binding": "DB", "database_name": "kb-reminders", "migrations_dir": "migrations" }
+  ],
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    // identifies the sender to push services (RFC 8292); a URL or mailto: both work
+    "VAPID_SUBJECT": "https://github.com/dantuck/pkb-cli"
+  },
+  // set with `wrangler secret put <NAME>`; `pnpm gen:keys` prints all four values
+  "secrets": {
+    "required": ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "SYNC_TOKEN", "SUBSCRIBE_TOKEN"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  }
+}

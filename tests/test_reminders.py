@@ -26,6 +26,42 @@ def issue(issue_id, status="open", due=None, defer=None, title="t"):
             "defer_until": iso(defer) if defer is not None else None}
 
 
+class RemindAtTest(unittest.TestCase):
+    def at(self, **kw):
+        when = kb_cli.pc.todo_remind_at(issue("x", **kw))
+        return None if when is None else int((when - NOW).total_seconds())
+
+    def test_closed_and_undated_have_no_time(self):
+        self.assertIsNone(self.at(status="closed", due=timedelta(hours=1)))
+        self.assertIsNone(self.at())
+
+    def test_a_plain_todo_is_due_at_its_due_date(self):
+        self.assertEqual(self.at(due=timedelta(hours=1)), 3600)
+
+    def test_a_snooze_past_the_due_date_wins(self):
+        self.assertEqual(self.at(status="deferred", due=timedelta(hours=1), defer=timedelta(days=1)), 86400)
+
+    def test_a_snooze_before_the_due_date_does_not_pull_it_earlier(self):
+        self.assertEqual(self.at(status="deferred", due=timedelta(days=1), defer=timedelta(hours=1)), 86400)
+
+    def test_a_snooze_alone_is_when_it_comes_back(self):
+        self.assertEqual(self.at(status="deferred", defer=timedelta(hours=2)), 7200)
+
+
+class BdListOrderTest(unittest.TestCase):
+    def test_priority_first_then_soonest_due_with_undated_last(self):
+        def row(i, priority, due):
+            r = issue(i, due=due)
+            r["priority"] = priority
+            return r
+        rows = [row("p2-late", 2, timedelta(days=3)), row("p1-none", 1, None), row("p2-soon", 2, timedelta(hours=1)),
+                row("p1-soon", 1, timedelta(hours=2)), row("p2-none", 2, None)]
+        import json
+        with mock.patch.object(kb_cli, "_bd_run", return_value=json.dumps(rows)):
+            ids = [r["id"] for r in kb_cli.bd_list("/repo")]
+        self.assertEqual(ids, ["p1-soon", "p1-none", "p2-soon", "p2-late", "p2-none"])
+
+
 class ResolveWhenTest(unittest.TestCase):
     def test_minutes_become_an_absolute_timestamp_because_bd_reads_m_as_months(self):
         for text in ("30m", "+30m", "30 min", "30 minutes"):

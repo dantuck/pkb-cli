@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kb reminders</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.png">
+  <meta name="theme-color" content="#1f2937">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>kb reminders</h1>
+    <p>Get a push notification on this phone when a kb TODO comes due. Notifications only
+      list TODO ids (like <code>kb-qjp</code>), never titles.</p>
+    <p id="state" role="status">Checking…</p>
+    <label for="token">Subscribe token</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+           placeholder="the SUBSCRIBE_TOKEN you set on the Worker">
+    <div class="row">
+      <button id="enable" type="button">Enable notifications</button>
+      <button id="disable" type="button" class="secondary">Turn off</button>
+    </div>
+    <p id="msg" role="status"></p>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

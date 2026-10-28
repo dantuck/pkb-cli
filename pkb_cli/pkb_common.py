@@ -793,6 +793,31 @@ def warn_if_editor_missing(editor):
 
 
 @functools.lru_cache(maxsize=None)
+def bd_time(value):
+    """bd's RFC 3339 timestamp (or None/'') as an aware datetime, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def todo_remind_at(issue):
+    """When a bd todo next comes due: its due date, pushed out to the end of a snooze
+    that runs past it. None for a closed or undated todo. The one place that rule
+    lives -- the desktop reminders, the due label, the phone upload and list order
+    all read it, so they can't disagree."""
+    if issue.get("status") == "closed":
+        return None
+    when = bd_time(issue.get("due_at"))
+    if issue.get("status") == "deferred":
+        until = bd_time(issue.get("defer_until"))
+        if until is not None and (when is None or until > when):
+            when = until
+    return when
+
+
 def ssl_context():
     """Default TLS context, plus (on macOS) the certificates in the system
     keychains. TLS-inspecting proxies like Zscaler re-sign traffic with a root CA

@@ -6,6 +6,7 @@ import argparse
 import calendar
 import contextlib
 import difflib
+import getpass
 import importlib
 import io
 import json
@@ -25,6 +26,7 @@ from datetime import datetime, timedelta
 
 from . import pkb_common as pc
 from . import index_fts
+from . import remind_push
 from . import semantic
 from . import __version__
 from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
@@ -1304,13 +1306,20 @@ def _bd_run(bd_args):
 
 
 def bd_list(root, include_all=False):
-    """Open (or all, with include_all) bd issues as parsed JSON, sorted by
-    priority. Raises RuntimeError(stderr) if bd itself errors. Shared by
-    cmd_todo's non-add path and kb web's GET /api/todo."""
+    """Open (or all, with include_all) bd issues as parsed JSON, sorted by priority
+    and, within one, soonest due first with undated last. Raises RuntimeError(stderr)
+    if bd itself errors. Shared by cmd_todo's non-add path and kb web's GET /api/todo."""
     bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
     if include_all:
         bd_args.append("--all")
-    return json.loads(_bd_run(bd_args))
+    issues = json.loads(_bd_run(bd_args))
+
+    def order(issue):
+        when = pc.todo_remind_at(issue)
+        return (int(issue.get("priority", 2)), when.timestamp() if when else float("inf"))
+
+    # bd only sorts by one key; list.sort is stable, so ties keep bd's order
+    return sorted(issues, key=order)
 
 
 def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None, due=None,
@@ -1390,14 +1399,7 @@ def bd_unsnooze(root, issue_id):
     return _bd_run(["bd", "-C", root, "undefer", issue_id])
 
 
-def _bd_time(value):
-    """bd's RFC 3339 timestamp (or None/'') as an aware datetime, or None."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+_bd_time = pc.bd_time
 
 
 def todo_is_snoozed(issue, now=None):
@@ -1412,8 +1414,8 @@ def todos_due(issues, now=None):
     now = now or datetime.now().astimezone()
     due = []
     for i in issues:
-        when = _bd_time(i.get("due_at"))
-        if i.get("status") == "closed" or when is None or when > now or todo_is_snoozed(i, now):
+        when = pc.todo_remind_at(i)
+        if when is None or when > now or todo_is_snoozed(i, now):
             continue
         due.append((when, i))
     return [i for _, i in sorted(due, key=lambda pair: pair[0])]
@@ -1424,7 +1426,7 @@ def format_due(issue, now=None):
     'snoozed 1d'), or '' when it has neither."""
     now = now or datetime.now().astimezone()
     snoozed = todo_is_snoozed(issue, now)
-    when = _bd_time(issue.get("defer_until") if snoozed else issue.get("due_at"))
+    when = pc.todo_remind_at(issue)
     if when is None:
         return ""
     seconds = int((when - now).total_seconds())
@@ -1982,7 +1984,13 @@ def cmd_remind(args):
     if args.action == "test":
         ok, msg = send_test_notification()
         _print_result(ok, msg)
+        if remind_push.get_config():
+            push_ok, push_msg = remind_push.send_test()
+            _print_result(push_ok, push_msg)
+            ok = ok and push_ok
         return 0 if ok else 1
+    if args.action == "push":
+        return cmd_remind_push(args)
     if args.action in ("install", "uninstall", "status"):
         if kind is None:
             print(f"error: `kb remind {args.action}` isn't supported on {sys.platform} -- only macOS "
@@ -2004,17 +2012,13 @@ def cmd_remind(args):
                 shutil.rmtree(app)
                 print(f"removed {app}")
             return rc
-        return _interval_service_status(kind, "remind", "kb remind install")
+        rc = _interval_service_status(kind, "remind", "kb remind install")
+        if remind_push.get_config():
+            _print_result(*remind_push.status())
+        return rc
 
-    if not shutil.which("bd"):
-        print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
-              "See `kb doctor`.", file=sys.stderr)
-        return 1
-    root = pc.get_repo_root()
-    try:
-        issues = bd_list(root)
-    except RuntimeError as e:
-        print(f"error: bd list failed: {e}", file=sys.stderr)
+    issues = _remind_issues()
+    if issues is None:
         return 1
 
     if args.action == "list":
@@ -2044,7 +2048,69 @@ def cmd_remind(args):
             state[i["id"]] = now
     if pending:
         _reminder_save(state)
+    if remind_push.get_config():
+        # mirror every due time to the Worker each run, so the phone push stays right even
+        # when nothing was announced here; a failure is logged, not fatal to the desktop path
+        ok, msg = remind_push.sync(issues)
+        if not ok:
+            print(f"warning: {msg}", file=sys.stderr)
     return 0
+
+
+def _remind_issues():
+    """Open bd issues for the reminder commands, or None after printing why not."""
+    if not shutil.which("bd"):
+        print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
+              "See `kb doctor`.", file=sys.stderr)
+        return None
+    try:
+        return bd_list(pc.get_repo_root())
+    except RuntimeError as e:
+        print(f"error: bd list failed: {e}", file=sys.stderr)
+        return None
+
+
+def cmd_remind_push(args):
+    """`kb remind push setup <url> | sync | status | off` -- phone reminders through the
+    kb-push Cloudflare Worker (cloudflare/, docs/how-to/get-phone-reminders.md)."""
+    sub = args.rest[0] if args.rest else "status"
+    if sub == "status":
+        ok, msg = remind_push.status()
+        _print_result(ok, msg)
+        return 0 if ok else 1
+    if sub == "off":
+        remind_push.disable()
+        print("phone reminders are off for kb (the Worker and your phone's subscription are untouched)")
+        return 0
+    if sub == "sync":
+        issues = _remind_issues()
+        if issues is None:
+            return 1
+        ok, msg = remind_push.sync(issues)
+        _print_result(ok, msg)
+        return 0 if ok else 1
+    if sub == "setup":
+        url = args.rest[1] if len(args.rest) > 1 else ""
+        if not remind_push.valid_url(url):
+            print("usage: kb remind push setup https://<your-worker>.workers.dev", file=sys.stderr)
+            return 1
+        token = os.environ.get("KB_PUSH_TOKEN") or (
+            getpass.getpass("sync token (the Worker's SYNC_TOKEN): ") if sys.stdin.isatty()
+            else sys.stdin.readline()).strip()
+        if not token:
+            print("error: no sync token given", file=sys.stderr)
+            return 1
+        ok, msg, payload = remind_push.verify(url, token)
+        if not ok:
+            print(f"error: {msg}", file=sys.stderr)
+            return 1
+        remind_push.save_config(url, token)
+        print(f"saved -- `kb remind check` now mirrors due times to {url}")
+        if not payload.get("subscriptions"):
+            print(f"next: open {url} on your phone and tap Enable notifications")
+        return 0
+    print(f"error: unknown push action '{sub}' -- use setup, sync, status or off", file=sys.stderr)
+    return 1
 
 
 def cmd_bd(args):
@@ -3870,12 +3936,15 @@ def main():
             "  kb remind install                   check every 5 minutes, notify on due\n"
             "  kb remind test                      send a test notification (and say how to fix it if not)\n"
             "  kb todo snooze <id> 1h              hide it, remind me again in an hour\n"
+            "  kb remind push setup <url>          also push to your phone via a Cloudflare Worker\n"
             "  kb remind status | uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("action", nargs="?", default="list",
-                    choices=["list", "check", "test", "install", "uninstall", "status"])
+                    choices=["list", "check", "test", "install", "uninstall", "status", "push"])
+    p.add_argument("rest", nargs="*", metavar="ARG",
+                    help="for `push`: setup <worker-url> | sync | status | off")
     p.add_argument("--interval-minutes", type=int, default=5, metavar="MIN",
                     help="how often to run `kb remind check` (default: 5; install only)")
     p.add_argument("--repeat-hours", type=float, default=4, metavar="H",
