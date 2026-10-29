@@ -479,6 +479,12 @@
         <span class="due-badge row-badge" :class="{ overdue: isOverdue(todoModalItem), snoozed: isSnoozed(todoModalItem) }"
               x-show="todoModalItem && dueLabel(todoModalItem)" x-text="todoModalItem ? dueLabel(todoModalItem) : ''"></span>
       </div>
+      <div class="row">
+        <span class="label">due at</span>
+        <input type="datetime-local" step="60" aria-label="Exact due date and time" x-model="todoModalDueAt" @keydown.enter="saveTodoDueAt()">
+        <button class="btn" @click="saveTodoDueAt()" :disabled="!todoModalDueAt">Set time</button>
+        <button class="btn" @click="clearTodoDue()" x-show="todoModalItem && todoModalItem.due_at">Clear</button>
+      </div>
       <div class="row" x-show="todoModalItem && todoModalItem.status !== 'closed'">
         <span class="label">snooze</span>
         <button class="btn" @click="snoozeTodo('1h')">1 hour</button>
