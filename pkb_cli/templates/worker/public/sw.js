@@ -6,8 +6,10 @@ self.addEventListener("push", (event) => {
     body: data.body || "Run `kb remind` to see what's due.",
     tag: data.tag || "kb-due",
     renotify: true,
-    icon: "/icon.png",
-    badge: "/icon.png",
+    icon: "/icon-192.png",
+    // the status-bar glyph: Android reads only its alpha channel, so this one is a
+    // single-colour bell on transparent (the full-colour icon would show as a blank square)
+    badge: "/badge.png",
   }));
 });
 

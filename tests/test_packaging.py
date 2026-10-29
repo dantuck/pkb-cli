@@ -43,7 +43,8 @@ class PackagingTest(unittest.TestCase):
         for rel in ("templates/schema.sql", "templates/web/index.html", "templates/web/vendor/alpine.min.js",
                     "skills/kb/SKILL.md", "templates/notifier/kb-reminder.png",
                     "templates/worker/wrangler.jsonc", "templates/worker/src/index.ts",
-                    "templates/worker/migrations/0001_init.sql", "templates/worker/public/index.html"):
+                    "templates/worker/migrations/0001_init.sql", "templates/worker/public/index.html",
+                    "templates/worker/public/badge.png", "templates/worker/public/icon-192.png"):
             self.assertTrue(pkg.joinpath(rel).is_file(), rel)
 
     def test_reindex_runs_in_process_and_as_subprocess(self):
