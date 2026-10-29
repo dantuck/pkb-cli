@@ -1,4 +1,4 @@
-// Shows the push the Worker sends: {title, body, tag}. Text is generic by design.
+// Shows the push the Worker sends: {title, body, tag}.
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* fall back to the defaults below */ }

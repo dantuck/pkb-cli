@@ -59,11 +59,11 @@ design choices, and what each one trades away:
   runs in the user's own account, so deploying is a change to their infrastructure:
   `kb update` updates an existing one only when its source changed, offers setup once,
   and does nothing from the web UI or a script, where wrangler couldn't prompt or log in.
-- **The push carries ids; titles are stored for the phone page.** The notification
-  reads `kb-qjp, kb-e3s`, not a title, so nothing readable sits on a push relay or a lock
-  screen. But the phone page lists TODOs by title and lets you close or snooze them, which
-  needs the Worker to hold each dated TODO's title (never descriptions or comments). That
-  is a deliberate step back from "ids only": titles can be sensitive (rotating a key, a
+- **The push shows titles, so the Worker stores them.** The notification lists the first
+  few due titles. Web Push is encrypted to the phone, so the relay can't read them, but a
+  lock screen can. The phone page also lists TODOs by title and lets you close or snooze
+  them, which needs the Worker to hold each dated TODO's title (never descriptions or
+  comments). Titles can be sensitive (rotating a key, a
   medical appointment), and they now sit in the user's own Cloudflare D1 database and
   behind the phone token. A TODO with no due date is never uploaded.
 - **The machine uploads a full snapshot, not changes.** Each `kb remind check`
