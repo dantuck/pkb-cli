@@ -815,6 +815,7 @@ document.addEventListener("alpine:init", () => {
     todoModalDepError: "",
     todoModalDeleteConfirm: false,
     todoModalDue: "",
+    todoModalDueAt: "", // the exact-time picker (datetime-local, in this browser's time zone)
 
     // ---------- reminders ----------
     // A snooze is bd's "deferred" status with a future defer_until; the server also
@@ -848,18 +849,39 @@ document.addEventListener("alpine:init", () => {
       if (fresh) {
         this.todoModalItem = fresh;
         this.todoModalDue = "";
+        this.todoModalDueAt = this.dueInputValue(fresh);
       }
+    },
+    // A todo's due time as a datetime-local value ("2026-10-30T09:00", local time), or "".
+    dueInputValue(item) {
+      const d = item && item.due_at ? new Date(item.due_at) : null;
+      if (!d || isNaN(d)) return "";
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+    async saveTodoDueAt() {
+      if (!this.todoModalItem || !this.todoModalDueAt) return;
+      const when = new Date(this.todoModalDueAt); // read as local time, sent as an unambiguous instant
+      if (isNaN(when)) return;
+      await this.setTodoDue(when.toISOString().replace(/\.\d{3}Z$/, "Z"), "due time set");
+    },
+    async clearTodoDue() {
+      await this.setTodoDue("", "reminder cleared");
+    },
+    async setTodoDue(due, okMessage) {
+      if (!this.todoModalItem) return;
+      this.todoModalUpdateErr = false;
+      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { due });
+      this.todoModalUpdateErr = !ok;
+      this.todoModalUpdateMsg = ok ? okMessage : ((data && data.error) || "failed to save");
+      if (ok) await this.refreshTodoModalItem();
     },
     async saveTodoDue() {
       if (!this.todoModalItem) return;
       const text = this.todoModalDue.trim();
       if (!text) return;
       const clear = text === "none" || text === "clear";
-      this.todoModalUpdateErr = false;
-      const { ok, data } = await this.todoPatch(this.todoModalItem.id, { due: clear ? "" : text });
-      this.todoModalUpdateErr = !ok;
-      this.todoModalUpdateMsg = ok ? (clear ? "reminder cleared" : "reminder set") : ((data && data.error) || "failed to save");
-      if (ok) await this.refreshTodoModalItem();
+      await this.setTodoDue(clear ? "" : text, clear ? "reminder cleared" : "reminder set");
     },
     async snoozeTodo(until) {
       if (!this.todoModalItem) return;
@@ -882,6 +904,7 @@ document.addEventListener("alpine:init", () => {
       this.todoModalAssignee = item.owner || "";
       this.todoModalLabelInput = "";
       this.todoModalDue = "";
+      this.todoModalDueAt = this.dueInputValue(item);
       this.todoModalUpdateMsg = "";
       this.todoModalUpdateErr = false;
       this.todoModalBlockedBy = [];
