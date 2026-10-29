@@ -27,7 +27,7 @@ kb todo due <id> <when>|none [--json]      set or clear a TODO's reminder time
 kb remind [check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
-kb remind push deploy|init [dir]|setup <worker-url>|sync|status|off
+kb remind push deploy|init [dir]|setup <worker-url>|sync|status|devices [rm <id>]|off
                                   also push due TODOs to your phone through your own
                                   Cloudflare Worker (setup asks for its sync token)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
@@ -137,7 +137,7 @@ it, by driving `wrangler`: it copies the source (which ships inside the package)
 dependencies with pnpm or npm, logs in if needed, finds or creates the `kb-reminders` D1
 database, applies migrations, and deploys, uploading freshly generated secrets with the
 first deploy through a private temp file. A first deploy saves the Worker URL and sync
-token (see below) and prints the subscribe token once; a later one only redeploys.
+token (see below) and prints the phone token once; a later one only redeploys.
 `kb update` runs it in a terminal: with a Worker already set up it redeploys only when
 the packaged source changed since the last deploy (recorded as a hash in
 `.kb-deployed`), and without one it offers setup once (a no is remembered as
@@ -150,11 +150,17 @@ source and removes files an earlier copy shipped that the release dropped (track
 Worker's URL and sync token (prompted for, or read from `$KB_PUSH_TOKEN` or stdin) and
 saved them to the machine-local `push` key in `~/.config/kb/config.json` (see
 [config](config.md#machine-local-preferences)), every `kb remind check` run replaces the
-Worker's reminders with the current set. Only each unclosed TODO's id, due time and priority
-are uploaded, never titles or descriptions; a snoozed TODO reports when its snooze ends. The
-Worker sends one push per run, listing ids only, and repeats an overdue one every 4 hours.
-A failed upload prints a warning to stderr and never fails `check`. `push sync` uploads
-immediately, `push status` reports whether the Worker is reachable, the token accepted and a
+Worker's reminders with the current set. Only each unclosed, dated TODO's id, title, due time
+and priority are uploaded, never descriptions or comments; a snoozed TODO reports when its snooze
+ends. The Worker sends one push per run, listing ids only, and repeats an overdue one every 4
+hours. The phone page, opened with the phone token, lists those TODOs by title and can close or
+snooze them (1h, 3h, 1d, 1w); the Worker queues each request, and the next `check` (or `push
+sync`) fetches the queue, applies it with `bd`, acknowledges it and only then uploads, so a
+TODO the phone just closed isn't put back. A request that can't be applied (the TODO is gone)
+prints a warning and is dropped. A failed upload prints a warning to stderr and never fails
+`check`. `push sync` does that exchange immediately. `push devices` lists the subscribed phones
+(id, the label the page sent, push service, when added) and `push devices rm <id>` removes
+one; only this machine's sync token can, the phone's token can't. `push status` reports whether the Worker is reachable, the token accepted and a
 phone subscribed (exit 1 if not), and `push off` stops uploading. `kb remind test` and
 `kb remind status` also cover the phone. `$KB_PUSH_URL` and `$KB_PUSH_TOKEN` override the
 saved values. See [how-to: get TODO reminders on your phone](../how-to/get-phone-reminders.md)

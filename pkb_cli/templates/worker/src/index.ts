@@ -9,6 +9,12 @@ const MAX_BODY_BYTES = 64 * 1024;
 // a phone that's offline can still get a reminder this long after it was sent
 const PUSH_TTL_SECONDS = 4 * 3600;
 const MAX_IDS_IN_BODY = 3;
+const MAX_TITLE_CHARS = 200;
+const MAX_LABEL_CHARS = 80;
+const MAX_PENDING_ACTIONS = 200;
+// What the phone may ask for a snooze, in seconds. Fixed choices, so the Worker needs no
+// idea of the user's time zone.
+const SNOOZE_SECONDS: Record<string, number> = { "1h": 3600, "3h": 3 * 3600, "1d": 86400, "1w": 7 * 86400 };
 
 // Subscribers hand us a URL we will POST to, so only accept the real push services.
 const PUSH_HOST_SUFFIXES = [
@@ -22,6 +28,7 @@ interface Reminder {
   id: string;
   due_at: number;
   priority: number;
+  title: string | null;
 }
 
 class HttpError extends Error {
@@ -76,11 +83,12 @@ function parseReminders(body: unknown): Reminder[] {
       !isRecord(r) ||
       typeof r.id !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(r.id) ||
       typeof r.due_at !== "number" || !Number.isSafeInteger(r.due_at) || r.due_at < 0 ||
-      typeof r.priority !== "number" || !Number.isInteger(r.priority) || r.priority < 0 || r.priority > 4
+      typeof r.priority !== "number" || !Number.isInteger(r.priority) || r.priority < 0 || r.priority > 4 ||
+      (r.title !== undefined && r.title !== null && typeof r.title !== "string")
     ) {
-      throw new HttpError(400, "each reminder needs id, integer due_at (unix seconds) and priority 0-4");
+      throw new HttpError(400, "each reminder needs id, integer due_at (unix seconds), priority 0-4 and an optional title");
     }
-    return { id: r.id, due_at: r.due_at, priority: r.priority };
+    return { id: r.id, due_at: r.due_at, priority: r.priority, title: r.title ? r.title.slice(0, MAX_TITLE_CHARS) : null };
   });
 }
 
@@ -117,12 +125,14 @@ async function syncReminders(env: Env, reminders: Reminder[]): Promise<void> {
   const gen = Date.now();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO reminders (id, due_at, priority, gen)
-       SELECT json_extract(value, '$.id'), json_extract(value, '$.due_at'), json_extract(value, '$.priority'), ?1
+      `INSERT INTO reminders (id, due_at, priority, title, gen)
+       SELECT json_extract(value, '$.id'), json_extract(value, '$.due_at'), json_extract(value, '$.priority'),
+              json_extract(value, '$.title'), ?1
        FROM json_each(?2) WHERE true
        ON CONFLICT (id) DO UPDATE SET
          due_at = excluded.due_at,
          priority = excluded.priority,
+         title = excluded.title,
          gen = excluded.gen,
          last_sent = CASE WHEN reminders.due_at = excluded.due_at THEN reminders.last_sent ELSE NULL END`,
     ).bind(gen, JSON.stringify(reminders)),
@@ -184,7 +194,8 @@ async function pushToAll(
 }
 
 // One summary push per run, not one per TODO. The text is deliberately generic -- ids
-// only, never titles -- so nothing sensitive sits on Cloudflare or a push relay.
+// only, never titles -- so nothing readable sits on a push relay or a lock screen. (Titles
+// are stored here for the phone page, which needs the phone token to show them.)
 async function sendDue(env: Env): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const { results: due } = await env.DB
@@ -217,6 +228,55 @@ async function sendDue(env: Env): Promise<void> {
   }
 }
 
+function parseLabel(body: unknown): string | null {
+  const label = isRecord(body) && typeof body.label === "string" ? body.label.trim() : "";
+  return label ? label.slice(0, MAX_LABEL_CHARS) : null;
+}
+
+function parseIds(body: unknown): number[] {
+  if (!isRecord(body) || !Array.isArray(body.ids) || body.ids.length > MAX_PENDING_ACTIONS ||
+      !body.ids.every((n) => Number.isSafeInteger(n))) {
+    throw new HttpError(400, "expected {ids: [integers]}");
+  }
+  return body.ids as number[];
+}
+
+// A request from the phone: close a TODO, or snooze it for one of the fixed lengths. It is
+// queued for kb to apply on the Mac (which owns the TODOs), and applied here at once so the
+// phone's list and the due-reminder pushes agree until kb's next sync replaces everything.
+async function queueAction(env: Env, body: unknown): Promise<void> {
+  if (!isRecord(body) || typeof body.id !== "string" || (body.action !== "close" && body.action !== "snooze")) {
+    throw new HttpError(400, "expected {id, action: close|snooze}");
+  }
+  const seconds = body.action === "snooze" ? SNOOZE_SECONDS[String(body.for)] : undefined;
+  if (body.action === "snooze" && seconds === undefined) {
+    throw new HttpError(400, `snooze needs "for": ${Object.keys(SNOOZE_SECONDS).join(", ")}`);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const until = seconds === undefined ? null : now + seconds;
+  const queued = await env.DB
+    .prepare(
+      `INSERT INTO actions (todo_id, action, until, created_at)
+       SELECT ?1, ?2, ?3, ?4
+       WHERE EXISTS (SELECT 1 FROM reminders WHERE id = ?1)
+         AND (SELECT COUNT(*) FROM actions) < ?5`,
+    )
+    .bind(body.id, body.action, until, now, MAX_PENDING_ACTIONS)
+    .run();
+  if (queued.meta.changes === 0) {
+    const known = await env.DB.prepare("SELECT 1 AS x FROM reminders WHERE id = ?1").bind(body.id).first();
+    throw known ? new HttpError(429, "too many pending requests -- wait for kb to pick them up") : new HttpError(404, "no such TODO");
+  }
+  await env.DB
+    .prepare(
+      until === null
+        ? "DELETE FROM reminders WHERE id = ?1"
+        : "UPDATE reminders SET due_at = ?2, last_sent = NULL WHERE id = ?1",
+    )
+    .bind(...(until === null ? [body.id] : [body.id, until]))
+    .run();
+}
+
 type Handler = (request: Request, env: Env) => Promise<Response>;
 
 const routes: Record<string, Handler> = {
@@ -224,17 +284,20 @@ const routes: Record<string, Handler> = {
 
   "POST /api/subscribe": async (request, env) => {
     await requireBearer(request, env.SUBSCRIBE_TOKEN);
-    const sub = parseSubscription(await readJson(request));
+    const body = await readJson(request);
+    const sub = parseSubscription(body);
+    const label = parseLabel(body);
     // the cap only applies to new endpoints, so a known one can always re-subscribe
     const saved = await env.DB
       .prepare(
-        `INSERT INTO subscriptions (endpoint, p256dh, auth, created_at)
-         SELECT ?1, ?2, ?3, ?4
+        `INSERT INTO subscriptions (endpoint, p256dh, auth, created_at, label)
+         SELECT ?1, ?2, ?3, ?4, ?6
          WHERE EXISTS (SELECT 1 FROM subscriptions WHERE endpoint = ?1)
             OR (SELECT COUNT(*) FROM subscriptions) < ?5
-         ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`,
+         ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth,
+           label = COALESCE(excluded.label, subscriptions.label)`,
       )
-      .bind(sub.endpoint, sub.keys.p256dh, sub.keys.auth, Math.floor(Date.now() / 1000), MAX_SUBSCRIPTIONS)
+      .bind(sub.endpoint, sub.keys.p256dh, sub.keys.auth, Math.floor(Date.now() / 1000), MAX_SUBSCRIPTIONS, label)
       .run();
     if (saved.meta.changes === 0) throw new HttpError(409, "too many subscriptions");
     return json({ ok: true }, 201);
@@ -253,6 +316,57 @@ const routes: Record<string, Handler> = {
     const reminders = parseReminders(await readJson(request));
     await syncReminders(env, reminders);
     return json({ ok: true, reminders: reminders.length });
+  },
+
+  // The phone's own view: what is tracked, and the two things it may do about it. The
+  // phone token can't list or remove devices -- that is kb's job (SYNC_TOKEN, below).
+  "GET /api/todos": async (request, env) => {
+    await requireBearer(request, env.SUBSCRIBE_TOKEN);
+    const { results } = await env.DB
+      .prepare("SELECT id, title, due_at, priority FROM reminders ORDER BY priority, due_at LIMIT 100")
+      .all();
+    return json({ todos: results, now: Math.floor(Date.now() / 1000) });
+  },
+
+  "POST /api/action": async (request, env) => {
+    await requireBearer(request, env.SUBSCRIBE_TOKEN);
+    await queueAction(env, await readJson(request));
+    return json({ ok: true }, 202);
+  },
+
+  "GET /api/actions": async (request, env) => {
+    await requireBearer(request, env.SYNC_TOKEN);
+    const { results } = await env.DB
+      .prepare("SELECT id, todo_id, action, until FROM actions ORDER BY id LIMIT ?1")
+      .bind(MAX_PENDING_ACTIONS)
+      .all();
+    return json({ actions: results });
+  },
+
+  "POST /api/actions/ack": async (request, env) => {
+    await requireBearer(request, env.SYNC_TOKEN);
+    const ids = parseIds(await readJson(request));
+    if (ids.length) {
+      await env.DB.prepare("DELETE FROM actions WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)).run();
+    }
+    return json({ ok: true, acked: ids.length });
+  },
+
+  "GET /api/devices": async (request, env) => {
+    await requireBearer(request, env.SYNC_TOKEN);
+    const { results } = await env.DB
+      .prepare("SELECT rowid AS id, label, created_at, substr(endpoint, 9, instr(substr(endpoint, 9), '/') - 1) AS service FROM subscriptions ORDER BY created_at")
+      .all();
+    return json({ devices: results });
+  },
+
+  "DELETE /api/devices": async (request, env) => {
+    await requireBearer(request, env.SYNC_TOKEN);
+    const body = await readJson(request);
+    if (!isRecord(body) || !Number.isSafeInteger(body.id)) throw new HttpError(400, "expected {id}");
+    const removed = await env.DB.prepare("DELETE FROM subscriptions WHERE rowid = ?1").bind(body.id).run();
+    if (removed.meta.changes === 0) throw new HttpError(404, "no such device");
+    return json({ ok: true });
   },
 
   "GET /api/status": async (request, env) => {

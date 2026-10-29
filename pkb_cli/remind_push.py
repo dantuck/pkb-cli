@@ -1,7 +1,9 @@
 """Phone reminders: upload each TODO's id + due time to the kb-push Cloudflare Worker
 (templates/worker), which sends the Web Push when it comes due -- so a reminder still
-arrives while this machine is asleep. Only ids, due times and priorities leave the
-machine; titles and descriptions never do.
+arrives while this machine is asleep. Only each TODO's id, title, due time and priority
+leave the machine (never descriptions or comments), and the push itself carries ids only.
+The phone page can close or snooze a TODO: those requests wait on the Worker until a
+`kb remind check` (or `push sync`) picks them up and applies them here.
 
 The Worker's URL and sync token live in kb's machine-local config (never a data repo,
 which is committed), with KB_PUSH_URL / KB_PUSH_TOKEN as overrides. The Worker's source
@@ -19,6 +21,7 @@ from urllib.parse import urlparse
 from . import pkb_common as pc
 
 TIMEOUT_SECONDS = 15
+TITLE_MAX_CHARS = 200  # the Worker truncates to this too
 WORKER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "worker")
 # not part of the source: a dev checkout may have installed or built these in place
 _NOT_SOURCE_NAMES = ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml",
@@ -185,7 +188,7 @@ def disable():
 
 def snapshot(issues):
     """What the Worker should know: every unclosed TODO with a due time, as
-    {id, due_at (unix seconds), priority}. A snoozed TODO reports when its snooze
+    {id, title, due_at (unix seconds), priority}. A snoozed TODO reports when its snooze
     ends -- the moment it should come due again, however its due date reads."""
     out = []
     for i in issues:
@@ -196,7 +199,8 @@ def snapshot(issues):
             priority = max(0, min(4, int(i.get("priority", 2))))
         except (TypeError, ValueError):
             priority = 2
-        out.append({"id": i["id"], "due_at": int(when.timestamp()), "priority": priority})
+        out.append({"id": i["id"], "title": str(i.get("title") or "")[:TITLE_MAX_CHARS],
+                    "due_at": int(when.timestamp()), "priority": priority})
     return out
 
 
@@ -243,6 +247,43 @@ def sync(issues):
     reminders = snapshot(issues)
     _, err = _call("PUT", "/api/sync", {"reminders": reminders})
     return (False, err) if err else (True, f"synced {len(reminders)} reminder(s) to your phone")
+
+
+def pull_actions():
+    """(actions, error): what the phone asked for since the last run, as
+    [{id, todo_id, action: close|snooze, until}]. A Worker from before the phone page could
+    do this answers 404, which is just "nothing asked", so an update to kb alone never
+    stops reminders syncing."""
+    config = get_config()
+    if config is None:
+        return [], None
+    try:
+        status, payload = request(config, "GET", "/api/actions")
+    except OSError as e:
+        return [], f"couldn't reach the Worker: {e}"
+    if status == 404:
+        return [], None
+    if status != 200:
+        return [], payload.get("error") or f"the Worker answered HTTP {status}"
+    return [a for a in payload.get("actions", []) if isinstance(a, dict)], None
+
+
+def ack_actions(ids):
+    """Tell the Worker these requests are done, so they aren't handed out again."""
+    if ids:
+        _call("POST", "/api/actions/ack", {"ids": ids})
+
+
+def devices():
+    """(devices, error): every subscribed phone, as [{id, label, created_at, service}]."""
+    payload, err = _call("GET", "/api/devices")
+    return ([], err) if err else (payload.get("devices", []), None)
+
+
+def remove_device(device_id):
+    """(ok, message): unsubscribe one phone by the id `devices()` gave it."""
+    _, err = _call("DELETE", "/api/devices", {"id": device_id})
+    return (False, err) if err else (True, f"removed device {device_id}")
 
 
 def verify(url, token):

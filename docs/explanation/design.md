@@ -59,22 +59,35 @@ design choices, and what each one trades away:
   runs in the user's own account, so deploying is a change to their infrastructure:
   `kb update` updates an existing one only when its source changed, offers setup once,
   and does nothing from the web UI or a script, where wrangler couldn't prompt or log in.
-- **Only ids, due times and priorities leave the machine.** Todo titles can be
-  sensitive (rotating a key, a medical appointment), so the Worker never receives
-  them and the push reads `kb-qjp, kb-e3s`, not a title. The price is that a
-  notification is a prompt to run `kb remind`, not the whole message.
+- **The push carries ids; titles are stored for the phone page.** The notification
+  reads `kb-qjp, kb-e3s`, not a title, so nothing readable sits on a push relay or a lock
+  screen. But the phone page lists TODOs by title and lets you close or snooze them, which
+  needs the Worker to hold each dated TODO's title (never descriptions or comments). That
+  is a deliberate step back from "ids only": titles can be sensitive (rotating a key, a
+  medical appointment), and they now sit in the user's own Cloudflare D1 database and
+  behind the phone token. A TODO with no due date is never uploaded.
 - **The machine uploads a full snapshot, not changes.** Each `kb remind check`
   replaces the Worker's reminders with the current set. A closed, deleted, or
   re-dated TODO then needs no special handling and a missed upload heals on the
   next one. The cost is a copy that can lag by up to one interval: a TODO closed
   just before it came due can still produce one last push.
-- **The Worker is a mirror, not a store of record.** It keeps the latest snapshot and
-  when each reminder was last sent, nothing else, so beads stays the single source
-  of truth and phone alerts are one-way. Closing or snoozing still happens in `kb`.
-- **Two tokens, so a leak is small.** The phone's token can only add a
-  subscription (capped, and only to known push services, so it can't aim the
-  Worker at arbitrary URLs); the sync token, which lives only in kb's
-  machine-local config, is the one that can change reminders.
+- **The Worker is a mirror with an inbox, not a store of record.** It keeps the latest
+  snapshot, when each reminder was last sent, and a short queue of what the phone asked
+  for. Beads stays the single source of truth: a close or snooze from the phone is applied
+  on the Mac by `kb remind check`, which fetches the queue, runs `bd`, acknowledges it and
+  only then uploads, so it takes effect within one interval (five minutes) rather than
+  instantly. The Worker applies it to its own copy at once so the page and the pushes agree
+  until then. The alternative, making the Worker the store of record, would have meant
+  syncing beads both ways.
+- **Two tokens, so a leak is bounded.** The phone token (`SUBSCRIBE_TOKEN`) can subscribe a
+  device (capped, and only to known push services, so it can't aim the Worker at arbitrary
+  URLs), list the tracked TODOs with their titles, and ask to close or snooze one. It can
+  not list or remove devices, and it can't upload or read anything else. The sync token,
+  which lives only in kb's machine-local config, is the one that replaces the reminders and
+  manages devices (`kb remind push devices`), so a lost phone is removed from the computer.
+  The phone can still turn off its own subscription, since it holds that endpoint.
+  Requests from the Worker are not trusted by kb either: ids that could be read as flags
+  are refused and only close and snooze run.
 - **One rule for "when is it due".** The desktop notification, the due label, the
   phone upload and the list order all read `todo_remind_at`, so a snoozed TODO
   can't be quiet on one device and loud on another.
