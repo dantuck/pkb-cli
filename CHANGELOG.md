@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/dantuck/pkb-cli/compare/v0.8.0...v0.9.0) (2026-10-29)
+
+
+### Features
+
+* **remind:** proper notification icon and badge on the phone ([d4b14bd](https://github.com/dantuck/pkb-cli/commit/d4b14bd85b9434a5109530a8d881f37e61b7411e))
+
 ## [0.8.0](https://github.com/dantuck/pkb-cli/compare/v0.7.0...v0.8.0) (2026-10-28)
 
 
