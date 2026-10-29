@@ -70,8 +70,9 @@ the data repo.
   To be reminded, add `--due WHEN` (`30m`, `2h`, `tomorrow 9am`, `friday`);
   `kb todo snooze <id> <when>` hides one until then and reminds again,
   `kb remind` lists what's due now. `kb remind push deploy|init|setup <worker-url>|sync|
-  status|off` also pushes due TODOs (ids only) to the user's phone via their
-  own Cloudflare Worker. `deploy` logs in to and changes their Cloudflare
+  status|devices|off` also pushes due TODOs (ids only; their titles sit on the
+  Worker for the phone page, which can close or snooze them) to the user's phone via
+  their own Cloudflare Worker. `deploy` logs in to and changes their Cloudflare
   account, and `kb update` offers it in a terminal -- run either only when asked.
 - **See how entries connect**: `kb links <id>` prints forward links and
   backlinks for an entry (`--json` for machine-readable).
@@ -195,8 +196,9 @@ kb todo due <id> <when>|none [--json]   set or clear a TODO's reminder time
 kb remind [list|check|test|install|uninstall|status] [--interval-minutes MIN] [--repeat-hours H] [--repo DIR]
                                   list what's due; `check` sends desktop notifications;
                                   `install` runs `check` on a timer (launchd/systemd --user)
-kb remind push deploy|init [dir]|setup <worker-url>|sync|status|off
-                                  phone push via the user's Cloudflare Worker (ids only)
+kb remind push deploy|init [dir]|setup <worker-url>|sync|status|devices [rm <id>]|off
+                                  phone push via the user's Cloudflare Worker (ids only in
+                                  the push; the phone page lists, closes and snoozes TODOs)
 kb bd <any bd subcommand>         show/close/comment/create/update, resolved-repo-aware
 kb sync [memos|gitlab|github|beads|all]  pull in external sources
 kb validate                       frontmatter/id/link integrity check

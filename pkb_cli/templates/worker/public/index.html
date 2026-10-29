@@ -12,10 +12,10 @@
 <body>
   <main>
     <h1>kb reminders</h1>
-    <p>Get a push notification on this phone when a kb TODO comes due. Notifications only
-      list TODO ids (like <code>kb-qjp</code>), never titles.</p>
+    <p>Get a push notification on this phone when a kb TODO comes due, and close or snooze
+      it here. Notifications only list TODO ids (like <code>kb-qjp</code>); titles show here, behind the token.</p>
     <p id="state" role="status">Checking…</p>
-    <label for="token">Subscribe token</label>
+    <label for="token">Phone token</label>
     <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
            placeholder="the SUBSCRIBE_TOKEN you set on the Worker">
     <div class="row">
@@ -23,6 +23,15 @@
       <button id="disable" type="button" class="secondary">Turn off</button>
     </div>
     <p id="msg" role="status"></p>
+
+    <h2>Your TODOs</h2>
+    <div class="row">
+      <button id="reload" type="button" class="secondary">Refresh</button>
+      <button id="forget" type="button" class="secondary">Forget token</button>
+    </div>
+    <ul id="todos" class="todos"></ul>
+    <p id="note" class="small">Close and snooze are applied on your computer the next time
+      <code>kb remind check</code> runs (every five minutes).</p>
   </main>
   <script src="/app.js" type="module"></script>
 </body>

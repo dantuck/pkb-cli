@@ -230,7 +230,7 @@ def _run(dest, configured):
     print(f"Phone reminders are deployed: {url}")
     if not live:
         print(f"note: the Worker isn't answering yet ({message}) -- `kb remind push status` checks again")
-    print(f"On your Android phone, open {url}, enter this subscribe token and tap Enable "
+    print(f"On your Android phone, open {url}, enter this phone token and tap Enable "
           f"notifications. kb doesn't keep it, so save it somewhere:\n\n    {secrets['SUBSCRIBE_TOKEN']}\n\n"
           f"Then `kb remind test` sends a test push. (A phone that was subscribed to an earlier "
           f"deploy of this Worker needs to enable notifications again.)")

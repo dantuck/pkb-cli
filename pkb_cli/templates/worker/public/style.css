@@ -17,3 +17,12 @@ button { flex: 1; padding: .8rem; font: inherit; font-weight: 600; color: #fff; 
 button.secondary { color: var(--fg); background: transparent; border: 1px solid var(--border); }
 button:disabled { opacity: .5; }
 #msg.error { color: #dc2626; }
+h2 { font-size: 1.1rem; margin: 2rem 0 0; }
+.small { font-size: .85rem; }
+.todos { list-style: none; margin: 1rem 0 0; padding: 0; }
+.todos li { background: var(--field); border: 1px solid var(--border); border-radius: 8px; padding: .7rem; margin-bottom: .6rem; }
+.todos .title { font-weight: 600; word-break: break-word; }
+.todos .meta { color: var(--muted); font-size: .85rem; }
+.todos .overdue { color: #dc2626; }
+.todos .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.todos .actions button { flex: 1 1 auto; padding: .45rem .6rem; font-size: .9rem; }

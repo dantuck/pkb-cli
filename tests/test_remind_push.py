@@ -26,9 +26,15 @@ def epoch(text):
 
 
 class SnapshotTest(unittest.TestCase):
-    def test_only_ids_due_times_and_priorities_leave_the_machine(self):
+    def test_only_id_title_due_time_and_priority_leave_the_machine(self):
         out = remind_push.snapshot([issue("kb-a", priority=1)])
-        self.assertEqual(out, [{"id": "kb-a", "due_at": epoch("2026-10-28T12:00:00Z"), "priority": 1}])
+        self.assertEqual(out, [{"id": "kb-a", "title": "secret title",
+                                "due_at": epoch("2026-10-28T12:00:00Z"), "priority": 1}])
+        self.assertNotIn("secret details", json.dumps(out), "descriptions never leave the machine")
+
+    def test_a_long_title_is_cut_to_what_the_worker_keeps(self):
+        out = remind_push.snapshot([issue("kb-a", title="x" * 500)])
+        self.assertEqual(len(out[0]["title"]), remind_push.TITLE_MAX_CHARS)
 
     def test_closed_and_undated_todos_are_skipped(self):
         out = remind_push.snapshot([issue("kb-closed", status="closed"), issue("kb-none", due=None), issue("kb-ok")])
@@ -221,7 +227,8 @@ class SyncTest(unittest.TestCase):
         method, path, body = stub.call_args.args[1:]
         self.assertEqual((method, path), ("PUT", "/api/sync"))
         self.assertEqual([r["id"] for r in body["reminders"]], ["kb-a"])
-        self.assertNotIn("secret", str(body))
+        self.assertEqual(body["reminders"][0]["title"], "secret title")
+        self.assertNotIn("secret details", str(body), "descriptions never leave the machine")
 
     def test_a_rejected_token_says_how_to_fix_it(self):
         (ok, msg), _ = self.run_sync(response=(401, {"error": "unauthorized"}))
@@ -294,6 +301,7 @@ class CheckSyncsTest(unittest.TestCase):
                 mock.patch.object(kb_cli, "reminders_to_send", return_value=[]), \
                 mock.patch.object(kb_cli, "_reminder_load", return_value={}), \
                 mock.patch.object(remind_push, "get_config", return_value=("https://w.example", "tok")), \
+                mock.patch.object(remind_push, "pull_actions", return_value=([], None)), \
                 mock.patch.object(remind_push, "sync", return_value=sync_result) as sync, \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             rc = kb_cli.cmd_remind(args)
@@ -308,6 +316,158 @@ class CheckSyncsTest(unittest.TestCase):
         rc, _, err = self.run_check((False, "couldn't reach the Worker: timed out"))
         self.assertEqual(rc, 0)
         self.assertIn("warning: couldn't reach the Worker", err)
+
+
+def action(action_id, todo_id, verb, until=None):
+    return {"id": action_id, "todo_id": todo_id, "action": verb, "until": until}
+
+
+class PhoneExchangeTest(unittest.TestCase):
+    """What the phone asked for is applied on this machine before the reminders are mirrored."""
+
+    def run_exchange(self, actions, pull_error=None, bd_fails=()):
+        calls = []
+
+        def bd_action(root, verb, todo_id, *rest):
+            if todo_id in bd_fails:
+                raise RuntimeError("bd: no such issue")
+            calls.append((verb, todo_id))
+
+        def bd_snooze(root, todo_id, until):
+            if todo_id in bd_fails:
+                raise RuntimeError("bd: no such issue")
+            calls.append(("snooze", todo_id, until))
+
+        order = []
+        err = io.StringIO()
+        with mock.patch.object(remind_push, "pull_actions", return_value=(actions, pull_error)), \
+                mock.patch.object(remind_push, "ack_actions", side_effect=lambda ids: order.append(("ack", ids))) as ack, \
+                mock.patch.object(remind_push, "sync", side_effect=lambda issues: order.append(("sync", [i["id"] for i in issues])) or (True, "ok")) as sync, \
+                mock.patch.object(kb_cli.pc, "get_repo_root", return_value="/repo"), \
+                mock.patch.object(kb_cli, "bd_action", side_effect=bd_action), \
+                mock.patch.object(kb_cli, "bd_snooze", side_effect=bd_snooze), \
+                mock.patch.object(kb_cli, "bd_list", return_value=[issue("kb-after")]), \
+                redirect_stdout(io.StringIO()), redirect_stderr(err):
+            result = kb_cli._phone_exchange([issue("kb-before")])
+        return result, calls, order, ack, sync, err.getvalue()
+
+    def test_nothing_asked_just_syncs_the_issues_it_was_given(self):
+        result, calls, order, ack, _, _ = self.run_exchange([])
+        self.assertEqual(result, (True, "ok"))
+        self.assertEqual((calls, order), ([], [("sync", ["kb-before"])]))
+        ack.assert_not_called()
+
+    def test_close_and_snooze_are_applied_then_acked_then_synced_from_fresh_issues(self):
+        until = int(datetime.now().timestamp()) + 3 * 3600
+        _, calls, order, _, _, _ = self.run_exchange([action(1, "kb-a", "close"), action(2, "kb-b", "snooze", until)])
+        self.assertEqual(calls[0], ("close", "kb-a"))
+        self.assertEqual(calls[1][:2], ("snooze", "kb-b"))
+        self.assertEqual(order, [("ack", [1, 2]), ("sync", ["kb-after"])], "acked, then synced from a re-read")
+
+    def test_the_snooze_ends_when_the_phone_said_not_when_kb_got_to_it(self):
+        until = int(datetime.now().timestamp()) + 3 * 3600
+        _, calls, *_ = self.run_exchange([action(1, "kb-b", "snooze", until)])
+        self.assertEqual(datetime.fromisoformat(calls[0][2]).timestamp(), until)
+
+    def test_a_snooze_the_phone_asked_for_long_ago_is_still_in_the_future(self):
+        _, calls, *_ = self.run_exchange([action(1, "kb-b", "snooze", 1000)])
+        self.assertGreater(datetime.fromisoformat(calls[0][2]).timestamp(), datetime.now().timestamp())
+
+    def test_a_failed_request_warns_and_is_still_acked_so_it_cannot_loop(self):
+        _, calls, order, _, _, err = self.run_exchange([action(1, "kb-gone", "close")], bd_fails=("kb-gone",))
+        self.assertIn("kb-gone", err)
+        self.assertEqual(order, [("ack", [1]), ("sync", ["kb-before"])])
+
+    def test_ids_that_could_be_read_as_flags_or_paths_never_reach_bd(self):
+        bad = [action(1, "--force", "close"), action(2, "-rf", "close"), action(3, "../x", "close"),
+               action(4, "kb-a b", "close"), action(5, "", "close"), action(6, None, "close"),
+               action(7, "kb-a" * 40, "close")]
+        _, calls, _, _, _, err = self.run_exchange(bad)
+        self.assertEqual(calls, [])
+        self.assertEqual(err.count("ignored a request for an odd TODO id"), len(bad))
+
+    def test_only_close_and_snooze_run(self):
+        _, calls, _, _, _, err = self.run_exchange([action(1, "kb-a", "delete"), action(2, "kb-a", "snooze", "soon")])
+        self.assertEqual(calls, [])
+        self.assertIn("ignored an unknown request", err)
+
+    def test_an_unreachable_worker_warns_but_still_attempts_the_sync(self):
+        result, _, order, _, _, err = self.run_exchange([], pull_error="couldn't reach the Worker: timed out")
+        self.assertIn("couldn't fetch the phone's requests", err)
+        self.assertEqual(order, [("sync", ["kb-before"])])
+        self.assertTrue(result[0])
+
+
+class PullActionsTest(unittest.TestCase):
+    CONFIG = ("https://w.example", "tok")
+
+    def pull(self, status, payload):
+        with mock.patch.object(remind_push, "get_config", return_value=self.CONFIG), \
+                mock.patch.object(remind_push, "request", return_value=(status, payload)):
+            return remind_push.pull_actions()
+
+    def test_returns_the_queued_requests(self):
+        got, err = self.pull(200, {"actions": [action(1, "kb-a", "close"), "junk"]})
+        self.assertEqual((got, err), ([action(1, "kb-a", "close")], None))
+
+    def test_a_worker_from_before_the_phone_page_means_nothing_was_asked(self):
+        self.assertEqual(self.pull(404, {"error": "not found"}), ([], None))
+
+    def test_other_failures_are_errors(self):
+        self.assertEqual(self.pull(401, {"error": "unauthorized"}), ([], "unauthorized"))
+        self.assertEqual(self.pull(500, {}), ([], "the Worker answered HTTP 500"))
+
+    def test_a_network_failure_is_an_error(self):
+        with mock.patch.object(remind_push, "get_config", return_value=self.CONFIG), \
+                mock.patch.object(remind_push, "request", side_effect=OSError("timed out")):
+            got, err = remind_push.pull_actions()
+        self.assertEqual(got, [])
+        self.assertIn("timed out", err)
+
+
+class DevicesCommandTest(unittest.TestCase):
+    def run_devices(self, rest, **patches):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(remind_push, "get_config", return_value=("https://w.example", "tok")), \
+                redirect_stdout(out), redirect_stderr(err):
+            for name, value in patches.items():
+                mock.patch.object(remind_push, name, **value).start()
+            try:
+                rc = kb_cli._remind_push_devices(rest)
+            finally:
+                mock.patch.stopall()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_lists_each_phone_with_its_id_and_label(self):
+        found = [{"id": 3, "label": "Chrome on Pixel 8", "created_at": 1793234000, "service": "fcm.googleapis.com"},
+                 {"id": 4, "label": None, "created_at": 1793235000, "service": "push.services.mozilla.com"}]
+        rc, out, _ = self.run_devices([], devices={"return_value": (found, None)})
+        self.assertEqual(rc, 0)
+        self.assertIn("Chrome on Pixel 8", out)
+        self.assertIn("(unnamed)", out)
+        self.assertIn("devices rm <id>", out)
+
+    def test_says_so_when_there_are_none(self):
+        rc, out, _ = self.run_devices([], devices={"return_value": ([], None)})
+        self.assertEqual((rc, out.strip()), (0, "no phones are subscribed"))
+
+    def test_rm_removes_by_id(self):
+        rc, out, _ = self.run_devices(["rm", "3"], remove_device={"return_value": (True, "removed device 3")})
+        self.assertEqual((rc, out.strip()), (0, "removed device 3"))
+
+    def test_rm_passes_an_integer_and_reports_a_failure(self):
+        with mock.patch.object(remind_push, "get_config", return_value=("https://w.example", "tok")), \
+                mock.patch.object(remind_push, "remove_device", return_value=(False, "no such device")) as rm, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = kb_cli._remind_push_devices(["rm", "9"])
+        rm.assert_called_once_with(9)
+        self.assertEqual(rc, 1)
+
+    def test_bad_usage_is_refused_without_calling_the_worker(self):
+        for rest in (["rm"], ["rm", "abc"], ["rm", "1", "2"], ["bogus"]):
+            rc, _, err = self.run_devices(rest, remove_device={"side_effect": AssertionError("called")})
+            self.assertEqual(rc, 2, rest)
+            self.assertIn("usage:", err)
 
 
 if __name__ == "__main__":

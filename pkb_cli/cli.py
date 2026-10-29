@@ -2055,7 +2055,7 @@ def cmd_remind(args):
     if remind_push.get_config():
         # mirror every due time to the Worker each run, so the phone push stays right even
         # when nothing was announced here; a failure is logged, not fatal to the desktop path
-        ok, msg = remind_push.sync(issues)
+        ok, msg = _phone_exchange(issues)
         if not ok:
             print(f"warning: {msg}", file=sys.stderr)
     return 0
@@ -2074,8 +2074,83 @@ def _remind_issues():
         return None
 
 
+_PHONE_TODO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _apply_phone_action(root, action):
+    """Do one close/snooze the phone asked for. The Worker is outside this machine's trust,
+    so the id must look like a bd id (and can't start with `-`, which bd would read as a
+    flag) and only the two known actions run. Raises RuntimeError with what went wrong."""
+    todo_id, verb = action.get("todo_id"), action.get("action")
+    if not isinstance(todo_id, str) or not _PHONE_TODO_ID.fullmatch(todo_id):
+        raise RuntimeError(f"ignored a request for an odd TODO id {str(todo_id)[:40]!r}")
+    if verb == "close":
+        bd_action(root, "close", todo_id)
+    elif verb == "snooze" and isinstance(action.get("until"), int):
+        now = datetime.now().astimezone()
+        until = max(datetime.fromtimestamp(action["until"]).astimezone(), now + timedelta(minutes=1))
+        bd_snooze(root, todo_id, until.isoformat(timespec="seconds"))
+    else:
+        raise RuntimeError(f"ignored an unknown request {str(verb)[:20]!r} for {todo_id}")
+
+
+def _phone_exchange(issues):
+    """Apply what the phone asked for (close/snooze), then replace the Worker's reminders with
+    the current TODOs. Applying comes first: syncing first would put a TODO the phone just
+    closed back on its list. Requests that fail are reported and dropped, and the sync that
+    follows shows the phone how things really stand. (ok, message)."""
+    actions, err = remind_push.pull_actions()
+    if err:
+        print(f"warning: couldn't fetch the phone's requests: {err}", file=sys.stderr)
+    if actions:
+        root = pc.get_repo_root()
+        done = []
+        for a in actions:
+            try:
+                _apply_phone_action(root, a)
+                done.append(a)
+            except RuntimeError as e:
+                print(f"warning: phone request for {a.get('todo_id')} failed: {e}", file=sys.stderr)
+        remind_push.ack_actions([a["id"] for a in actions if isinstance(a.get("id"), int)])
+        if done:
+            for a in done:
+                print(f"phone: {a['action']} {a['todo_id']}")
+            try:
+                issues = bd_list(root)
+            except RuntimeError as e:
+                return False, f"applied the phone's requests but couldn't re-read TODOs: {e}"
+    return remind_push.sync(issues)
+
+
+def _remind_push_devices(rest):
+    """`kb remind push devices [rm ID]` -- list the phones that get alerts, or remove one.
+    Only this machine (the sync token) can; the phone's own token can't."""
+    if rest[:1] == ["rm"]:
+        if len(rest) != 2 or not rest[1].isdigit():
+            print("usage: kb remind push devices rm <id>", file=sys.stderr)
+            return 2
+        ok, msg = remind_push.remove_device(int(rest[1]))
+        _print_result(ok, msg)
+        return 0 if ok else 1
+    if rest:
+        print("usage: kb remind push devices [rm <id>]", file=sys.stderr)
+        return 2
+    found, err = remind_push.devices()
+    if err:
+        _print_result(False, err)
+        return 1
+    if not found:
+        print("no phones are subscribed")
+    for d in found:
+        added = datetime.fromtimestamp(d.get("created_at") or 0).astimezone().strftime("%Y-%m-%d %H:%M")
+        print(f"{d['id']:>3}  {d.get('label') or '(unnamed)':<28} {d.get('service', ''):<26} added {added}")
+    if found:
+        print("remove one with: kb remind push devices rm <id>")
+    return 0
+
+
 def cmd_remind_push(args):
-    """`kb remind push init [dir] | deploy | setup <url> | sync | status | off` -- phone
+    """`kb remind push init [dir] | deploy | setup <url> | sync | status | devices | off` -- phone
     reminders through the kb-push Cloudflare Worker (templates/worker,
     docs/how-to/get-phone-reminders.md)."""
     sub = args.rest[0] if args.rest else "status"
@@ -2098,9 +2173,11 @@ def cmd_remind_push(args):
         issues = _remind_issues()
         if issues is None:
             return 1
-        ok, msg = remind_push.sync(issues)
+        ok, msg = _phone_exchange(issues)
         _print_result(ok, msg)
         return 0 if ok else 1
+    if sub == "devices":
+        return _remind_push_devices(args.rest[1:])
     if sub == "setup":
         url = args.rest[1] if len(args.rest) > 1 else ""
         if not remind_push.valid_url(url):
@@ -2121,7 +2198,7 @@ def cmd_remind_push(args):
         if not payload.get("subscriptions"):
             print(f"next: open {url} on your phone and tap Enable notifications")
         return 0
-    print(f"error: unknown push action '{sub}' -- use init, deploy, setup, sync, status or off", file=sys.stderr)
+    print(f"error: unknown push action '{sub}' -- use init, deploy, setup, sync, status, devices or off", file=sys.stderr)
     return 1
 
 
@@ -3950,6 +4027,7 @@ def main():
             "  kb remind push deploy               set up (or update) the Cloudflare Worker that pushes to your phone\n"
             "  kb remind push init                 just copy its source out, to deploy by hand\n"
             "  kb remind push setup <url>          point kb at a Worker you deployed yourself\n"
+            "  kb remind push devices [rm <id>]    list the phones that get alerts, or remove one\n"
             "  kb remind status | uninstall"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
