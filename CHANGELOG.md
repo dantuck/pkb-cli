@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/dantuck/pkb-cli/compare/v0.10.0...v0.11.0) (2026-10-29)
+
+
+### Features
+
+* **remind:** show TODO titles in the phone notification ([2be8a54](https://github.com/dantuck/pkb-cli/commit/2be8a5442986176b535378b31304764b654d9960))
+
 ## [0.10.0](https://github.com/dantuck/pkb-cli/compare/v0.9.1...v0.10.0) (2026-10-29)
 
 
