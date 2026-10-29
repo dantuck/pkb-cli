@@ -75,7 +75,8 @@ class ResolveWhenTest(unittest.TestCase):
         self.assertEqual(kb_cli.resolve_when("1w"), "+1w")
 
     def test_everything_else_passes_through_to_bd(self):
-        for text in ("+2h", "tomorrow 9am", "friday", "2026-11-02", "2026-11-02T09:00:00-06:00"):
+        for text in ("+2h", "tomorrow 9am", "friday", "2026-11-02", "2026-11-02T09:00:00-06:00",
+                     "2026-11-02T15:00:00Z"):
             self.assertEqual(kb_cli.resolve_when(f"  {text} "), text)
 
 
