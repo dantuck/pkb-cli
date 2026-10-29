@@ -2,6 +2,7 @@
 uploaded, the config/secret handling, and how `kb remind check` uses it. The Worker
 is stubbed; nothing here touches the network."""
 import io
+import json
 import os
 import stat
 import tempfile
@@ -118,12 +119,91 @@ class InitWorkerTest(unittest.TestCase):
         with open(os.path.join(self.dest, "src", "index.ts")) as f:
             self.assertNotIn("stale", f.read())
 
+    def write(self, rel, text="x"):
+        path = os.path.join(self.dest, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def set_manifest(self, files):
+        self.write(remind_push.MANIFEST_FILE, json.dumps(files))
+
+    def test_refresh_removes_files_an_earlier_copy_shipped_and_this_release_dropped(self):
+        remind_push.init_worker(self.dest)
+        stale = self.write("public/old.png")
+        nested = self.write("retired/helper.js")
+        self.set_manifest(["public/old.png", "retired/helper.js", "src/index.ts"])
+
+        remind_push.init_worker(self.dest)
+
+        self.assertFalse(os.path.exists(stale))
+        self.assertFalse(os.path.exists(nested))
+        self.assertFalse(os.path.isdir(os.path.join(self.dest, "retired")), "emptied directory is removed too")
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, "src", "index.ts")))
+
+    def test_refresh_leaves_the_users_own_files_alone(self):
+        remind_push.init_worker(self.dest)
+        mine = self.write("notes.txt")
+        remind_push.init_worker(self.dest)
+        self.assertTrue(os.path.exists(mine))
+
+    def test_a_copy_from_before_the_manifest_still_loses_the_icon_an_old_release_shipped(self):
+        remind_push.init_worker(self.dest)
+        os.remove(os.path.join(self.dest, remind_push.MANIFEST_FILE))
+        old_icon = self.write("public/icon.png")
+        remind_push.init_worker(self.dest)
+        self.assertFalse(os.path.exists(old_icon))
+
+    def test_the_manifest_lists_what_was_copied(self):
+        remind_push.init_worker(self.dest)
+        with open(os.path.join(self.dest, remind_push.MANIFEST_FILE)) as f:
+            listed = json.load(f)
+        self.assertIn("src/index.ts", listed)
+        self.assertEqual(sorted(listed), sorted(remind_push._source_files()))
+
+    def test_a_tampered_manifest_cannot_delete_outside_the_worker_directory(self):
+        remind_push.init_worker(self.dest)
+        outside = os.path.join(os.path.dirname(self.dest), "precious.txt")
+        with open(outside, "w") as f:
+            f.write("keep")
+        self.set_manifest(["../precious.txt", "/etc/hosts", "."])
+        remind_push.init_worker(self.dest)
+        self.assertTrue(os.path.exists(outside))
+        self.assertTrue(os.path.isdir(self.dest))
+
     def test_set_database_id_reports_when_the_config_no_longer_has_its_anchor(self):
         remind_push.init_worker(self.dest)
         config = os.path.join(self.dest, "wrangler.jsonc")
         with open(config, "w") as f:
             f.write("{}")
         self.assertFalse(remind_push.set_database_id(config, "0a1b2c3d-0000-4000-8000-123456789abc"))
+
+
+class SourceHashTest(unittest.TestCase):
+    """The deploy fingerprint must agree between a checkout and an installed wheel."""
+
+    def hash_of(self, files):
+        src = tempfile.mkdtemp()
+        for rel, text in files.items():
+            path = os.path.join(src, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        remind_push.source_hash.cache_clear()
+        with mock.patch.object(remind_push, "WORKER_SRC", src):
+            result = remind_push.source_hash()
+        remind_push.source_hash.cache_clear()
+        return result
+
+    def test_ignores_dotfiles_a_checkout_has_and_a_wheel_lacks(self):
+        files = {"src/index.ts": "a", "wrangler.jsonc": "b"}
+        self.assertEqual(self.hash_of(files), self.hash_of({**files, ".gitignore": "node_modules/"}))
+
+    def test_changes_when_a_shipped_file_changes_or_is_added(self):
+        base = {"src/index.ts": "a"}
+        self.assertNotEqual(self.hash_of(base), self.hash_of({"src/index.ts": "b"}))
+        self.assertNotEqual(self.hash_of(base), self.hash_of({**base, "public/new.png": "x"}))
 
 
 class SyncTest(unittest.TestCase):

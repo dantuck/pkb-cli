@@ -24,6 +24,9 @@ WORKER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates
 _NOT_SOURCE_NAMES = ("node_modules", ".wrangler", ".dev.vars", "pnpm-lock.yaml",
                      "worker-configuration.d.ts", "__pycache__")
 _NOT_SOURCE = shutil.ignore_patterns(*_NOT_SOURCE_NAMES)
+MANIFEST_FILE = ".kb-manifest"  # in the copied-out Worker: the files the last init put there
+# files earlier releases shipped and later ones dropped, for copies made before the manifest existed
+_LEGACY_FILES = ("public/icon.png",)
 # the one line of wrangler.jsonc that `wrangler d1 create`'s id is added to
 _DB_NAME_LINE = '"database_name": "kb-reminders",'
 _DB_ID = re.compile(r'"database_id"\s*:\s*"([0-9A-Fa-f-]{36})"')
@@ -59,21 +62,29 @@ def set_database_id(config, database_id):
     return True
 
 
+def _source_files():
+    """Every packaged Worker file kb copies out, as paths relative to WORKER_SRC."""
+    found = []
+    for root, dirs, files in os.walk(WORKER_SRC):
+        dirs[:] = sorted(d for d in dirs if d not in _NOT_SOURCE_NAMES)
+        found += [os.path.relpath(os.path.join(root, name), WORKER_SRC)
+                  for name in sorted(files) if name not in _NOT_SOURCE_NAMES]
+    return found
+
+
 @functools.lru_cache(maxsize=None)
 def source_hash():
     """Fingerprint of the packaged Worker source, so `kb update` can tell whether what
     was last deployed is still current without touching Cloudflare. The package doesn't
-    change while kb runs, so it's computed once."""
+    change while kb runs, so it's computed once. Dotfiles are left out: a source checkout
+    has some (.gitignore) that an installed wheel doesn't, and neither is deployed."""
     digest = hashlib.sha256()
-    for root, dirs, files in os.walk(WORKER_SRC):
-        dirs[:] = sorted(d for d in dirs if d not in _NOT_SOURCE_NAMES)
-        for name in sorted(files):
-            if name in _NOT_SOURCE_NAMES:
-                continue
-            path = os.path.join(root, name)
-            digest.update(os.path.relpath(path, WORKER_SRC).encode())
-            with open(path, "rb") as f:
-                digest.update(f.read())
+    for rel in _source_files():
+        if any(part.startswith(".") for part in rel.split(os.sep)):
+            continue
+        digest.update(rel.encode())
+        with open(os.path.join(WORKER_SRC, rel), "rb") as f:
+            digest.update(f.read())
     return digest.hexdigest()
 
 
@@ -88,14 +99,48 @@ def decline_offer():
     pc.save_kb_config(cfg)
 
 
+def _read_manifest(dest):
+    try:
+        with open(os.path.join(dest, MANIFEST_FILE), encoding="utf-8") as f:
+            listed = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    return {p for p in listed if isinstance(p, str)}
+
+
+def _prune(dest, stale):
+    """Delete `stale` files (relative paths) from `dest`, and any directories that empties.
+    Paths that would leave `dest` are ignored, so a tampered manifest can't delete elsewhere."""
+    for rel in sorted(stale):
+        path = os.path.normpath(os.path.join(dest, rel))
+        if os.path.commonpath([dest, path]) != dest or path == dest:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            continue
+        parent = os.path.dirname(path)
+        while parent != dest and not os.listdir(parent):
+            os.rmdir(parent)
+            parent = os.path.dirname(parent)
+
+
 def init_worker(dest=None):
     """Copy the packaged Worker source into `dest` (default: worker_dir()), refreshing it
-    on a later run: sources are overwritten, while node_modules and the database id in
-    wrangler.jsonc (added by `wrangler d1 create`) are kept. Returns the directory."""
+    on a later run: sources are overwritten, files an earlier copy shipped that this release
+    dropped are removed (otherwise they'd be deployed forever), and node_modules, the
+    database id in wrangler.jsonc (added by `wrangler d1 create`) and anything else of the
+    user's are kept. Returns the directory."""
     dest = os.path.abspath(os.path.expanduser(dest or worker_dir()))
     config = os.path.join(dest, "wrangler.jsonc")
     database_id = get_database_id(config)
+    shipped_before = _read_manifest(dest) | set(_LEGACY_FILES)
+
     shutil.copytree(WORKER_SRC, dest, ignore=_NOT_SOURCE, dirs_exist_ok=True)
+    current = _source_files()
+    _prune(dest, shipped_before - set(current))
+    with open(os.path.join(dest, MANIFEST_FILE), "w", encoding="utf-8") as f:
+        json.dump(current, f)
     if database_id:
         set_database_id(config, database_id)
     return dest

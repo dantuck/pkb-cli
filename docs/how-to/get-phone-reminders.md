@@ -89,7 +89,8 @@ kb remind push setup https://kb-push.<your-subdomain>.workers.dev   # asks for S
 ```
 
 Rotate a token by generating a new one and running `secret put` again. After a `kb update`,
-`kb remind push init` refreshes the copy (keeping `node_modules` and the database id); then
+`kb remind push init` refreshes the copy (keeping `node_modules`, the database id and any files of your own, and
+removing files a release dropped); then
 `pnpm install`, `pnpm wrangler d1 migrations apply kb-reminders --remote` and `pnpm deploy`
 as above.
 
