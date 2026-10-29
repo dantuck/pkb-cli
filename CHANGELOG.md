@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/dantuck/pkb-cli/compare/v0.9.0...v0.9.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **remind:** prune stale files when refreshing the copied-out Worker ([902c86f](https://github.com/dantuck/pkb-cli/commit/902c86f0f269868c1dde85c4c7bdec7ebb2972b4))
+
 ## [0.9.0](https://github.com/dantuck/pkb-cli/compare/v0.8.0...v0.9.0) (2026-10-29)
 
 
