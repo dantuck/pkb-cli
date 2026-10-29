@@ -144,7 +144,9 @@ the packaged source changed since the last deploy (recorded as a hash in
 `push_offer_declined` in the machine-local config). Without a terminal (the web UI's
 update, a script) it only says to run `kb remind push deploy`. `push init [dir]` copies
 the source out without deploying, for deploying by hand; run again it refreshes the
-source, keeping `node_modules` and the `database_id` in `wrangler.jsonc`. Once `push setup <worker-url>` has verified the
+source and removes files an earlier copy shipped that the release dropped (tracked in a
+`.kb-manifest` file, so your own files are never touched), keeping `node_modules` and the
+`database_id` in `wrangler.jsonc`. Once `push setup <worker-url>` has verified the
 Worker's URL and sync token (prompted for, or read from `$KB_PUSH_TOKEN` or stdin) and
 saved them to the machine-local `push` key in `~/.config/kb/config.json` (see
 [config](config.md#machine-local-preferences)), every `kb remind check` run replaces the
