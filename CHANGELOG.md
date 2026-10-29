@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/dantuck/pkb-cli/compare/v0.9.1...v0.10.0) (2026-10-29)
+
+
+### Features
+
+* **remind:** manage todos from the phone, devices from the computer ([6f5e7f3](https://github.com/dantuck/pkb-cli/commit/6f5e7f313fffb522e19a8bc52318c819356c4620))
+
+
+### Bug Fixes
+
+* **web:** make the todo panel scroll and set an exact due time ([fdf8681](https://github.com/dantuck/pkb-cli/commit/fdf8681d5ffd76982352e8e87d684cd296e358f8))
+
 ## [0.9.1](https://github.com/dantuck/pkb-cli/compare/v0.9.0...v0.9.1) (2026-10-29)
 
 
