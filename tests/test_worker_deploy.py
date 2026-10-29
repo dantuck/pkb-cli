@@ -198,6 +198,43 @@ class DeployTest(unittest.TestCase):
         self.assertIsNotNone(rp.get_config())
 
 
+class PwaAssetsTest(unittest.TestCase):
+    """Every image the phone page, manifest and notifications name is actually shipped."""
+    PUBLIC = os.path.join(rp.WORKER_SRC, "public")
+
+    def read(self, name):
+        with open(os.path.join(self.PUBLIC, name), encoding="utf-8") as f:
+            return f.read()
+
+    def assertShipped(self, path):
+        self.assertTrue(os.path.isfile(os.path.join(self.PUBLIC, path.lstrip("/"))), path)
+
+    def test_notification_icon_and_badge_exist(self):
+        import re
+        for path in re.findall(r'(?:icon|badge): "(/[^"]+)"', self.read("sw.js")):
+            self.assertShipped(path)
+
+    def test_manifest_icons_exist_and_include_a_maskable_one(self):
+        icons = json.loads(self.read("manifest.webmanifest"))["icons"]
+        for icon in icons:
+            self.assertShipped(icon["src"])
+        self.assertIn("maskable", {i["purpose"] for i in icons})
+        self.assertIn("192x192", {i["sizes"] for i in icons})
+
+    def test_page_icon_exists(self):
+        import re
+        self.assertShipped(re.search(r'rel="icon" href="([^"]+)"', self.read("index.html")).group(1))
+
+    def test_the_badge_is_a_small_png_with_an_alpha_channel(self):
+        # Android uses only a badge's alpha channel, so it must have one (PNG colour type 6, RGBA)
+        import struct
+        with open(os.path.join(self.PUBLIC, "badge.png"), "rb") as f:
+            header = f.read(26)
+        self.assertEqual(header[:8], b"\x89PNG\r\n\x1a\n")
+        width, height, _depth, colour_type = struct.unpack(">IIBB", header[16:26])
+        self.assertEqual((width, height, colour_type), (96, 96, 6))
+
+
 class UpdateFlowTest(unittest.TestCase):
     """What `kb update` does about the Worker, from the freshly installed kb."""
 
