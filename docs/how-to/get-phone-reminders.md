@@ -12,11 +12,10 @@ either way, using a small Cloudflare Worker you deploy to your own account
   leave your machine.
 - A cron trigger on the Worker runs every minute and sends a
   [Web Push](https://developer.mozilla.org/docs/Web/API/Push_API) to your phone
-  when something is due: `kb: 2 TODOs due` / `kb-qjp, kb-e3s`. The notification
-  carries ids only, never titles. An overdue TODO is sent again every 4 hours until you
+  when something is due: `kb: 2 TODOs due`, with the first few titles in the body. An overdue TODO is sent again every 4 hours until you
   close or snooze it.
 - Web Push is end-to-end encrypted to your phone, so Google's push service relays
-  it without being able to read it. Look the ids up with `kb remind`.
+  it without being able to read it. Titles do show on your lock screen, though.
 - The same page lists your TODOs by title, with **Close** and **Snooze** buttons. Those
   go to the Worker, and the next `kb remind check` on your computer applies them.
 - Your desktop still gets its own notification too.

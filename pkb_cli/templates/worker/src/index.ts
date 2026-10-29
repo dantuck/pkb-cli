@@ -8,7 +8,7 @@ const MAX_SUBSCRIPTIONS = 20;
 const MAX_BODY_BYTES = 64 * 1024;
 // a phone that's offline can still get a reminder this long after it was sent
 const PUSH_TTL_SECONDS = 4 * 3600;
-const MAX_IDS_IN_BODY = 3;
+const MAX_TITLES_IN_BODY = 3;
 const MAX_TITLE_CHARS = 200;
 const MAX_LABEL_CHARS = 80;
 const MAX_PENDING_ACTIONS = 200;
@@ -193,23 +193,23 @@ async function pushToAll(
   return out;
 }
 
-// One summary push per run, not one per TODO. The text is deliberately generic -- ids
-// only, never titles -- so nothing readable sits on a push relay or a lock screen. (Titles
-// are stored here for the phone page, which needs the phone token to show them.)
+// One summary push per run, not one per TODO. The body lists titles (falling back to the id
+// for an untitled one); Web Push is encrypted end to end, so the relay can't read them, but
+// they are visible on the phone's lock screen.
 async function sendDue(env: Env): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const { results: due } = await env.DB
     .prepare(
-      `SELECT id, priority FROM reminders
+      `SELECT id, title, priority FROM reminders
        WHERE due_at <= ?1 AND (last_sent IS NULL OR last_sent <= ?2)
        ORDER BY priority, due_at LIMIT 50`,
     )
     .bind(now, now - REPEAT_SECONDS)
-    .all<{ id: string; priority: number }>();
+    .all<{ id: string; title: string | null; priority: number }>();
   if (due.length === 0) return;
 
-  const shown = due.slice(0, MAX_IDS_IN_BODY).map((r) => r.id).join(", ");
-  const more = due.length > MAX_IDS_IN_BODY ? ` +${due.length - MAX_IDS_IN_BODY} more` : "";
+  const shown = due.slice(0, MAX_TITLES_IN_BODY).map((r) => r.title || r.id).join("\n");
+  const more = due.length > MAX_TITLES_IN_BODY ? `\n+${due.length - MAX_TITLES_IN_BODY} more` : "";
   const urgency = due.some((r) => r.priority <= 1) ? "high" : "normal";
   const result = await pushToAll(
     env,
