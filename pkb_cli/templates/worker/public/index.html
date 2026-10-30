@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>kb reminders</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon-192.png">
@@ -10,29 +10,62 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main>
-    <h1>kb reminders</h1>
-    <p>Get a push notification on this phone when a kb TODO comes due, and close or snooze
-      it here. Notifications only list TODO ids (like <code>kb-qjp</code>); titles show here, behind the token.</p>
-    <p id="state" role="status">Checking…</p>
-    <label for="token">Phone token</label>
-    <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
-           placeholder="the SUBSCRIBE_TOKEN you set on the Worker">
-    <div class="row">
-      <button id="enable" type="button">Enable notifications</button>
-      <button id="disable" type="button" class="secondary">Turn off</button>
-    </div>
-    <p id="msg" role="status"></p>
+  <header class="bar">
+    <h1>TODOs</h1>
+    <span id="count" class="count" aria-live="polite"></span>
+    <button id="reload" type="button" class="icon" aria-label="Refresh">&#8635;</button>
+    <button id="open-shelf" type="button" class="icon" aria-label="Settings" aria-haspopup="dialog">
+      <span id="dot" class="dot" aria-hidden="true"></span>&#9776;
+    </button>
+  </header>
 
-    <h2>Your TODOs</h2>
-    <div class="row">
-      <button id="reload" type="button" class="secondary">Refresh</button>
-      <button id="forget" type="button" class="secondary">Forget token</button>
-    </div>
-    <ul id="todos" class="todos"></ul>
-    <p id="note" class="small">Close and snooze are applied on your computer the next time
-      <code>kb remind check</code> runs (every five minutes).</p>
+  <main>
+    <section id="setup" hidden>
+      <h2>Connect this phone</h2>
+      <p>Enter the <code>SUBSCRIBE_TOKEN</code> you set on the Worker. It stays on this phone only.</p>
+      <label for="token">Phone token</label>
+      <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button id="connect" type="button" class="primary wide">Connect</button>
+    </section>
+
+    <section id="app" hidden>
+      <div id="banner" class="banner" hidden>
+        <span>Notifications are off on this phone.</span>
+        <button id="banner-on" type="button" class="primary small">Turn on</button>
+      </div>
+      <nav id="chips" class="chips" aria-label="Filter"></nav>
+      <div id="todos"></div>
+    </section>
+
+    <p id="msg" role="status"></p>
   </main>
+
+  <dialog id="shelf" class="shelf" aria-labelledby="shelf-title">
+    <div class="grab" aria-hidden="true"></div>
+    <h2 id="shelf-title">Settings</h2>
+
+    <div class="item">
+      <div>
+        <div class="item-title">Notifications</div>
+        <div id="state" class="item-sub" role="status">Checking…</div>
+      </div>
+      <button id="switch" type="button" class="switch" role="switch" aria-checked="false" aria-label="Notifications"></button>
+    </div>
+
+    <div class="item">
+      <div>
+        <div class="item-title">Phone token</div>
+        <div class="item-sub">Saved on this phone</div>
+      </div>
+      <button id="forget" type="button" class="secondary small">Forget</button>
+    </div>
+
+    <p class="small">Close and snooze are applied on your computer the next time
+      <code>kb remind check</code> runs (every five minutes). Notifications only list TODO ids;
+      titles show here, behind the token.</p>
+    <button id="close-shelf" type="button" class="secondary wide">Done</button>
+  </dialog>
+
   <script src="/app.js" type="module"></script>
 </body>
 </html>
