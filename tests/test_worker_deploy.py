@@ -225,6 +225,13 @@ class PwaAssetsTest(unittest.TestCase):
         import re
         self.assertShipped(re.search(r'rel="icon" href="([^"]+)"', self.read("index.html")).group(1))
 
+    def test_offline_shell_files_are_shipped(self):
+        # cache.addAll is all-or-nothing: one missing file fails the service worker install
+        import re
+        files = re.search(r"const FILES = \[([^\]]*)\]", self.read("sw.js")).group(1)
+        for path in re.findall(r'"(/[^"]*)"', files):
+            self.assertShipped("index.html" if path == "/" else path)
+
     def test_the_badge_is_a_small_png_with_an_alpha_channel(self):
         # Android uses only a badge's alpha channel, so it must have one (PNG colour type 6, RGBA)
         import struct
