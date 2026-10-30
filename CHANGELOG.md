@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/dantuck/pkb-cli/compare/v0.11.0...v0.12.0) (2026-10-30)
+
+
+### Features
+
+* **web:** make the phone page an app with a settings shelf, grouped TODOs and offline use ([8a615dc](https://github.com/dantuck/pkb-cli/commit/8a615dc1d897ce75e2f776de7a6e8226ca92ffd8))
+
 ## [0.11.0](https://github.com/dantuck/pkb-cli/compare/v0.10.0...v0.11.0) (2026-10-29)
 
 
