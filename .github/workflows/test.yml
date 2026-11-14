@@ -26,6 +26,22 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python3 -m unittest discover -s tests -v
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check pkb_cli/templates/web/app.js
+      - run: node --check pkb_cli/templates/worker/public/app.js
+      - run: node --check pkb_cli/templates/worker/public/sw.js
+      - name: Type-check the Worker
+        working-directory: pkb_cli/templates/worker
+        run: pnpm install --no-frozen-lockfile && pnpm check
   package:
     runs-on: ubuntu-latest
     steps:

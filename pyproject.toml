@@ -21,6 +21,8 @@ classifiers = [
 # meaning-based search: a small static embedding model run in-process (no server,
 # no network at search time). model2vec needs Python >= 3.10.
 semantic = ["model2vec>=0.5; python_version >= '3.10'"]
+# contributing: `pip install -e '.[dev]'`, then `ruff check .` and `python -m unittest discover -s tests`
+dev = ["ruff"]
 
 [project.urls]
 Homepage = "https://github.com/dantuck/pkb-cli"
