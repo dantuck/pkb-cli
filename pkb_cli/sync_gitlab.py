@@ -65,8 +65,8 @@ def write_issue(root, issue, existing_paths, all_ids, inbox_all):
     body = issue.get("description") or ""
     web_url = issue.get("web_url") or ""
     content = f"{body}\n\n[GitLab issue]({web_url})\n" if web_url else body
-    return pc.write_source_mirror(root, "gitlab", "GitLab", source_id, title, content, created, updated,
-                                  existing_paths, all_ids, inbox_all)
+    return pc.write_source_mirror(root, "gitlab", source_id, title, content, created, updated,
+                                  existing_paths, all_ids, inbox_all, label="GitLab")
 
 
 def main():
@@ -81,7 +81,7 @@ def main():
         issues = fetch_issues(project, updated_after)
     except RuntimeError as e:
         pc.fail(str(e))
-    pc.mirror_items(root, "gitlab", issues, lambda i: i["iid"],
+    pc.mirror_items(root, "gitlab", issues,
                     lambda i, paths, ids: write_issue(root, i, paths, ids, config["inbox_all_issues"]),
                     "last_updated_after", updated_after)
 

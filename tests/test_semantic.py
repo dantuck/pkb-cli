@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pkb_cli import cli as kb_cli  # noqa: E402
+from pkb_cli import search  # noqa: E402
 from pkb_cli import index_fts, semantic  # noqa: E402
 from pkb_cli import pkb_common as pc  # noqa: E402
 
@@ -121,13 +121,13 @@ class SemanticIndexTest(unittest.TestCase):
         index_fts.index_repo(self.root, quiet=True)
 
         # "baking" appears in no note: keyword finds nothing, meaning finds the bread one
-        self.assertEqual(kb_cli.search_entries(self.root, "baking", mode="keyword"), [])
-        self.assertEqual([r[0] for r in kb_cli.search_entries(self.root, "baking", mode="semantic")], ["a"])
-        self.assertEqual([r[0] for r in kb_cli.search_entries(self.root, "baking")], ["a"])  # auto = hybrid
+        self.assertEqual(search.search_entries(self.root, "baking", mode="keyword"), [])
+        self.assertEqual([r[0] for r in search.search_entries(self.root, "baking", mode="semantic")], ["a"])
+        self.assertEqual([r[0] for r in search.search_entries(self.root, "baking")], ["a"])  # auto = hybrid
 
         # an exact word still works, and type scoping applies to both halves
-        self.assertEqual([r[0] for r in kb_cli.search_entries(self.root, "tailnet")], ["b"])
-        self.assertEqual(kb_cli.search_entries(self.root, "baking", entry_type="reference"), [])
+        self.assertEqual([r[0] for r in search.search_entries(self.root, "tailnet")], ["b"])
+        self.assertEqual(search.search_entries(self.root, "baking", entry_type="reference"), [])
 
     def test_search_builds_missing_vectors_and_notes_it(self):
         self.write("a", "Sourdough starter", "Feed flour daily.")
@@ -136,7 +136,7 @@ class SemanticIndexTest(unittest.TestCase):
         self.assertEqual(self.count(), 0)
 
         notes = []
-        rows = kb_cli.search_entries(self.root, "baking", notes=notes)
+        rows = search.search_entries(self.root, "baking", notes=notes)
         self.assertEqual([r[0] for r in rows], ["a"])
         self.assertEqual(self.count(), 1)
         self.assertTrue(any("building the semantic index" in n for n in notes))
@@ -155,11 +155,11 @@ class SemanticIndexTest(unittest.TestCase):
         conn.close()
         with mock.patch.object(semantic, "check_model", boom), mock.patch.object(semantic, "load_model", boom):
             notes = []
-            rows = kb_cli.search_entries(self.root, "flour", notes=notes)
+            rows = search.search_entries(self.root, "flour", notes=notes)
             self.assertEqual([r[0] for r in rows], ["a"])  # keyword still answers
             self.assertTrue(any("keyword only" in n for n in notes))
             with self.assertRaises(semantic.SemanticUnavailable):
-                kb_cli.search_entries(self.root, "flour", mode="semantic")
+                search.search_entries(self.root, "flour", mode="semantic")
 
     def test_index_and_setup_fetch_a_missing_model_even_with_nothing_to_embed(self):
         self.write("a", "Starter", "flour")
@@ -186,7 +186,7 @@ class SemanticIndexTest(unittest.TestCase):
         with mock.patch.object(semantic, "config", lambda root: (False, "m")):
             index_fts.index_repo(self.root, quiet=True)
             self.assertEqual(self.count(), 0)
-            self.assertEqual(kb_cli.search_entries(self.root, "baking"), [])
+            self.assertEqual(search.search_entries(self.root, "baking"), [])
 
 
 if __name__ == "__main__":

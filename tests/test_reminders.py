@@ -219,7 +219,7 @@ class NotifyTest(unittest.TestCase):
     def test_text_is_passed_as_argv_not_interpolated_into_the_script(self):
         evil = 'x" & do shell script "touch /tmp/pwned" & "'
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
-                mock.patch.object(notifier, "_notifier_binary", return_value=None), \
+                mock.patch.object(notifier, "notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             self.assertTrue(notifier.notify("title", evil))
@@ -229,7 +229,7 @@ class NotifyTest(unittest.TestCase):
 
     def test_returns_false_without_a_notifier(self):
         with mock.patch.object(kb_cli.sys, "platform", "linux"), \
-                mock.patch.object(notifier, "_notifier_binary", return_value=None), \
+                mock.patch.object(notifier, "notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value=None):
             self.assertFalse(notifier.notify("t", "m"))
             self.assertEqual(notifier.notify_status("t", "m"), "unavailable")
@@ -237,13 +237,13 @@ class NotifyTest(unittest.TestCase):
 
 class NotifierTest(unittest.TestCase):
     def run_status(self, code, **kwargs):
-        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=code)) as run:
             return notifier.notify_status("title", "msg", **kwargs), run
 
     def test_notifier_gets_text_as_separate_argv_entries(self):
         evil = '"; rm -rf ~ #'
-        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             self.assertEqual(notifier.notify_status("title", evil, group="g"), "sent")
         self.assertEqual(run.call_args.args[0],
@@ -255,7 +255,7 @@ class NotifierTest(unittest.TestCase):
         self.assertEqual(run.call_count, 1)  # no osascript attempt
 
     def test_denied_falls_back_to_osascript_for_real_reminders(self):
-        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.sys, "platform", "darwin"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
                 mock.patch.object(kb_cli.subprocess, "run",
@@ -265,10 +265,10 @@ class NotifierTest(unittest.TestCase):
 
     def test_authorization_parsing_and_allowed(self):
         out = "terminal-notifier 3.1.0\n  authorization       denied\n  alerts              enabled\n"
-        with mock.patch.object(notifier, "_notifier_binary", return_value="/n"), \
+        with mock.patch.object(notifier, "notifier_binary", return_value="/n"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(stdout=out)):
             self.assertEqual(notifier.notifier_authorization(), "denied")
-        with mock.patch.object(notifier, "_notifier_binary", return_value=None):
+        with mock.patch.object(notifier, "notifier_binary", return_value=None):
             self.assertIsNone(notifier.notifier_authorization())
         self.assertTrue(notifier.notifier_allowed("authorized"))
         self.assertFalse(notifier.notifier_allowed("denied"))
@@ -335,7 +335,7 @@ class BuildNotifierAppTest(unittest.TestCase):
         self.assertEqual(info["CFBundleIdentifier"], notifier.NOTIFIER_BUNDLE_ID)
         self.assertEqual(info["CFBundleName"], "kb reminders")
         self.assertTrue(os.path.exists(os.path.join(self.app, "Contents", "Resources", "kb-reminder.icns")))
-        self.assertTrue(os.access(notifier._notifier_binary(), os.X_OK))
+        self.assertTrue(os.access(notifier.notifier_binary(), os.X_OK))
         before = os.stat(os.path.join(self.app, "Contents", "Info.plist")).st_mtime_ns
         ok, msg = notifier.build_notifier_app()
         self.assertTrue(ok)
@@ -345,12 +345,12 @@ class BuildNotifierAppTest(unittest.TestCase):
 
 class RemindersInfoTest(unittest.TestCase):
     def info(self, kind, state, auth="denied", built=True, stock=True):
-        with mock.patch.object(service, "_service_kind", return_value=kind), \
+        with mock.patch.object(service, "service_kind", return_value=kind), \
                 mock.patch.object(service, "_service_state", return_value=state), \
                 mock.patch.object(reminders, "reminder_status_line", return_value=(False, "msg")), \
                 mock.patch.object(service, "_timer_interval_minutes", return_value=5), \
                 mock.patch.object(notifier, "notifier_authorization", return_value=auth), \
-                mock.patch.object(notifier, "_notifier_binary", return_value="/n" if built else None), \
+                mock.patch.object(notifier, "notifier_binary", return_value="/n" if built else None), \
                 mock.patch.object(notifier, "_terminal_notifier_app", return_value="/t.app" if stock else None):
             return reminders.reminders_info()
 
@@ -419,7 +419,7 @@ class ReminderStatusLineTest(unittest.TestCase):
         """bundle: the built kb reminders app's authorization string (None = not built)."""
         with mock.patch.object(service, "_service_state", return_value=state), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/x" if have_notifier else None), \
-                mock.patch.object(notifier, "_notifier_binary", return_value="/n" if bundle else None), \
+                mock.patch.object(notifier, "notifier_binary", return_value="/n" if bundle else None), \
                 mock.patch.object(notifier, "notifier_authorization", return_value=bundle), \
                 mock.patch.object(notifier, "_terminal_notifier_app", return_value=stock_app):
             return reminders.reminder_status_line(kind)
@@ -463,7 +463,7 @@ class ReminderStatusLineTest(unittest.TestCase):
         self.assertIn("osascript", msg)
 
     def test_unsupported_platform(self):
-        with mock.patch.object(service, "_service_kind", return_value=None):
+        with mock.patch.object(service, "service_kind", return_value=None):
             ok, msg = reminders.reminder_status_line()
         self.assertFalse(ok)
         self.assertIn("kb remind check", msg)

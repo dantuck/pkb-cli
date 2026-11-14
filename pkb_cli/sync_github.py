@@ -63,8 +63,8 @@ def write_issue(root, issue, existing_paths, all_ids, inbox_all):
     body = issue.get("body") or ""
     html_url = issue.get("html_url") or ""
     content = f"{body}\n\n[GitHub issue]({html_url})\n" if html_url else body
-    return pc.write_source_mirror(root, "github", "GitHub", source_id, title, content, created, updated,
-                                  existing_paths, all_ids, inbox_all)
+    return pc.write_source_mirror(root, "github", source_id, title, content, created, updated,
+                                  existing_paths, all_ids, inbox_all, label="GitHub")
 
 
 def main():
@@ -79,7 +79,7 @@ def main():
         issues = fetch_issues(repo, updated_after)
     except RuntimeError as e:
         pc.fail(str(e))
-    pc.mirror_items(root, "github", issues, lambda i: i["number"],
+    pc.mirror_items(root, "github", issues,
                     lambda i, paths, ids: write_issue(root, i, paths, ids, config["inbox_all_issues"]),
                     "last_updated_after", updated_after)
 

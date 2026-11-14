@@ -27,19 +27,24 @@ def _open(db_path):
     return conn
 
 
-def get_db(root):
-    """Open the index, creating it if needed. The index is derived data, so one that
-    is corrupt (not a database / malformed) is discarded and recreated empty -- with a
-    warning, since `kb index` must run to repopulate it. A locked database is not
-    corruption and still raises."""
+class IndexCorrupt(sqlite3.DatabaseError):
+    """fts.db exists but is not a usable database."""
+
+
+def get_db(root, recover=False):
+    """Open the index, creating it if needed. A corrupt one raises IndexCorrupt, so a
+    search reports the problem rather than silently returning nothing; with
+    `recover=True` (kb index) it is discarded and recreated empty instead, since the
+    index is derived data. A locked database is not corruption and always raises."""
     db_path = os.path.join(root, ".pkb", "fts.db")
     try:
         return _open(db_path)
     except sqlite3.DatabaseError as e:
-        if isinstance(e, sqlite3.OperationalError):  # e.g. locked -- not corruption
+        if isinstance(e, sqlite3.OperationalError):  # e.g. locked
             raise
-        print(f"warning: the search index was corrupt ({e}); recreated it empty -- run `kb index`",
-              file=sys.stderr)
+        if not recover:
+            raise IndexCorrupt(f"the search index is corrupt ({e}) -- run `kb index` to rebuild it") from e
+        print(f"warning: the search index was corrupt ({e}); rebuilding it", file=sys.stderr)
         for suffix in ("", "-wal", "-shm", "-journal"):
             try:
                 os.remove(db_path + suffix)
@@ -52,7 +57,7 @@ def index_repo(root, full=False, quiet=False, allow_download=False):
     """Bring the keyword index -- and, when the `semantic` extra and its model are
     available, the embeddings -- in line with the files on disk. `allow_download`
     lets a missing embedding model be fetched once (kb index / kb setup only)."""
-    conn = get_db(root)
+    conn = get_db(root, recover=True)
     cur = conn.cursor()
 
     if full:

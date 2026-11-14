@@ -10,19 +10,16 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fakes
 from pkb_cli import cli as kb_cli
+from pkb_cli import search
 from pkb_cli import index_fts
 from pkb_cli import pkb_common as pc
 
 
 def write_entry(root, type_, id_, title, body="", tags=()):
-    d = os.path.join(root, pc.TYPE_DIR[type_])
-    os.makedirs(d, exist_ok=True)
-    fm = "\n".join(["---", f"id: {id_}", f"type: {type_}", f"title: {title}",
-                    f"tags: [{', '.join(tags)}]", "created: 2026-01-01T00:00:00Z",
-                    "updated: 2026-01-01T00:00:00Z", "---", "", f"# {title}", "", body, ""])
-    with open(os.path.join(d, f"{id_}.md"), "w", encoding="utf-8") as f:
-        f.write(fm)
+    return fakes.write_test_entry(root, f"{pc.TYPE_DIR[type_]}/{id_}.md", body=f"# {title}\n\n{body}\n",
+                                  id=id_, type=type_, title=title, tags=list(tags))
 
 
 class SearchIndexTest(unittest.TestCase):
@@ -41,7 +38,7 @@ class SearchIndexTest(unittest.TestCase):
         index_fts.index_repo(self.root, quiet=True)
 
     def search(self, *a, **k):
-        return kb_cli.search_entries(self.root, *a, mode="keyword", **k)
+        return search.search_entries(self.root, *a, mode="keyword", **k)
 
     def test_prefix_and_filters(self):
         self.assertEqual([r[0] for r in self.search("dar")], ["2026-01-01-0002"])
@@ -77,10 +74,18 @@ class SearchIndexTest(unittest.TestCase):
         self.assertEqual(self.search("bread"), [])
         self.assertEqual(len(self.search("leaves")), 1)
 
-    def test_corrupt_index_is_recreated(self):
-        db = os.path.join(self.root, ".pkb", "fts.db")
-        with open(db, "wb") as f:
+    def corrupt(self):
+        with open(os.path.join(self.root, ".pkb", "fts.db"), "wb") as f:
             f.write(b"this is not a sqlite database" * 100)
+
+    def test_search_on_a_corrupt_index_says_to_rebuild_it(self):
+        self.corrupt()
+        with self.assertRaises(index_fts.IndexCorrupt) as cm:
+            self.search("bread")
+        self.assertIn("kb index", str(cm.exception))
+
+    def test_kb_index_rebuilds_a_corrupt_index(self):
+        self.corrupt()
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             index_fts.index_repo(self.root, quiet=True)

@@ -62,7 +62,7 @@ def write_bead(root, bead, existing_paths, all_ids, inbox_all):
     updated = bead.get("updated_at") or created
     title = bead.get("title") or bead.get("summary") or f"bead {source_id}"
     body = bead.get("description") or bead.get("body") or ""
-    return pc.write_source_mirror(root, "beads", "beads", source_id, title, body, created, updated,
+    return pc.write_source_mirror(root, "beads", source_id, title, body, created, updated,
                                   existing_paths, all_ids, inbox_all)
 
 
@@ -84,7 +84,7 @@ def main():
         beads = fetch_beads(cli, since_timestamp, directory=directory, use_global=use_global)
     except RuntimeError as e:
         pc.fail(str(e))
-    pc.mirror_items(root, "beads", beads, lambda b: b.get("id"),
+    pc.mirror_items(root, "beads", beads,
                     lambda b, paths, ids: write_bead(root, b, paths, ids, config["inbox_all"]),
                     "last_timestamp", since_timestamp, noun="bead")
 

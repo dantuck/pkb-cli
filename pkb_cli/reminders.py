@@ -11,7 +11,7 @@ def reminders_install(root, interval_minutes):
     (`kb remind install`, minus the printing of the check's result). Returns
     (returncode, notifications_ok, message) -- message is the post-install guidance, empty
     if the timer itself couldn't be installed. Shared by the CLI and kb web."""
-    kind = service._service_kind()
+    kind = service.service_kind()
     if kind is None:
         print(f"error: reminders can't be scheduled on {sys.platform}", file=sys.stderr)
         return 1, False, ""
@@ -28,28 +28,29 @@ def reminders_info():
     ({installed, running, detail, interval_minutes}) and, on macOS, the "kb reminders"
     notifier ({app_built, terminal_notifier, authorization, allowed}). Read-only --
     never prompts or notifies."""
-    kind = service._service_kind()
+    kind = service.service_kind()
     if kind is None:
         return {"supported": False}
     out = {"supported": True, "kind": kind, **service._service_state(kind, "remind")}
-    out["healthy"], out["message"] = reminder_status_line(kind)
+    out["healthy"], out["message"] = reminder_status_line(kind, state=out)
     out["interval_minutes"] = service._timer_interval_minutes(kind, "remind") if out["installed"] else None
     if kind == "launchd":
         auth = notifier.notifier_authorization()
-        out["notifier"] = {"app_built": notifier._notifier_binary() is not None,
+        out["notifier"] = {"app_built": notifier.notifier_binary() is not None,
                            "terminal_notifier": notifier._terminal_notifier_app() is not None,
                            "authorization": auth, "allowed": notifier.notifier_allowed(auth)}
     return out
 
 
-def reminder_status_line(kind=None):
+def reminder_status_line(kind=None, state=None):
     """(ok, message) describing the `kb remind` timer for setup/doctor -- ok is True
     when it's scheduled and healthy, False when it needs attention or isn't on.
-    Read-only; never installs anything."""
-    kind = kind or service._service_kind()
+    Read-only; never installs anything. `state` is an already-fetched service_state, to
+    save asking launchctl/systemctl again."""
+    kind = kind or service.service_kind()
     if kind is None:
         return False, f"reminders can't be scheduled on {sys.platform} -- run `kb remind check` from your own scheduler"
-    info = service._service_state(kind, "remind")
+    info = state or service._service_state(kind, "remind")
     if not info["installed"]:
         return False, ("TODO reminders aren't scheduled (optional) -- `kb remind install` sends a desktop "
                        "notification when a TODO with a due date comes due")
@@ -57,7 +58,7 @@ def reminder_status_line(kind=None):
         return False, f"reminder job is {info['detail']}"
     if kind == "systemd" and not info["running"]:
         return False, f"reminder timer is {info['detail'] or 'inactive'} -- run `kb remind install` again"
-    if kind == "launchd" and notifier._notifier_binary():
+    if kind == "launchd" and notifier.notifier_binary():
         auth = notifier.notifier_authorization()
         if not notifier.notifier_allowed(auth):
             return False, (f"reminders are scheduled but notifications for \"kb reminders\" are "

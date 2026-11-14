@@ -256,7 +256,7 @@ def _refresh_services_after_update(opts):
     """Run `kb service refresh` from the freshly installed kb -- this process is still
     the old code (and possibly the old interpreter), so it can't write units that
     point at the new install itself."""
-    if not opts.defer_refresh and service._service_kind():
+    if not opts.defer_refresh and service.service_kind():
         _run_update_step(installed_kb_argv("service", "refresh"), opts)
 
 

@@ -863,15 +863,16 @@ def ssl_context():
 
 # --- shared by the issue-style sync sources (github, gitlab, beads) ----------------------------
 
-def write_source_mirror(root, source, label, source_id, title, content, created, updated,
-                        existing_paths, all_ids, inbox_all):
+def write_source_mirror(root, source, source_id, title, content, created, updated,
+                        existing_paths, all_ids, inbox_all, label=None):
     """Write or refresh the sources/<source>/ mirror for one synced item.
 
     A source_id already on disk gets its mirror updated in place (title/body/updated
     timestamp) rather than skipped outright -- otherwise an item that changes after its
     first sync (retitled, edited, closed) would leave a permanently stale mirror. The
     inbox stub is only ever created once, on first sight, so this can't reopen something
-    already triaged out of inbox. Returns (path, "added" | "updated" | "unchanged")."""
+    already triaged out of inbox. Records the path in `existing_paths`. `label` is the display
+    name in the inbox stub (default: `source`). Returns (path, "added" | "updated" | "unchanged")."""
     existing_path = existing_paths.get(source_id)
     if existing_path:
         fm, _ = read_entry(existing_path)
@@ -890,41 +891,37 @@ def write_source_mirror(root, source, label, source_id, title, content, created,
     }
     path = os.path.join(root, "sources", source, f"{entry_id}.md")
     write_entry(path, fm, content)
+    existing_paths[source_id] = path
 
     if inbox_all:
         inbox_id = gen_id(all_ids)
         inbox_fm = dict(fm)
         inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
         inbox_path = os.path.join(root, "inbox", f"{inbox_id}.md")
-        write_entry(inbox_path, inbox_fm, f"Synced from {label} (see [{entry_id}]).\n\n{content}")
+        write_entry(inbox_path, inbox_fm, f"Synced from {label or source} (see [{entry_id}]).\n\n{content}")
 
     return path, "added"
 
 
-def mirror_items(root, source, items, source_id_of, write_one, cursor_key, since, noun="issue"):
+def mirror_items(root, source, items, write_one, cursor_key, since, noun="issue"):
     """Write every fetched item via `write_one(item, existing_paths, all_ids)` and advance the
     `cursor_key` cursor to the last item's `updated_at` -- only if all of them were written.
-    Prints the one-line summary. `source_id_of(item)` is the id the mirror is keyed by."""
+    Prints the one-line summary."""
     if not items:
         print(f"sync_{source}: no new/updated {noun}s")
         return
     existing_paths = existing_source_paths(root, source)
     all_ids = collect_existing_ids(root)
-    added, updated_count = 0, 0
+    counts = {"added": 0, "updated": 0, "unchanged": 0}
     last = since
-    item = None
-    try:
-        for item in items:
-            path, outcome = write_one(item, existing_paths, all_ids)
-            existing_paths[str(source_id_of(item))] = path
-            if outcome == "added":
-                added += 1
-            elif outcome == "updated":
-                updated_count += 1
-            last = item.get("updated_at") or last
-    except Exception as e:
-        fail(f"failed writing {noun} {source_id_of(item) if item else '?'}: {e} (cursor not advanced)")
+    for item in items:
+        try:
+            _path, outcome = write_one(item, existing_paths, all_ids)
+        except Exception as e:
+            fail(f"failed writing {noun} {item.get('title') or '?'!r}: {e} (cursor not advanced)")
+        counts[outcome] += 1
+        last = item.get("updated_at") or last
     cursors = load_cursors(root)
     cursors.setdefault(source, {})[cursor_key] = last
     save_cursors(cursors, root)
-    print(f"sync_{source}: {added} new, {updated_count} updated, cursor advanced to {last}")
+    print(f"sync_{source}: {counts['added']} new, {counts['updated']} updated, cursor advanced to {last}")

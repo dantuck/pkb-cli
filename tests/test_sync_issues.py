@@ -35,7 +35,7 @@ class SyncIssuesTest(unittest.TestCase):
         self.assertEqual((fm["source"], fm["source_id"], fm["type"]), ("github", "7", "source"))
         self.assertIn("[GitHub issue](https://x/7)", body)
         self.assertEqual((self.count("sources/github"), self.count("inbox")), (1, 1))
-        existing["7"] = path
+        self.assertEqual(existing, {"7": path})  # the mirror records itself
         self.assertEqual(sync_github.write_issue(self.root, issue, existing, set(), True)[1], "unchanged")
         edited = {**issue, "title": "Bug!", "updated_at": "2026-02-01T00:00:00Z"}
         self.assertEqual(sync_github.write_issue(self.root, edited, existing, set(), True)[1], "updated")
@@ -62,7 +62,7 @@ class SyncIssuesTest(unittest.TestCase):
             return f"/p/{item['n']}", "added"
 
         with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(pc, "save_cursors") as save:
-            pc.mirror_items(self.root, "thing", items, lambda i: i["n"], ok, "last", None)
+            pc.mirror_items(self.root, "thing", items, ok, "last", None)
         self.assertEqual(save.call_args[0][0]["thing"]["last"], "2026-01-02T00:00:00Z")
         self.assertIn("2 new", out.getvalue())
 
@@ -71,13 +71,13 @@ class SyncIssuesTest(unittest.TestCase):
 
         with mock.patch.object(pc, "save_cursors") as save, self.assertRaises(SystemExit):
             with contextlib.redirect_stderr(io.StringIO()) as err:
-                pc.mirror_items(self.root, "thing", items, lambda i: i["n"], boom, "last", None)
+                pc.mirror_items(self.root, "thing", items, boom, "last", None)
         save.assert_not_called()
         self.assertIn("cursor not advanced", err.getvalue())
 
     def test_mirror_items_with_nothing_new_leaves_cursor_alone(self):
         with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(pc, "save_cursors") as save:
-            pc.mirror_items(self.root, "thing", [], lambda i: i, None, "last", "t")
+            pc.mirror_items(self.root, "thing", [], None, "last", "t")
         save.assert_not_called()
         self.assertIn("no new/updated issues", out.getvalue())
 
