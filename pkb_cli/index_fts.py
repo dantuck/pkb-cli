@@ -13,15 +13,39 @@ from . import pkb_common as pc
 from . import semantic
 
 
-def get_db(root):
-    db_path = os.path.join(root, ".pkb", "fts.db")
+def _open(db_path):
     conn = sqlite3.connect(db_path)
     # schema.sql is tool-owned, not data-repo-owned -- ships inside the package
     # (templates/), not copied into every data repo that uses it.
     schema_path = os.path.join(os.path.dirname(__file__), "templates", "schema.sql")
-    with open(schema_path, "r", encoding="utf-8") as f:
-        conn.executescript(f.read())
+    try:
+        with open(schema_path, "r", encoding="utf-8") as f:
+            conn.executescript(f.read())
+    except BaseException:
+        conn.close()
+        raise
     return conn
+
+
+def get_db(root):
+    """Open the index, creating it if needed. The index is derived data, so one that
+    is corrupt (not a database / malformed) is discarded and recreated empty -- with a
+    warning, since `kb index` must run to repopulate it. A locked database is not
+    corruption and still raises."""
+    db_path = os.path.join(root, ".pkb", "fts.db")
+    try:
+        return _open(db_path)
+    except sqlite3.OperationalError:
+        raise
+    except sqlite3.DatabaseError as e:
+        print(f"warning: the search index was corrupt ({e}); recreated it empty -- run `kb index`",
+              file=sys.stderr)
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+        return _open(db_path)
 
 
 def index_repo(root, full=False, quiet=False, allow_download=False):

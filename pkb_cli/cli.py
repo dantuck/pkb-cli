@@ -190,6 +190,13 @@ def _fts_autoprefix(query):
     return " ".join(out)
 
 
+def _fts_literal(query):
+    """Fallback for a query FTS5 rejected (unbalanced quote, stray `-`, ...): treat each
+    run of word characters as a plain prefix term, ignoring all FTS5 syntax."""
+    words = re.findall(r"\w+", query)
+    return " ".join(f'"{w}"*' for w in words)
+
+
 def search_entries(root, query, entry_type=None, tag=None, include_all=False, limit=50,
                    mode="auto", notes=None):
     """Search the index, returning (id, title, type, path, rank) rows best first --
@@ -242,8 +249,18 @@ def search_entries(root, query, entry_type=None, tag=None, include_all=False, li
 
 
 def _fts_rows(conn, query, entry_type, tag, include_all, limit):
+    try:
+        return _fts_query(conn, _fts_autoprefix(query), entry_type, tag, include_all, limit)
+    except sqlite3.OperationalError:
+        literal = _fts_literal(query)
+        if not literal:
+            raise
+        return _fts_query(conn, literal, entry_type, tag, include_all, limit)
+
+
+def _fts_query(conn, match, entry_type, tag, include_all, limit):
     where = ["fts MATCH ?"]
-    params = [_fts_autoprefix(query)]
+    params = [match]
     if not include_all:
         placeholders = ",".join("?" for _ in pc.CORE_TYPES)
         where.append(f"fts.type IN ({placeholders})")
@@ -299,8 +316,7 @@ def cmd_search(args):
         rows = search_entries(root, args.query, entry_type=args.type, tag=args.tag,
                                include_all=args.all, mode=mode, notes=notes)
     except sqlite3.OperationalError as e:
-        print(f"search error: {e}")
-        return 1
+        return _fail(f"search error: {e}", args.json)
     except semantic.SemanticUnavailable as e:
         return _fail(f"semantic search unavailable: {e}", args.json)
     finally:
