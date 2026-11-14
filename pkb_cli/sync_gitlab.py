@@ -68,6 +68,7 @@ def write_issue(root, issue, existing_paths, all_ids, inbox_all):
     return pc.write_source_mirror(root, "gitlab", "GitLab", source_id, title, content, created, updated,
                                   existing_paths, all_ids, inbox_all)
 
+
 def main():
     root = pc.get_repo_root()
     config = pc.load_config(root)["sync"]["gitlab"]
@@ -83,6 +84,7 @@ def main():
     pc.mirror_items(root, "gitlab", issues, lambda i: i["iid"],
                     lambda i, paths, ids: write_issue(root, i, paths, ids, config["inbox_all_issues"]),
                     "last_updated_after", updated_after)
+
 
 if __name__ == "__main__":
     main()

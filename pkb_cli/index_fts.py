@@ -5,6 +5,7 @@ Compares each file's frontmatter `updated` timestamp (not mtime, which git
 doesn't preserve) against the value stored at last index time. Only
 changed/new files are re-indexed; files removed from disk are pruned.
 """
+import contextlib
 import os
 import sqlite3
 import sys
@@ -18,12 +19,11 @@ def _open(db_path):
     # schema.sql is tool-owned, not data-repo-owned -- ships inside the package
     # (templates/), not copied into every data repo that uses it.
     schema_path = os.path.join(os.path.dirname(__file__), "templates", "schema.sql")
-    try:
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(conn.close)
         with open(schema_path, "r", encoding="utf-8") as f:
             conn.executescript(f.read())
-    except BaseException:
-        conn.close()
-        raise
+        cleanup.pop_all()  # opened fine: hand the connection to the caller
     return conn
 
 
@@ -35,9 +35,9 @@ def get_db(root):
     db_path = os.path.join(root, ".pkb", "fts.db")
     try:
         return _open(db_path)
-    except sqlite3.OperationalError:
-        raise
     except sqlite3.DatabaseError as e:
+        if isinstance(e, sqlite3.OperationalError):  # e.g. locked -- not corruption
+            raise
         print(f"warning: the search index was corrupt ({e}); recreated it empty -- run `kb index`",
               file=sys.stderr)
         for suffix in ("", "-wal", "-shm", "-journal"):

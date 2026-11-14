@@ -16,8 +16,7 @@ from . import proc
 from . import remind_push
 from . import service
 
-PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-TOOL_ROOT = os.path.dirname(PKG_DIR)  # the source checkout, when running from one (has .git)
+TOOL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the source checkout, when running from one (has .git)
 
 LEGACY_VERSION_PATH = os.path.join(TOOL_ROOT, ".pkb-cli-version")  # marker left by the old tarball installer
 # Where kb itself is published, for `kb update`'s release check.

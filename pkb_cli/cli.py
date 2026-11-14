@@ -32,18 +32,19 @@ from . import todos
 from . import updater
 from . import worker_deploy
 from . import semantic
-from .notifier import open_notification_settings, send_test_notification  # noqa: F401  (kb_web reaches these via the cli module)
-from .todos import (  # noqa: F401  (kb_web reaches these via the cli module)
+# Re-exported because kb_web calls these as `_kb().<name>` (see tests/test_module_contracts.py).
+from .notifier import open_notification_settings, send_test_notification  # noqa: F401
+from .todos import (  # noqa: F401
     bd_action, bd_available, bd_create, bd_delete, bd_dep_add, bd_dep_remove, bd_deps, bd_list, bd_snooze, bd_unsnooze, bd_update,
 )
-from .health import doctor_checks, push_status  # noqa: F401  (kb_web reaches these via the cli module)
-from .sources import discover_sync_sources  # noqa: F401  (kb_web reaches these via the cli module)
-from .reminders import reminders_info, reminders_install  # noqa: F401  (kb_web reaches these via the cli module)
-from .journal import journal_append, journal_months  # noqa: F401  (likewise)
-from .service import cmd_sync_service, service_info  # noqa: F401  (likewise)
-from .updater import apply_update, schedule_kb_command, update_info  # noqa: F401  (likewise)
+from .health import doctor_checks, push_status  # noqa: F401
+from .sources import discover_sync_sources  # noqa: F401
+from .reminders import reminders_info, reminders_install  # noqa: F401
+from .journal import journal_append, journal_months  # noqa: F401
+from .service import cmd_sync_service, service_info  # noqa: F401
+from .updater import apply_update, schedule_kb_command, update_info  # noqa: F401
 from . import __version__
-from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
+from .pkb_entries import (  # noqa: F401  (re-exported)
     _all_tags, _apply_tag_changes, _clean_list, _find_entry, _iter_all_entries, _reindex_fast,
     _readonly_error, _readonly_guard, _readonly_source_info, entry_delete,
     entry_move, entry_new, entry_set_links, entry_set_tags, entry_update_content,
@@ -156,11 +157,12 @@ def search_entries(root, query, entry_type=None, tag=None, include_all=False, li
 
 
 def _fts_rows(conn, query, entry_type, tag, include_all, limit):
+    match = _fts_autoprefix(query)
     try:
-        return _fts_query(conn, _fts_autoprefix(query), entry_type, tag, include_all, limit)
+        return _fts_query(conn, match, entry_type, tag, include_all, limit)
     except sqlite3.OperationalError:
         literal = _fts_literal(query)
-        if not literal:
+        if not literal or literal == match:
             raise
         return _fts_query(conn, literal, entry_type, tag, include_all, limit)
 
