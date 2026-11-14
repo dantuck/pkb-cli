@@ -14,7 +14,9 @@ from unittest import mock
 from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-from pkb_cli import cli as kb_cli  # noqa: E402
+import fakes  # noqa: E402
+from pkb_cli import reminders
+from pkb_cli import health  # noqa: E402
 
 
 def _git(root, *args):
@@ -23,6 +25,7 @@ def _git(root, *args):
 
 class DoctorChecksTest(unittest.TestCase):
     def setUp(self):
+        fakes.patch_tool_status(self)
         self._tmp = tempfile.TemporaryDirectory()
         self.root = self._tmp.name
         self.addCleanup(self._tmp.cleanup)
@@ -33,47 +36,47 @@ class DoctorChecksTest(unittest.TestCase):
         _git(self.root, "commit", "--allow-empty", "-q", "-m", "init")
 
     def test_returns_ok_and_todo_lists(self):
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertIsInstance(ok, list)
         self.assertIsInstance(todo, list)
 
     def test_clean_git_repo_reports_ok(self):
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("data repo is clean" in line for line in ok))
         self.assertFalse(any("uncommitted change" in line for line in todo))
 
     def test_reports_reminder_status_alongside_the_bd_store(self):
-        tools = {**kb_cli.tool_status(), "bd": True}
+        tools = {**health.tool_status(), "bd": True}
         for healthy, bucket in ((True, "ok"), (False, "todo")):
-            with mock.patch.object(kb_cli, "tool_status", return_value=tools), \
-                    mock.patch.object(kb_cli, "bd_store_status", return_value=(True, True)), \
-                    mock.patch.object(kb_cli, "reminder_status_line", return_value=(healthy, "REMINDER LINE")):
-                ok, todo = kb_cli.doctor_checks(self.root)
+            with mock.patch.object(health, "tool_status", return_value=tools), \
+                    mock.patch.object(health, "bd_store_status", return_value=(True, True)), \
+                    mock.patch.object(reminders, "reminder_status_line", return_value=(healthy, "REMINDER LINE")):
+                ok, todo = health.doctor_checks(self.root)
             self.assertIn("REMINDER LINE", {"ok": ok, "todo": todo}[bucket])
             self.assertNotIn("REMINDER LINE", {"ok": todo, "todo": ok}[bucket])
 
     def test_dirty_repo_is_flagged(self):
         with open(os.path.join(self.root, "stray.md"), "w") as f:
             f.write("nobody committed this")
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("uncommitted change" in line for line in todo))
         self.assertFalse(any("data repo is clean" in line for line in ok))
 
     def test_non_git_repo_is_flagged(self):
         with tempfile.TemporaryDirectory() as non_git_root:
             os.makedirs(os.path.join(non_git_root, ".pkb"), exist_ok=True)
-            ok, todo = kb_cli.doctor_checks(non_git_root)
+            ok, todo = health.doctor_checks(non_git_root)
             self.assertTrue(any("not a git repo" in line for line in todo))
 
     def test_missing_autocommit_excludes_are_flagged(self):
         # A repo that predates auto-commit (or never ran `kb setup`) won't
         # have .git/info/exclude entries yet -- doctor should say so rather
         # than silently relying on the next mutation to self-heal it.
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("auto-commit excludes missing" in line for line in todo))
 
         pc._ensure_git_excludes(self.root)
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("auto-commit excludes" in line and "in place" in line for line in ok))
 
     def _write_entry(self, rel_path, **fm_overrides):
@@ -88,7 +91,7 @@ class DoctorChecksTest(unittest.TestCase):
         return path
 
     def test_no_promoted_entries_reports_ok(self):
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("no promoted entries are stale" in line for line in ok))
         self.assertFalse(any("is stale" in line for line in todo))
 
@@ -98,7 +101,7 @@ class DoctorChecksTest(unittest.TestCase):
                            updated="2026-01-01T00:00:00")
         self._write_entry("how-to/2026-01-01-0000-t.md",
                            source="memos", source_id="101", updated="2026-01-02T00:00:00")
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("no promoted entries are stale" in line for line in ok))
         self.assertFalse(any("is stale" in line for line in todo))
 
@@ -108,7 +111,7 @@ class DoctorChecksTest(unittest.TestCase):
                            updated="2026-02-01T00:00:00")  # re-synced after promotion
         promoted = self._write_entry("how-to/2026-01-01-0000-t.md",
                                       source="memos", source_id="101", updated="2026-01-02T00:00:00")
-        ok, todo = kb_cli.doctor_checks(self.root)
+        ok, todo = health.doctor_checks(self.root)
         self.assertTrue(any("is stale" in line and os.path.relpath(promoted, self.root) in line
                              for line in todo))
         self.assertFalse(any("no promoted entries are stale" in line for line in ok))
