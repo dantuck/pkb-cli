@@ -56,56 +56,14 @@ def fetch_beads(cli, since_timestamp, directory=None, use_global=False):
 
 
 def write_bead(root, bead, existing_paths, all_ids, inbox_all):
-    """Write or refresh the sources/beads/ mirror for one bead.
-
-    A source_id already on disk gets its mirror updated in place (title/body/
-    updated timestamp) rather than skipped outright -- otherwise a bead that
-    changes after its first sync (closed, re-titled, commented on) would leave
-    a permanently stale mirror. The inbox stub is only ever created once, on
-    first sight, so this can't reopen something already triaged out of inbox.
-    Returns (path, "added" | "updated" | "unchanged").
-    """
+    """Write or refresh the sources/beads/ mirror for one bead (see pc.write_source_mirror)."""
     source_id = str(bead.get("id"))
     created = bead.get("created_at") or pc.now_iso()
     updated = bead.get("updated_at") or created
     title = bead.get("title") or bead.get("summary") or f"bead {source_id}"
     body = bead.get("description") or bead.get("body") or ""
-
-    existing_path = existing_paths.get(source_id)
-    if existing_path:
-        fm, _ = pc.read_entry(existing_path)
-        if fm.get("updated") == updated and fm.get("title") == title:
-            return existing_path, "unchanged"
-        fm["updated"] = updated
-        fm["title"] = title
-        pc.write_entry(existing_path, fm, body)
-        return existing_path, "updated"
-
-    entry_id = pc.gen_id(all_ids)
-    fm = {
-        "id": entry_id,
-        "created": created,
-        "updated": updated,
-        "type": "source",
-        "extension": "source",
-        "source": "beads",
-        "source_id": source_id,
-        "tags": [],
-        "links": [],
-        "title": title,
-    }
-    path = os.path.join(root, "sources", "beads", f"{entry_id}.md")
-    pc.write_entry(path, fm, body)
-
-    if inbox_all:
-        inbox_id = pc.gen_id(all_ids)
-        inbox_fm = dict(fm)
-        inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
-        inbox_path = os.path.join(root, "inbox", f"{inbox_id}.md")
-        pc.write_entry(inbox_path, inbox_fm, f"Synced from beads (see [{entry_id}]).\n\n{body}")
-
-    return path, "added"
-
+    return pc.write_source_mirror(root, "beads", "beads", source_id, title, body, created, updated,
+                                  existing_paths, all_ids, inbox_all)
 
 def main():
     root = pc.get_repo_root()
@@ -120,38 +78,14 @@ def main():
     # different project's store; PKB_BEADS_GLOBAL opts into bd's shared store.
     directory = os.environ.get("PKB_BEADS_DIR") or (None if use_global else root)
 
-    cursors = pc.load_cursors(root)
-    since_timestamp = cursors.get("beads", {}).get("last_timestamp")
-
+    since_timestamp = pc.load_cursors(root).get("beads", {}).get("last_timestamp")
     try:
         beads = fetch_beads(cli, since_timestamp, directory=directory, use_global=use_global)
     except RuntimeError as e:
         pc.fail(str(e))
-
-    if not beads:
-        print("sync_beads: no new/updated beads")
-        return
-
-    existing_paths = pc.existing_source_paths(root, "beads")
-    all_ids = pc.collect_existing_ids(root)
-    added, updated_count = 0, 0
-    last_ts = since_timestamp
-    try:
-        for bead in beads:
-            path, outcome = write_bead(root, bead, existing_paths, all_ids, config["inbox_all"])
-            existing_paths[str(bead.get("id"))] = path
-            if outcome == "added":
-                added += 1
-            elif outcome == "updated":
-                updated_count += 1
-            last_ts = bead.get("updated_at") or last_ts
-    except Exception as e:
-        pc.fail(f"failed writing bead {bead.get('id')}: {e} (cursor not advanced)")
-
-    cursors.setdefault("beads", {})["last_timestamp"] = last_ts
-    pc.save_cursors(cursors, root)
-    print(f"sync_beads: {added} new, {updated_count} updated, cursor advanced to {last_ts}")
-
+    pc.mirror_items(root, "beads", beads, lambda b: b.get("id"),
+                    lambda b, paths, ids: write_bead(root, b, paths, ids, config["inbox_all"]),
+                    "last_timestamp", since_timestamp, noun="bead")
 
 if __name__ == "__main__":
     main()
