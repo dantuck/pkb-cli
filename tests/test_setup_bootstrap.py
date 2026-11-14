@@ -17,12 +17,15 @@ from unittest import mock
 from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-from pkb_cli import cli as kb_cli  # noqa: E402
+import fakes  # noqa: E402
+from pkb_cli import cli as kb_cli
+from pkb_cli import service  # noqa: E402
 
 
 @unittest.skipUnless(shutil.which("git"), "git required for setup bootstrap")
 class SetupBootstrapTest(unittest.TestCase):
     def setUp(self):
+        fakes.patch_tool_status(self)
         self._home = tempfile.TemporaryDirectory()
         self._cwd = tempfile.TemporaryDirectory()
         self.addCleanup(self._home.cleanup)
@@ -80,8 +83,8 @@ class SetupBootstrapTest(unittest.TestCase):
 
     def test_yes_never_installs_the_reminder_job_but_points_at_it(self):
         # a scheduled background job is opt-in: --yes accepts defaults, and the default is no
-        with mock.patch.object(kb_cli, "_interval_service_install") as install, \
-                mock.patch.object(kb_cli, "_service_state",
+        with mock.patch.object(service, "_interval_service_install") as install, \
+                mock.patch.object(service, "_service_state",
                                   return_value={"installed": False, "running": False, "detail": "not installed"}):
             output = self._run_setup()
         install.assert_not_called()
