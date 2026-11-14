@@ -80,15 +80,7 @@ class DoctorChecksTest(unittest.TestCase):
         self.assertTrue(any("auto-commit excludes" in line and "in place" in line for line in ok))
 
     def _write_entry(self, rel_path, **fm_overrides):
-        fm = {
-            "id": "2026-01-01-0000", "created": "2026-01-01T00:00:00", "updated": "2026-01-01T00:00:00",
-            "type": "how-to", "extension": None, "source": "manual", "source_id": None,
-            "tags": [], "links": [], "title": "t",
-        }
-        fm.update(fm_overrides)
-        path = os.path.join(self.root, rel_path)
-        pc.write_entry(path, fm, "body\n")
-        return path
+        return fakes.write_test_entry(self.root, rel_path, **fm_overrides)
 
     def test_no_promoted_entries_reports_ok(self):
         ok, todo = health.doctor_checks(self.root)

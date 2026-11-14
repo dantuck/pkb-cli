@@ -144,7 +144,7 @@ class PackagingTest(unittest.TestCase):
                 mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
                 mock.patch.object(updater, "_installer", return_value="uv"), \
                 mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"), \
-                mock.patch.object(service, "_service_kind", return_value="launchd"), \
+                mock.patch.object(service, "service_kind", return_value="launchd"), \
                 mock.patch.object(cli.shutil, "which", return_value="/bin/kb"), \
                 mock.patch.object(proc, "run_captured", return_value=0) as captured, \
                 mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
@@ -252,13 +252,13 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("can't tell how kb was installed", info["error"])
 
     def test_service_info_unsupported_platform(self):
-        with mock.patch.object(service, "_service_kind", return_value=None):
+        with mock.patch.object(service, "service_kind", return_value=None):
             self.assertEqual(service.service_info(), {"supported": False, "kind": None})
 
     def test_service_info_launchd_reads_installed_state_and_interval(self):
         import plistlib
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
-                mock.patch.object(service, "_service_kind", return_value="launchd"):
+                mock.patch.object(service, "service_kind", return_value="launchd"):
             agents = os.path.join(home, "Library", "LaunchAgents")
             os.makedirs(agents)
             with open(os.path.join(agents, "dev.pkb-cli.sync.plist"), "wb") as f:

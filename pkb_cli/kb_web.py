@@ -21,7 +21,9 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from . import index_fts
 from . import pkb_common as pc
+from . import search
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "web")
 
@@ -168,8 +170,11 @@ def api_search(h, root):
     include_all = h.query.get("all", ["0"])[0] in ("1", "true")
 
     try:
-        rows = _kb().search_entries(root, query, entry_type=entry_type, tag=tag,
+        rows = search.search_entries(root, query, entry_type=entry_type, tag=tag,
                                      include_all=include_all)
+    except index_fts.IndexCorrupt as e:
+        h.send_json({"error": str(e)}, status=503)
+        return
     except sqlite3.OperationalError as e:
         h.send_json({"error": str(e)}, status=400)
         return

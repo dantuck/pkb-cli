@@ -43,7 +43,7 @@ AGENTS = {
 }
 
 
-def _service_kind():
+def service_kind():
     if sys.platform == "darwin":
         return "launchd"
     if sys.platform.startswith("linux"):
@@ -173,7 +173,7 @@ def _linger_note():
 
 
 def cmd_service(args):
-    kind = _service_kind()
+    kind = service_kind()
     if kind is None:
         print(f"error: `kb service` isn't supported on {sys.platform} -- only macOS "
               f"(launchd) and Linux (systemd --user) are supported. See `kb web` to "
@@ -334,7 +334,7 @@ def service_info():
     """Structured `kb service status` / `kb sync-service status` for kb web's Manage
     panel: {supported, kind, web: {...}, sync: {...}}, each service reporting
     {installed, running, detail}. Never writes anything."""
-    kind = _service_kind()
+    kind = service_kind()
     if kind is None:
         return {"supported": False, "kind": None}
     out = {"supported": True, "kind": kind}
@@ -399,7 +399,7 @@ def _service_refresh(kind):
 
 
 def cmd_sync_service(args):
-    kind = _service_kind()
+    kind = service_kind()
     if kind is None:
         print(f"error: `kb sync-service` isn't supported on {sys.platform} -- only macOS "
               f"(launchd) and Linux (systemd --user) are supported. See `kb sync` to "

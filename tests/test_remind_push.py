@@ -296,7 +296,7 @@ class CheckSyncsTest(unittest.TestCase):
     def run_check(self, sync_result):
         args = SimpleNamespace(action="check", rest=[], repeat_hours=4, ask=False)
         err = io.StringIO()
-        with mock.patch.object(service, "_service_kind", return_value="launchd"), \
+        with mock.patch.object(service, "service_kind", return_value="launchd"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/bd"), \
                 mock.patch.object(kb_cli.pc, "get_repo_root", return_value="/repo"), \
                 mock.patch.object(todos, "bd_list", return_value=[issue("kb-a")]), \

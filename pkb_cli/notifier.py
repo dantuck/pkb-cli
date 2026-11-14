@@ -27,7 +27,7 @@ def _notifier_app_path():
     return os.path.expanduser("~/Applications/kb reminders.app")
 
 
-def _notifier_binary():
+def notifier_binary():
     """Path to the built "kb reminders" notifier, or None (not macOS / not built)."""
     path = os.path.join(_notifier_app_path(), "Contents", "MacOS", "terminal-notifier")
     return path if sys.platform == "darwin" and os.path.exists(path) else None
@@ -68,7 +68,7 @@ def build_notifier_app():
     dest_plist = os.path.join(dest, "Contents", "Info.plist")
     try:
         with open(dest_plist, "rb") as f:
-            if plistlib.load(f).get("KBBuiltFrom") == stamp and _notifier_binary():
+            if plistlib.load(f).get("KBBuiltFrom") == stamp and notifier_binary():
                 return True, f"kb reminders app is up to date ({dest})"
     except (OSError, plistlib.InvalidFileException):
         pass
@@ -117,7 +117,7 @@ def notifier_authorization():
     """The "kb reminders" app's notification permission as macOS reports it --
     'authorized', 'denied', 'not requested yet', ... -- or None if there's no built
     notifier to ask. Read-only: asking doesn't prompt the user."""
-    exe = _notifier_binary()
+    exe = notifier_binary()
     if exe is None:
         return None
     try:
@@ -139,7 +139,7 @@ def notify_status(title, message, group=None, fallback=True):
     todo title can't break out of one. With fallback=False the kb reminders app is
     the only thing tried, so a permission problem isn't hidden by osascript working."""
     status = "unavailable"
-    exe = _notifier_binary()
+    exe = notifier_binary()
     if exe:
         cmd = [exe, "-title", title, "-message", message] + (["-group", group] if group else [])
         code = subprocess.run(cmd, capture_output=True).returncode
