@@ -11,7 +11,7 @@ import unittest
 from pkb_cli import pkb_common as pc  # noqa: E402
 
 
-from pkb_cli import cli as kb_cli  # noqa: E402
+from pkb_cli import health  # noqa: E402
 
 
 def _git(root, *args):
@@ -51,7 +51,7 @@ class PushFlowTest(unittest.TestCase):
         self.assertIn("no upstream", message)
 
     def test_push_status_reports_up_to_date(self):
-        status = kb_cli.push_status(self.root)
+        status = health.push_status(self.root)
         self.assertTrue(status["is_git"])
         self.assertEqual(status["upstream"], "origin/main")
         self.assertEqual(status["ahead"], 0)
@@ -63,7 +63,7 @@ class PushFlowTest(unittest.TestCase):
         _git(self.root, "add", "-A")
         _git(self.root, "commit", "-q", "-m", "add note")
 
-        status = kb_cli.push_status(self.root)
+        status = health.push_status(self.root)
         self.assertEqual(status["ahead"], 1)
 
     def test_git_push_publishes_local_commits(self):
@@ -75,13 +75,13 @@ class PushFlowTest(unittest.TestCase):
         ok, message = pc.git_push(self.root)
         self.assertTrue(ok)
         self.assertEqual(message, "origin/main")
-        self.assertEqual(kb_cli.push_status(self.root)["ahead"], 0)
+        self.assertEqual(health.push_status(self.root)["ahead"], 0)
 
     def test_autocommit_does_not_push_by_default(self):
         with open(os.path.join(self.root, "note.md"), "w") as f:
             f.write("hello")
         pc.git_autocommit(self.root, "add note")
-        self.assertEqual(kb_cli.push_status(self.root)["ahead"], 1)
+        self.assertEqual(health.push_status(self.root)["ahead"], 1)
 
     def test_autocommit_pushes_when_auto_push_enabled(self):
         with open(os.path.join(self.root, ".pkb", "config.yml"), "w") as f:
@@ -89,7 +89,7 @@ class PushFlowTest(unittest.TestCase):
         with open(os.path.join(self.root, "note.md"), "w") as f:
             f.write("hello")
         pc.git_autocommit(self.root, "add note")
-        self.assertEqual(kb_cli.push_status(self.root)["ahead"], 0)
+        self.assertEqual(health.push_status(self.root)["ahead"], 0)
 
 
 if __name__ == "__main__":

@@ -301,9 +301,9 @@ class KbWebTest(unittest.TestCase):
                 path = os.path.join(root, "journal", rel)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 open(path, "w").close()
-            from pkb_cli import cli
-            self.assertEqual(cli.journal_months(root), ["2026-09", "2026-07", "2025-12"])
-            self.assertEqual(cli.journal_months(os.path.join(root, "nowhere")), [])
+            from pkb_cli import journal
+            self.assertEqual(journal.journal_months(root), ["2026-09", "2026-07", "2025-12"])
+            self.assertEqual(journal.journal_months(os.path.join(root, "nowhere")), [])
 
     def test_journal_months_endpoint(self):
         with mock.patch.object(kb_web, "_kb") as kb:
