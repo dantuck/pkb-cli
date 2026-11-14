@@ -11,6 +11,7 @@
     "gen:keys": "node scripts/gen-keys.mjs"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "wrangler": "^4.154.0"
   },
