@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from pkb_cli import cli as kb_cli
+from pkb_cli import todos
+from pkb_cli import service
 from pkb_cli import remind_push
 
 
@@ -294,12 +296,12 @@ class CheckSyncsTest(unittest.TestCase):
     def run_check(self, sync_result):
         args = SimpleNamespace(action="check", rest=[], repeat_hours=4, ask=False)
         err = io.StringIO()
-        with mock.patch.object(kb_cli, "_service_kind", return_value="launchd"), \
+        with mock.patch.object(service, "_service_kind", return_value="launchd"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/bd"), \
                 mock.patch.object(kb_cli.pc, "get_repo_root", return_value="/repo"), \
-                mock.patch.object(kb_cli, "bd_list", return_value=[issue("kb-a")]), \
-                mock.patch.object(kb_cli, "reminders_to_send", return_value=[]), \
-                mock.patch.object(kb_cli, "_reminder_load", return_value={}), \
+                mock.patch.object(todos, "bd_list", return_value=[issue("kb-a")]), \
+                mock.patch.object(todos, "reminders_to_send", return_value=[]), \
+                mock.patch.object(todos, "_reminder_load", return_value={}), \
                 mock.patch.object(remind_push, "get_config", return_value=("https://w.example", "tok")), \
                 mock.patch.object(remind_push, "pull_actions", return_value=([], None)), \
                 mock.patch.object(remind_push, "sync", return_value=sync_result) as sync, \
@@ -344,9 +346,9 @@ class PhoneExchangeTest(unittest.TestCase):
                 mock.patch.object(remind_push, "ack_actions", side_effect=lambda ids: order.append(("ack", ids))) as ack, \
                 mock.patch.object(remind_push, "sync", side_effect=lambda issues: order.append(("sync", [i["id"] for i in issues])) or (True, "ok")) as sync, \
                 mock.patch.object(kb_cli.pc, "get_repo_root", return_value="/repo"), \
-                mock.patch.object(kb_cli, "bd_action", side_effect=bd_action), \
-                mock.patch.object(kb_cli, "bd_snooze", side_effect=bd_snooze), \
-                mock.patch.object(kb_cli, "bd_list", return_value=[issue("kb-after")]), \
+                mock.patch.object(todos, "bd_action", side_effect=bd_action), \
+                mock.patch.object(todos, "bd_snooze", side_effect=bd_snooze), \
+                mock.patch.object(todos, "bd_list", return_value=[issue("kb-after")]), \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             result = kb_cli._phone_exchange([issue("kb-before")])
         return result, calls, order, ack, sync, err.getvalue()

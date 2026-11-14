@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pkb_cli import __version__, cli, pkb_common as pc, pkb_entries
+from pkb_cli import __version__, cli, updater, service, pkb_common as pc, pkb_entries, proc
 
 
 class PackagingTest(unittest.TestCase):
@@ -64,14 +64,14 @@ class PackagingTest(unittest.TestCase):
     def test_update_reinstalls_by_tag_with_whichever_tool_owns_the_venv(self):
         # `uv/pipx upgrade` never moves a pinned git ref, so kb update must reinstall by tag
         with tempfile.TemporaryDirectory() as prefix, mock.patch.object(sys, "prefix", prefix):
-            self.assertIsNone(cli._installer())
+            self.assertIsNone(updater._installer())
             for marker, tool in (("uv-receipt.toml", "uv"), ("pipx_metadata.json", "pipx")):
                 open(os.path.join(prefix, marker), "w").close()
-                self.assertEqual(cli._installer(), tool)
+                self.assertEqual(updater._installer(), tool)
                 os.remove(os.path.join(prefix, marker))
-        self.assertEqual(cli._install_command("uv", "v1.2.3")[:3], ["uv", "tool", "install"])
-        self.assertEqual(cli._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
-        self.assertTrue(cli._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
+        self.assertEqual(updater._install_command("uv", "v1.2.3")[:3], ["uv", "tool", "install"])
+        self.assertEqual(updater._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
+        self.assertTrue(updater._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
 
     def test_launchd_load_retries_a_bootstrap_that_races_the_bootout(self):
         # launchctl bootout returns before the old job is gone; bootstrap then fails with exit 5
@@ -79,16 +79,16 @@ class PackagingTest(unittest.TestCase):
         results += [mock.Mock(returncode=5, stderr="Input/output error")] * 2  # raced twice
         results += [mock.Mock(returncode=0, stderr="")]                       # then fine
         with mock.patch.object(cli.subprocess, "run", side_effect=results) as run, \
-                mock.patch.object(cli.time, "sleep") as sleep:
-            self.assertIsNone(cli._launchd_load("dev.pkb-cli.web", "/p.plist"))
+                mock.patch.object(service.time, "sleep") as sleep:
+            self.assertIsNone(service._launchd_load("dev.pkb-cli.web", "/p.plist"))
         self.assertEqual(run.call_count, 4)
         self.assertEqual(sleep.call_count, 2)
 
     def test_launchd_load_gives_up_with_the_error_after_repeated_failures(self):
         failing = mock.Mock(returncode=5, stderr="Input/output error")
         with mock.patch.object(cli.subprocess, "run", side_effect=[mock.Mock(returncode=0)] + [failing] * 5) as run, \
-                mock.patch.object(cli.time, "sleep"):
-            self.assertEqual(cli._launchd_load("dev.pkb-cli.web", "/p.plist"), "Input/output error")
+                mock.patch.object(service.time, "sleep"):
+            self.assertEqual(service._launchd_load("dev.pkb-cli.web", "/p.plist"), "Input/output error")
         self.assertEqual(run.call_count, 6)
 
     def test_service_refresh_repoints_stale_units_and_keeps_their_args(self):
@@ -98,57 +98,57 @@ class PackagingTest(unittest.TestCase):
             "dev.pkb-cli.sync": [sys.executable, "-m", "pkb_cli", "sync"],
         }
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
-                mock.patch.object(cli, "_launchd_load", return_value=None) as load:
+                mock.patch.object(service, "_launchd_load", return_value=None) as load:
             agents = os.path.join(home, "Library", "LaunchAgents")
             os.makedirs(agents)
             for label, argv in old_launchers.items():
                 with open(os.path.join(agents, f"{label}.plist"), "wb") as f:
                     plistlib.dump({"Label": label, "ProgramArguments": argv, "WorkingDirectory": "/data"}, f)
-            self.assertEqual(cli._service_refresh("launchd"), 0)
+            self.assertEqual(service._service_refresh("launchd"), 0)
             got = {}
             for label in old_launchers:
                 with open(os.path.join(agents, f"{label}.plist"), "rb") as f:
                     got[label] = plistlib.load(f)
         self.assertEqual(got["dev.pkb-cli.web"]["ProgramArguments"],
-                         cli._kb_cmd("web", "--port", "4173", "--no-open"))
-        self.assertEqual(got["dev.pkb-cli.sync"]["ProgramArguments"], cli._kb_cmd("sync"))
+                         proc.kb_cmd("web", "--port", "4173", "--no-open"))
+        self.assertEqual(got["dev.pkb-cli.sync"]["ProgramArguments"], proc.kb_cmd("sync"))
         self.assertEqual(got["dev.pkb-cli.web"]["WorkingDirectory"], "/data")
         self.assertEqual(load.call_count, 2)
 
 
     def test_update_info_release_install(self):
-        with mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(cli, "TOOL_ROOT", tempfile.gettempdir()), \
-                mock.patch.object(cli, "_installer", return_value="pipx"), \
-                mock.patch.object(cli, "_latest_release_version", return_value="999.0.0"):
-            info = cli.update_info()
+        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
+                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+                mock.patch.object(updater, "_installer", return_value="pipx"), \
+                mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"):
+            info = updater.update_info()
             self.assertEqual((info["mode"], info["update_available"], info["can_update"]), ("release", True, True))
             self.assertEqual(info["command"].split()[:2], ["pipx", "install"])
             self.assertTrue(info["command"].endswith("@v999.0.0"))
-        with mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(cli, "TOOL_ROOT", tempfile.gettempdir()), \
-                mock.patch.object(cli, "__version__", "1.0.0"), \
-                mock.patch.object(cli, "_latest_release_version", return_value="1.0.0"):
-            self.assertFalse(cli.update_info()["update_available"])
+        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
+                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+                mock.patch.object(updater, "__version__", "1.0.0"), \
+                mock.patch.object(updater, "_latest_release_version", return_value="1.0.0"):
+            self.assertFalse(updater.update_info()["update_available"])
 
     def test_update_info_reports_offline_as_error_not_exception(self):
-        with mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(cli, "TOOL_ROOT", tempfile.gettempdir()), \
-                mock.patch.object(cli, "_latest_release_version", side_effect=OSError("offline")):
-            info = cli.update_info()
+        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
+                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+                mock.patch.object(updater, "_latest_release_version", side_effect=OSError("offline")):
+            info = updater.update_info()
         self.assertIn("offline", info["error"])
         self.assertFalse(info["can_update"])
 
     def _release_update(self, **kw):
-        with mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(cli, "TOOL_ROOT", tempfile.gettempdir()), \
-                mock.patch.object(cli, "_installer", return_value="uv"), \
-                mock.patch.object(cli, "_latest_release_version", return_value="999.0.0"), \
-                mock.patch.object(cli, "_service_kind", return_value="launchd"), \
+        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
+                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+                mock.patch.object(updater, "_installer", return_value="uv"), \
+                mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"), \
+                mock.patch.object(service, "_service_kind", return_value="launchd"), \
                 mock.patch.object(cli.shutil, "which", return_value="/bin/kb"), \
-                mock.patch.object(cli, "_run_captured", return_value=0) as captured, \
+                mock.patch.object(proc, "run_captured", return_value=0) as captured, \
                 mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
-            result = cli.apply_update(**kw)
+            result = updater.apply_update(**kw)
         return result, captured, run
 
     def test_apply_update_defers_service_refresh_and_captures_installer_output(self):
@@ -173,7 +173,7 @@ class PackagingTest(unittest.TestCase):
                 mock.patch.object(cli.shutil, "which", side_effect=lambda n: f"/bin/{n}"), \
                 mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
                 mock.patch.object(cli.subprocess, "Popen") as popen:
-            cli.schedule_kb_command("service", "refresh")
+            updater.schedule_kb_command("service", "refresh")
         argv = run.call_args.args[0]
         self.assertEqual(argv[:2], ["launchctl", "submit"])
         self.assertEqual(argv[-3:], ["/bin/kb", "service", "refresh"])
@@ -183,17 +183,17 @@ class PackagingTest(unittest.TestCase):
         with mock.patch.object(cli.sys, "platform", "darwin"), \
                 mock.patch.object(cli.shutil, "which", return_value=None), \
                 mock.patch.object(cli.subprocess, "Popen") as popen:
-            cli.schedule_kb_command("service", "refresh")
+            updater.schedule_kb_command("service", "refresh")
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         self.assertEqual(popen.call_args.args[0][-5:], [cli.sys.executable, "-m", "pkb_cli", "service", "refresh"])
 
     def _git_checkout(self, behind=2, dirty=False, upstream="origin/main"):
         status = {"is_git": True, "upstream": upstream, "local": "a" * 40, "remote": "b" * 40,
                   "behind": behind, "dirty": dirty}
-        return (mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"),
+        return (mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"),
                 mock.patch.object(cli.os.path, "isdir", return_value=True),
-                mock.patch.object(cli, "_git", return_value=mock.Mock(returncode=0, stdout="pulled", stderr="")),
-                mock.patch.object(cli, "update_status", return_value=status))
+                mock.patch.object(updater, "_git", return_value=mock.Mock(returncode=0, stdout="pulled", stderr="")),
+                mock.patch.object(updater, "update_status", return_value=status))
 
     def _run_git_update(self, **kw):
         from contextlib import ExitStack
@@ -201,8 +201,8 @@ class PackagingTest(unittest.TestCase):
         with ExitStack() as stack:
             patches = [stack.enter_context(p) for p in self._git_checkout(**kw)]
             git = patches[2]
-            result = cli.apply_update(check=check)
-            info = cli.update_info()
+            result = updater.apply_update(check=check)
+            info = updater.update_info()
         return result, info, git
 
     def test_git_update_pulls_when_behind(self):
@@ -229,44 +229,44 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual((info["update_available"], info["can_update"]), (False, False))
 
     def test_legacy_install_migrates_with_available_installer_and_errors_without(self):
-        base = (mock.patch.object(cli, "LEGACY_VERSION_PATH", __file__),
-                mock.patch.object(cli, "_latest_release_version", return_value="9.9.9"))
+        base = (mock.patch.object(updater, "LEGACY_VERSION_PATH", __file__),
+                mock.patch.object(updater, "_latest_release_version", return_value="9.9.9"))
         with base[0], base[1], mock.patch.object(cli.shutil, "which", side_effect=lambda t: t if t == "pipx" else None):
-            plan = cli.plan_update()
+            plan = updater.plan_update()
         self.assertEqual((plan["mode"], plan["installer"], plan["can_update"]), ("legacy", "pipx", True))
         self.assertTrue(plan["command"][-1].endswith("@v9.9.9"))
         with base[0], base[1], mock.patch.object(cli.shutil, "which", return_value=None):
-            plan = cli.plan_update()
-            rc = cli.apply_update()
+            plan = updater.plan_update()
+            rc = updater.apply_update()
         self.assertEqual((plan["can_update"], rc), (False, (1, False)))
         self.assertIn("old tarball installer", plan["error"])
 
     def test_release_update_without_known_installer_is_blocked_everywhere(self):
-        with mock.patch.object(cli, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(cli, "TOOL_ROOT", tempfile.gettempdir()), \
-                mock.patch.object(cli, "_installer", return_value=None), \
-                mock.patch.object(cli, "_latest_release_version", return_value="999.0.0"):
-            info = cli.update_info()
-            rc = cli.apply_update()
+        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
+                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+                mock.patch.object(updater, "_installer", return_value=None), \
+                mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"):
+            info = updater.update_info()
+            rc = updater.apply_update()
         self.assertEqual((info["update_available"], info["can_update"], rc), (True, False, (1, False)))
         self.assertIn("can't tell how kb was installed", info["error"])
 
     def test_service_info_unsupported_platform(self):
-        with mock.patch.object(cli, "_service_kind", return_value=None):
-            self.assertEqual(cli.service_info(), {"supported": False, "kind": None})
+        with mock.patch.object(service, "_service_kind", return_value=None):
+            self.assertEqual(service.service_info(), {"supported": False, "kind": None})
 
     def test_service_info_launchd_reads_installed_state_and_interval(self):
         import plistlib
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
-                mock.patch.object(cli, "_service_kind", return_value="launchd"):
+                mock.patch.object(service, "_service_kind", return_value="launchd"):
             agents = os.path.join(home, "Library", "LaunchAgents")
             os.makedirs(agents)
             with open(os.path.join(agents, "dev.pkb-cli.sync.plist"), "wb") as f:
                 plistlib.dump({"Label": "dev.pkb-cli.sync", "StartInterval": 900}, f)
-            with mock.patch.object(cli, "_launchd_status", side_effect=lambda label, path: (
+            with mock.patch.object(service, "_launchd_status", side_effect=lambda label, path: (
                     (os.path.exists(path), os.path.exists(path), None) if os.path.exists(path)
                     else (False, False, "not installed"))):
-                info = cli.service_info()
+                info = service.service_info()
         self.assertEqual(info["web"], {"installed": False, "running": False, "detail": "not installed"})
         self.assertEqual((info["sync"]["installed"], info["sync"]["interval_minutes"]), (True, 15))
 

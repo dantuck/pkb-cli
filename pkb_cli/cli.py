@@ -3,11 +3,9 @@
 one-shot per invocation. Operates on a data repo (found by walking up from cwd to a
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
-import calendar
 import contextlib
 import difflib
 import getpass
-import importlib
 import io
 import json
 import os
@@ -18,17 +16,32 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
-import typing
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta
 
 from . import pkb_common as pc
 from . import index_fts
 from . import remind_push
+from . import notifier
+from . import proc
+from . import service
+from . import health
+from . import journal
+from . import reminders
+from . import sources
+from . import todos
+from . import updater
 from . import worker_deploy
 from . import semantic
+from .notifier import open_notification_settings, send_test_notification  # noqa: F401  (kb_web reaches these via the cli module)
+from .todos import (  # noqa: F401  (kb_web reaches these via the cli module)
+    bd_action, bd_available, bd_create, bd_delete, bd_dep_add, bd_dep_remove, bd_deps, bd_list, bd_snooze, bd_unsnooze, bd_update,
+)
+from .health import doctor_checks, push_status  # noqa: F401  (kb_web reaches these via the cli module)
+from .sources import discover_sync_sources  # noqa: F401  (kb_web reaches these via the cli module)
+from .reminders import reminders_info, reminders_install  # noqa: F401  (kb_web reaches these via the cli module)
+from .journal import journal_append, journal_months  # noqa: F401  (likewise)
+from .service import cmd_sync_service, service_info  # noqa: F401  (likewise)
+from .updater import apply_update, schedule_kb_command, update_info  # noqa: F401  (likewise)
 from . import __version__
 from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via the cli module)
     _all_tags, _apply_tag_changes, _clean_list, _find_entry, _iter_all_entries, _reindex_fast,
@@ -38,11 +51,6 @@ from .pkb_entries import (  # noqa: F401  (re-exported: kb_web reaches these via
 )
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-TOOL_ROOT = os.path.dirname(PKG_DIR)  # the source checkout, when running from one (has .git)
-
-LEGACY_VERSION_PATH = os.path.join(TOOL_ROOT, ".pkb-cli-version")  # marker left by the old tarball installer
-# Where kb itself is published, for `kb update`'s release check.
-TOOL_REPO_SLUG = os.environ.get("PKB_CLI_REPO", "dantuck/pkb-cli")
 
 
 class KBArgumentParser(argparse.ArgumentParser):
@@ -69,107 +77,6 @@ class KBArgumentParser(argparse.ArgumentParser):
               file=sys.stderr)
         print("run `kb help` to see all commands", file=sys.stderr)
         sys.exit(2)
-
-
-def _run_captured(cmd, **kw):
-    """Run `cmd` with stderr merged into stdout, print the combined output, and
-    return the returncode -- rather than inheriting stdio directly, so kb web
-    can capture the real output via redirect_stdout (see kb_web.py's
-    _capture_stdout) instead of it only reaching the terminal kb web happens to
-    be running in, which, launched from a launchd plist, has no terminal
-    anyone can see. errors="replace" keeps this from crashing on any non-UTF-8
-    bytes a child process writes (e.g. binary noise in a library error
-    message) -- inherited stdio would have passed those bytes through as-is,
-    so decoding must not raise here either."""
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, errors="replace", **kw)
-    print(result.stdout, end="")
-    return result.returncode
-
-
-def _module_cmd(module):
-    """argv to run one of this package's modules as a script (`python -m pkb_cli.<module>`)."""
-    return [sys.executable, "-m", f"{__package__}.{module}"]
-
-
-def _kb_cmd(*args):
-    """argv to run kb itself (`python -m pkb_cli ...`) with this interpreter -- used for
-    launchd/systemd units, which can't rely on `kb` being on their minimal PATH."""
-    return [sys.executable, "-m", __package__, *args]
-
-
-def run_script(name, args=None):
-    cmd = _module_cmd(name) + (args or [])
-    return _run_captured(cmd)
-
-
-def discover_sync_sources():
-    """Auto-discover sync_<name>.py modules in the package as pluggable sync sources.
-
-    Adding a new one -- with an optional module-level SOURCE_META dict (see
-    docs/reference/ingestion.md for the contract) -- registers it as `kb sync
-    <name>` and, wherever SOURCE_META declares cli_tool/env_keys, in doctor/
-    setup's health checks and the sops-injection decision, without any other
-    file needing an edit. A script with no SOURCE_META (or an empty one) still
-    works via `kb sync <name>`, just opts out of those automated checks.
-
-    Returns {name: (filename, meta)}, sorted by name so `kb sync all`, the
-    argparse choices list, and --help output all have a stable order.
-
-    This runs on every `kb` invocation (argparse needs the choices list up
-    front), so an import error in one sync_<name>.py must not take down every
-    `kb` command -- it's skipped with a warning instead, same as a broken
-    plugin in any discover-and-load system."""
-    sources = {}
-    for fname in sorted(os.listdir(PKG_DIR)):
-        if fname.startswith("sync_") and fname.endswith(".py"):
-            name = fname[len("sync_"):-len(".py")]
-            try:
-                module = importlib.import_module(f".sync_{name}", __package__)
-            except Exception as e:
-                print(f"warning: {fname} failed to load, skipping (kb sync {name} unavailable): {e}",
-                      file=sys.stderr)
-                continue
-            sources[name] = (fname, getattr(module, "SOURCE_META", {}))
-    return sources
-
-
-def sync_tool_todos(sync_sources, tools):
-    """todo lines for any discovered sync source whose SOURCE_META declares a
-    cli_tool that's missing, or installed but (per auth_check) not
-    authenticated. Shared by `kb setup` and `kb doctor` so the two can't drift
-    on wording for the same check."""
-    todo = []
-    for name, (_fname, meta) in sync_sources.items():
-        cli_tool = meta.get("cli_tool")
-        if not cli_tool or not meta.get("not_found_hint"):
-            continue
-        if tools[cli_tool]:
-            if meta.get("auth_check") and not tools.get(f"{cli_tool}_auth"):
-                todo.append(meta.get("not_authed_hint", f"{cli_tool} is installed but not authenticated"))
-        else:
-            todo.append(meta["not_found_hint"])
-    return todo
-
-
-def sync_configured_sources(sync_sources, tools):
-    """Names of discovered sync sources that look ready to run right now, per
-    SOURCE_META: env_keys (if any) all set in the environment, and (if
-    cli_tool/auth_check are declared) that tool authenticated. A source with
-    neither env_keys nor cli_tool declared (SOURCE_META is empty/absent) is
-    never reported here -- there's nothing to check."""
-    configured = []
-    for name, (_fname, meta) in sync_sources.items():
-        env_keys = meta.get("env_keys") or []
-        cli_tool = meta.get("cli_tool")
-        if not env_keys and not cli_tool:
-            continue
-        if env_keys and not all(os.environ.get(k) for k in env_keys):
-            continue
-        if cli_tool and not (tools.get(f"{cli_tool}_auth") if meta.get("auth_check") else tools.get(cli_tool)):
-            continue
-        configured.append(name)
-    return configured
 
 
 _FTS_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
@@ -445,43 +352,6 @@ def cmd_new(args):
     return 0
 
 
-def _looks_like_date(text):
-    try:
-        datetime.strptime(text, "%Y-%m-%d")
-    except ValueError:
-        return False
-    return True
-
-
-def _journal_path(root, target):
-    dir_path = os.path.join(root, "journal", f"{target.year:04d}", f"{target.month:02d}")
-    return os.path.join(dir_path, f"{target.isoformat()}.md")
-
-
-def _ensure_journal_entry(root, target):
-    """Create target's journal file (with frontmatter) if it doesn't exist yet.
-    Returns its path either way."""
-    file_path = _journal_path(root, target)
-    if not os.path.exists(file_path):
-        all_ids = pc.collect_existing_ids(root)
-        now = pc.now_iso()
-        entry_id = pc.gen_id(all_ids, dt=datetime.combine(target, datetime.now().time()))
-        fm = {
-            "id": entry_id,
-            "created": now,
-            "updated": now,
-            "type": "journal",
-            "extension": "journal",
-            "source": "manual",
-            "source_id": None,
-            "tags": [],
-            "links": [],
-            "title": target.isoformat(),
-        }
-        pc.write_entry(file_path, fm, f"# {target.isoformat()}\n\n")
-    return file_path
-
-
 def _open_in_editor(file_path):
     editor = pc.get_editor()
     parts = pc.resolve_editor_argv(editor) if editor else None
@@ -498,100 +368,8 @@ def _open_in_editor(file_path):
         sys.exit(1)
 
 
-def list_journal_entries(root, limit=None):
-    """(date_str, path) for journal files, newest first.
-
-    Walks journal/YYYY/MM/ in descending order and stops as soon as `limit`
-    entries are collected, instead of always listing every entry ever written
-    just to keep the most recent few -- callers like cmd_journal's "recent
-    entries" hint only ever want a handful.
-    """
-    journal_dir = os.path.join(root, "journal")
-    if not os.path.isdir(journal_dir):
-        return []
-
-    def _subdirs_desc(path):
-        return sorted((d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))), reverse=True)
-
-    entries = []
-    for year in _subdirs_desc(journal_dir):
-        year_dir = os.path.join(journal_dir, year)
-        for month in _subdirs_desc(year_dir):
-            month_dir = os.path.join(year_dir, month)
-            names = sorted((n for n in os.listdir(month_dir) if n.endswith(".md")), reverse=True)
-            for name in names:
-                entries.append((name[:-3], os.path.join(month_dir, name)))
-                if limit and len(entries) >= limit:
-                    return entries
-    return entries
-
-
-def _shift_months(date, delta):
-    """date, shifted by `delta` months, clamped to the shifted month's length
-    (e.g. Aug 31 - 1 month -> Jul 31, not an overflow into August)."""
-    month_index = date.month - 1 + delta
-    year = date.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(date.day, calendar.monthrange(year, month)[1])
-    return date.replace(year=year, month=month, day=day)
-
-
-def _on_this_day(root, target):
-    """(label, date_str, path) for past journal entries at the offsets a
-    "look back" feature cares about -- a week ago, a month ago, and this same
-    month/day in each earlier year -- restricted to offsets that actually have
-    an entry, so this never pads the list with empty prompts to fill in the
-    past."""
-    candidates = [("1 week ago", target - timedelta(days=7)),
-                  ("1 month ago", _shift_months(target, -1))]
-    for years in range(1, 11):
-        try:
-            d = target.replace(year=target.year - years)
-        except ValueError:  # target is Feb 29 and this year isn't a leap year
-            d = target.replace(year=target.year - years, day=28)
-        label = "1 year ago" if years == 1 else f"{years} years ago"
-        candidates.append((label, d))
-
-    seen, results = set(), []
-    for label, d in candidates:
-        if d >= target or d in seen:
-            continue
-        seen.add(d)
-        path = _journal_path(root, d)
-        if os.path.exists(path):
-            results.append((label, d.isoformat(), path))
-    return results
-
-
-def journal_append(root, target, text):
-    """Append `text` to target's journal entry, creating it (with frontmatter)
-    first if needed. No editor involved -- for jotting something down without
-    leaving the shell (or, for `kb web`'s quick-capture box, without leaving the
-    browser). A single line becomes a timestamped bullet; multiple lines (e.g.
-    from _journal_add_editor) become a timestamped heading block, same shape
-    `kb inbox`'s redirect action already uses.
-
-    Returns {"path": <relpath>, "time": "HH:MM"} on success, or None if `text`
-    was empty (nothing written). Shared by the CLI and the web capture endpoint
-    so there's exactly one place this logic lives."""
-    text = text.strip("\n")
-    if not text:
-        return None
-
-    file_path = _ensure_journal_entry(root, target)
-    fm, body = pc.read_entry(file_path)
-    stamp = datetime.now().strftime("%H:%M")
-    block = f"## {stamp}\n\n{text}\n" if "\n" in text else f"- {stamp}  {text}\n"
-    body = body.rstrip("\n") + f"\n\n{block}"
-    fm["updated"] = pc.now_iso()
-    pc.write_entry(file_path, fm, body)
-    _reindex_fast(root)
-    pc.git_autocommit(root, f"journal: {target.isoformat()}")
-    return {"path": os.path.relpath(file_path, root), "time": stamp}
-
-
 def _journal_add(root, target, text, json_out=False):
-    result = journal_append(root, target, text)
+    result = journal.journal_append(root, target, text)
     if result is None:
         _emit(json_out, {"added": False}, "empty -- nothing added")
         return 0
@@ -645,7 +423,7 @@ def cmd_journal(args):
     if args.add is not None:
         if args.add == "":  # -m/--add with no TEXT: open a scratch buffer instead
             return _journal_add_editor(root, target, args.json)
-        if args.date is None and _looks_like_date(args.add):
+        if args.date is None and journal._looks_like_date(args.add):
             # `-m` typed before DATE: argparse's nargs='?' greedily consumes the
             # date token as -m's own TEXT instead of leaving it for the `date`
             # positional. Silently writing to today under those circumstances
@@ -662,20 +440,20 @@ def cmd_journal(args):
         if interactive:
             return _journal_interactive(root)
 
-    file_path = _ensure_journal_entry(root, target)
+    file_path = journal._ensure_journal_entry(root, target)
 
     if not explicit_date:
         # no fzf/terminal for a full picker -- still surface nearby entries and
         # this-day-in-the-past ones for context instead of silently jumping
         # straight into today's.
-        on_this_day = _on_this_day(root, target)
+        on_this_day = journal._on_this_day(root, target)
         if on_this_day:
             print("on this day:")
             for label, date_str, path in on_this_day:
                 print(f"  {label:12} {date_str}  {os.path.relpath(path, root)}")
             print()
 
-        recent = [(d, p) for d, p in list_journal_entries(root, limit=6) if d != target.isoformat()][:5]
+        recent = [(d, p) for d, p in journal.list_journal_entries(root, limit=6) if d != target.isoformat()][:5]
         if recent:
             print("recent entries:")
             for date_str, path in recent:
@@ -694,11 +472,11 @@ def _journal_interactive(root):
     since there's only one thing to do with a journal entry: open it."""
     today = datetime.now().date()
     today_iso = today.isoformat()
-    entries = list_journal_entries(root)
+    entries = journal.list_journal_entries(root)
     if today_iso not in {d for d, _ in entries}:
-        entries = [(today_iso, _journal_path(root, today))] + entries
+        entries = [(today_iso, journal._journal_path(root, today))] + entries
 
-    on_this_day = _on_this_day(root, today)
+    on_this_day = journal._on_this_day(root, today)
     lines = [f"{date_str}\t{label}\t{path}" for label, date_str, path in on_this_day]
     for date_str, path in entries:
         tag = "new" if not os.path.exists(path) else ""
@@ -712,7 +490,7 @@ def _journal_interactive(root):
 
     date_str = selected.split("\t", 1)[0].strip()
     target = datetime.strptime(date_str, "%Y-%m-%d").date()
-    file_path = _ensure_journal_entry(root, target)
+    file_path = journal._ensure_journal_entry(root, target)
     _open_in_editor(file_path)
     return 0
 
@@ -723,7 +501,7 @@ def _journal_by_tag(root, tag):
     relevance ranking, which scatters same-theme entries by match strength
     instead of keeping them in chronological order."""
     matches = []
-    for date_str, path in list_journal_entries(root):
+    for date_str, path in journal.list_journal_entries(root):
         fm, _ = pc.read_entry(path)
         if tag in (fm.get("tags") or []):
             matches.append((date_str, path))
@@ -734,12 +512,6 @@ def _journal_by_tag(root, tag):
     for date_str, path in matches:
         print(f"{date_str}  {os.path.relpath(path, root)}")
     return 0
-
-
-def journal_months(root):
-    """YYYY-MM for every month with at least one journal entry, newest first --
-    the months `kb journal rollup` has something to roll up."""
-    return list(dict.fromkeys(date[:7] for date, _path in list_journal_entries(root)))
 
 
 def _rollup_month(month_arg):
@@ -1014,11 +786,11 @@ def _inbox_interactive(root, items):
 
 
 def cmd_triage(args):
-    return run_script("triage_report", ["--json"] if args.json else [])
+    return proc.run_script("triage_report", ["--json"] if args.json else [])
 
 
 def cmd_sync(args):
-    sync_sources = discover_sync_sources()
+    sync_sources = sources.discover_sync_sources()
     # sources whose SOURCE_META sets uses_sops read credentials from the environment;
     # if this data repo keeps them sops-encrypted, decrypt straight into that one
     # subprocess's env via `sops exec-env` -- no wrapping needed at the call site,
@@ -1032,27 +804,27 @@ def cmd_sync(args):
     for t in targets:
         print(f"--- sync: {t} ---")
         fname, meta = sync_sources[t]
-        cmd = _module_cmd(fname[:-len(".py")])
+        cmd = proc.module_cmd(fname[:-len(".py")])
         if use_sops and meta.get("uses_sops"):
             cmd_str = shlex.join(cmd)
-            target_rc = _run_captured(["sops", "exec-env", secrets_path, cmd_str], env=sops_key_env())
+            target_rc = proc.run_captured(["sops", "exec-env", secrets_path, cmd_str], env=health.sops_key_env())
         else:
-            target_rc = _run_captured(cmd)
+            target_rc = proc.run_captured(cmd)
         rc = target_rc or rc
     pc.git_autocommit(root, f"sync: {', '.join(targets)}")
     # sync writes new/updated files straight to disk -- without this the FTS
     # index goes stale immediately and `kb doctor`/`kb search` won't see them
     # until someone remembers to run `kb index` by hand.
-    index_rc = run_script("index_fts")
+    index_rc = proc.run_script("index_fts")
     return index_rc or rc
 
 
 def cmd_index(args):
-    return run_script("index_fts", ["--full"] if args.full else [])
+    return proc.run_script("index_fts", ["--full"] if args.full else [])
 
 
 def cmd_validate(args):
-    return run_script("validate_frontmatter")
+    return proc.run_script("validate_frontmatter")
 
 
 def _entry_fzf_lines(entries):
@@ -1308,463 +1080,6 @@ def cmd_show(args):
     return 0
 
 
-def bd_available():
-    return shutil.which("bd") is not None
-
-
-def _bd_run(bd_args):
-    """Run a `bd` subcommand, returning its stripped stdout. Raises
-    RuntimeError(stderr) on failure. Shared by every bd_* helper below so the
-    run/error/strip contract lives in exactly one place."""
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
-    return result.stdout.strip()
-
-
-def bd_list(root, include_all=False):
-    """Open (or all, with include_all) bd issues as parsed JSON, sorted by priority
-    and, within one, soonest due first with undated last. Raises RuntimeError(stderr)
-    if bd itself errors. Shared by cmd_todo's non-add path and kb web's GET /api/todo."""
-    bd_args = ["bd", "-C", root, "list", "--json", "--sort", "priority", "--limit", "0"]
-    if include_all:
-        bd_args.append("--all")
-    issues = json.loads(_bd_run(bd_args))
-
-    def order(issue):
-        when = pc.todo_remind_at(issue)
-        return (int(issue.get("priority", 2)), when.timestamp() if when else float("inf"))
-
-    # bd only sorts by one key; list.sort is stable, so ties keep bd's order
-    return sorted(issues, key=order)
-
-
-def bd_create(root, title, description=None, priority="2", issue_type="task", labels=None, due=None,
-              as_json=False):
-    """Create a bd issue, returning bd's own confirmation text (its issue JSON
-    with `as_json`). Raises
-    RuntimeError(stderr) on failure. Shared by _todo_add (kb todo -a TITLE)
-    and kb web's POST /api/todo. `due` is anything resolve_when() accepts."""
-    bd_args = ["bd", "-C", root, "create", "--title", title, "--type", issue_type, "--priority", priority]
-    if description:
-        bd_args += ["--description", description]
-    if labels:
-        bd_args += ["--labels", labels]
-    if due:
-        bd_args += ["--due", resolve_when(due)]
-    if as_json:
-        bd_args.append("--json")
-    return _bd_run(bd_args)
-
-
-def bd_update(root, issue_id, priority=None, issue_type=None, description=None,
-              assignee=None, add_label=None, remove_label=None, due=None):
-    """Update fields on an existing bd issue, returning bd's own stdout. Raises
-    RuntimeError(stderr) on failure. Used by kb web's PATCH /api/todo/{id} for
-    editing an already-created todo. add_label/remove_label touch one label at
-    a time, mirroring the tag chip add/remove UX used elsewhere in kb web. `due`
-    is anything resolve_when() accepts, or "" to clear it; changing it re-arms the
-    reminder."""
-    bd_args = ["bd", "-C", root, "update", issue_id]
-    if priority is not None:
-        bd_args += ["--priority", str(priority)]
-    if issue_type is not None:
-        bd_args += ["--type", issue_type]
-    if description is not None:
-        bd_args += ["--description", description]
-    if assignee is not None:
-        bd_args += ["--assignee", assignee]
-    if add_label:
-        bd_args += ["--add-label", add_label]
-    if remove_label:
-        bd_args += ["--remove-label", remove_label]
-    if due is not None:
-        bd_args += ["--due", resolve_when(due) if due else ""]
-        reminder_forget(issue_id)
-    return _bd_run(bd_args)
-
-
-def resolve_when(text):
-    """Turn a human "when" into something `bd --due/--until` reads correctly.
-    bd already takes +6h, +1d, +2w, tomorrow, friday, 5pm, 2026-01-15 and RFC 3339
-    timestamps, but reads a bare `m` as *months* -- so minutes are resolved here to
-    an absolute local timestamp, and a bare `2h`/`3d`/`1w` gets its missing `+`."""
-    text = text.strip()
-    m = re.fullmatch(r"\+?(\d+)\s*(m|min|mins|minute|minutes)", text, re.I)
-    if m:
-        return (datetime.now().astimezone() + timedelta(minutes=int(m.group(1)))).isoformat(timespec="seconds")
-    m = re.fullmatch(r"(\d+)\s*([hdw])", text, re.I)
-    if m:
-        return f"+{m.group(1)}{m.group(2).lower()}"
-    return text
-
-
-def bd_snooze(root, issue_id, until):
-    """Hide a todo until `until` (anything resolve_when() accepts), then bring it
-    back and remind again. Sets bd's defer date (hides it from `bd ready`, auto-wakes
-    it) *and* its due date, so a todo that never had a due date still comes due the
-    moment the snooze ends. Returns bd's own stdout; raises RuntimeError on failure."""
-    when = resolve_when(until)
-    output = _bd_run(["bd", "-C", root, "defer", issue_id, "--until", when])
-    _bd_run(["bd", "-C", root, "update", issue_id, "--due", when])
-    reminder_forget(issue_id)
-    return output
-
-
-def bd_unsnooze(root, issue_id):
-    """End a snooze early, returning bd's own stdout. Raises RuntimeError on failure."""
-    return _bd_run(["bd", "-C", root, "undefer", issue_id])
-
-
-_bd_time = pc.bd_time
-
-
-def todo_is_snoozed(issue, now=None):
-    """True while a todo's snooze is still running (deferred with a future date)."""
-    until = _bd_time(issue.get("defer_until"))
-    return issue.get("status") == "deferred" and (until is None or until > (now or datetime.now().astimezone()))
-
-
-def todos_due(issues, now=None):
-    """Open todos whose due date has passed, most overdue first. Snoozed todos
-    don't count until their snooze ends (bd_snooze moves the due date there too)."""
-    now = now or datetime.now().astimezone()
-    due = []
-    for i in issues:
-        when = pc.todo_remind_at(i)
-        if when is None or when > now or todo_is_snoozed(i, now):
-            continue
-        due.append((when, i))
-    return [i for _, i in sorted(due, key=lambda pair: pair[0])]
-
-
-def format_due(issue, now=None):
-    """Short human label for a todo's due/snooze state ('due in 2h', 'overdue 3d',
-    'snoozed 1d'), or '' when it has neither."""
-    now = now or datetime.now().astimezone()
-    snoozed = todo_is_snoozed(issue, now)
-    when = pc.todo_remind_at(issue)
-    if when is None:
-        return ""
-    seconds = int((when - now).total_seconds())
-    span = abs(seconds)
-    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if span >= size:
-            amount = f"{span // size}{unit}"
-            break
-    else:
-        amount = "<1m"
-    if snoozed:
-        return f"snoozed {amount}"
-    return f"due in {amount}" if seconds > 0 else f"overdue {amount}"
-
-
-# Reminder state: when each todo was last announced, so `kb remind check` (run on a
-# timer) doesn't re-fire the same notification every few minutes. Lives outside the
-# data repo -- it's per-machine and must never be committed.
-
-def _reminder_state_path():
-    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return os.path.join(base, "pkb-cli", "reminded.json")
-
-
-def _reminder_load():
-    try:
-        with open(_reminder_state_path(), encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _reminder_save(state):
-    path = _reminder_state_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f)
-
-
-def reminder_forget(issue_id):
-    """Re-arm one todo's reminder (called when its due date or snooze changes)."""
-    state = _reminder_load()
-    if state.pop(issue_id, None) is not None:
-        _reminder_save(state)
-
-
-def reminders_to_send(issues, repeat_hours=4, now=None):
-    """Due todos that haven't been announced yet, or whose last announcement is more
-    than `repeat_hours` old -- so an overdue todo keeps nudging until it's closed or
-    snoozed, without firing on every timer tick."""
-    now = now or datetime.now().astimezone()
-    state = _reminder_load()
-    out = []
-    for i in todos_due(issues, now):
-        last = _bd_time(state.get(i["id"]))
-        if last is None or now - last >= timedelta(hours=repeat_hours):
-            out.append(i)
-    return out
-
-
-# --- desktop notifications --------------------------------------------------
-# macOS shows a notification's icon and name from the *app bundle* that posted it,
-# and `osascript` is always "Script Editor". To get kb's own icon and its own
-# entry in System Settings -> Notifications, `kb remind install` builds a copy of
-# terminal-notifier.app ("kb reminders.app", its own bundle id and icon) in
-# ~/Applications and posts through that. Without terminal-notifier, or on Linux,
-# it falls back to osascript / notify-send.
-
-NOTIFIER_BUNDLE_ID = "dev.pkb-cli.notifier"
-NOTIFICATION_SETTINGS_URL = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
-
-
-def _notifier_app_path():
-    return os.path.expanduser("~/Applications/kb reminders.app")
-
-
-def _notifier_binary():
-    """Path to the built "kb reminders" notifier, or None (not macOS / not built)."""
-    path = os.path.join(_notifier_app_path(), "Contents", "MacOS", "terminal-notifier")
-    return path if sys.platform == "darwin" and os.path.exists(path) else None
-
-
-def _terminal_notifier_app():
-    """The stock terminal-notifier.app (e.g. brew's) to copy from, or None."""
-    exe = shutil.which("terminal-notifier")
-    if not exe:
-        return None
-    for path in (exe, os.path.realpath(exe)):
-        candidate = os.path.join(os.path.dirname(os.path.dirname(path)), "terminal-notifier.app")
-        if os.path.isdir(candidate):
-            return candidate
-    return None
-
-
-def build_notifier_app():
-    """Build ~/Applications/kb reminders.app: a copy of terminal-notifier.app with
-    kb's icon and its own bundle id (which is what gives it its own icon, name and
-    notification permission). Skips the rebuild when the copy already matches the
-    source and icon -- re-signing changes the code signature, which can make macOS
-    forget a permission the user already granted. Returns (ok, message)."""
-    if sys.platform != "darwin":
-        return False, "the kb reminders app is macOS-only"
-    src = _terminal_notifier_app()
-    if src is None:
-        return False, "terminal-notifier isn't installed -- `brew install terminal-notifier`"
-    icon_png = os.path.join(PKG_DIR, "templates", "notifier", "kb-reminder.png")
-    dest = _notifier_app_path()
-
-    import hashlib
-    import plistlib
-    with open(os.path.join(src, "Contents", "Info.plist"), "rb") as f:
-        src_version = plistlib.load(f).get("CFBundleShortVersionString", "?")
-    with open(icon_png, "rb") as f:
-        stamp = f"{src_version}+{hashlib.sha256(f.read()).hexdigest()[:12]}"
-    dest_plist = os.path.join(dest, "Contents", "Info.plist")
-    try:
-        with open(dest_plist, "rb") as f:
-            if plistlib.load(f).get("KBBuiltFrom") == stamp and _notifier_binary():
-                return True, f"kb reminders app is up to date ({dest})"
-    except (OSError, plistlib.InvalidFileException):
-        pass
-
-    with tempfile.TemporaryDirectory() as tmp:
-        iconset = os.path.join(tmp, "kb.iconset")
-        os.makedirs(iconset)
-        for size in (16, 32, 128, 256, 512):
-            for scale in (1, 2):
-                name = f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"
-                r = subprocess.run(["sips", "-z", str(size * scale), str(size * scale), icon_png,
-                                    "--out", os.path.join(iconset, name)], capture_output=True, text=True)
-                if r.returncode != 0:
-                    return False, f"sips failed: {r.stderr.strip() or r.stdout.strip()}"
-        icns = os.path.join(tmp, "kb-reminder.icns")
-        r = subprocess.run(["iconutil", "-c", "icns", iconset, "-o", icns], capture_output=True, text=True)
-        if r.returncode != 0:
-            return False, f"iconutil failed: {r.stderr.strip() or r.stdout.strip()}"
-
-        staged = os.path.join(tmp, "kb reminders.app")
-        shutil.copytree(src, staged, symlinks=True)
-        resources = os.path.join(staged, "Contents", "Resources")
-        for name in os.listdir(resources):
-            if name.endswith(".icns"):
-                os.remove(os.path.join(resources, name))
-        shutil.copy(icns, os.path.join(resources, "kb-reminder.icns"))
-        plist_path = os.path.join(staged, "Contents", "Info.plist")
-        with open(plist_path, "rb") as f:
-            info = plistlib.load(f)
-        info.update({"CFBundleIdentifier": NOTIFIER_BUNDLE_ID, "CFBundleName": "kb reminders",
-                     "CFBundleIconFile": "kb-reminder", "KBBuiltFrom": stamp})
-        with open(plist_path, "wb") as f:
-            plistlib.dump(info, f)
-        r = subprocess.run(["codesign", "--force", "--deep", "-s", "-", staged], capture_output=True, text=True)
-        if r.returncode != 0:
-            return False, f"codesign failed: {r.stderr.strip()}"
-
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        if os.path.lexists(dest):
-            shutil.rmtree(dest)
-        shutil.move(staged, dest)
-    return True, f"built the kb reminders app ({dest})"
-
-
-def notifier_authorization():
-    """The "kb reminders" app's notification permission as macOS reports it --
-    'authorized', 'denied', 'not requested yet', ... -- or None if there's no built
-    notifier to ask. Read-only: asking doesn't prompt the user."""
-    exe = _notifier_binary()
-    if exe is None:
-        return None
-    try:
-        out = subprocess.run([exe, "-diagnose"], capture_output=True, text=True, timeout=15).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    m = re.search(r"^\s*authorization\s+(.+?)\s*$", out, re.M)
-    return m.group(1).lower() if m else None
-
-
-def notifier_allowed(authorization):
-    return authorization is not None and (authorization.startswith("authorized") or authorization == "provisional")
-
-
-def notify_status(title, message, group=None, fallback=True):
-    """Post a desktop notification and say what happened: 'sent', 'denied' (macOS
-    permission for the kb reminders app is off), 'failed', or 'unavailable' (no
-    notifier at all). Text goes in as argv, never interpolated into a script, so a
-    todo title can't break out of one. With fallback=False the kb reminders app is
-    the only thing tried, so a permission problem isn't hidden by osascript working."""
-    status = "unavailable"
-    exe = _notifier_binary()
-    if exe:
-        cmd = [exe, "-title", title, "-message", message] + (["-group", group] if group else [])
-        code = subprocess.run(cmd, capture_output=True).returncode
-        if code == 0:
-            return "sent"
-        status = "denied" if code == 3 else "failed"
-        if not fallback:
-            return status
-    if sys.platform == "darwin" and shutil.which("osascript"):
-        cmd = ["osascript", "-e", "on run argv", "-e",
-               "display notification (item 1 of argv) with title (item 2 of argv)",
-               "-e", "end run", message, title]
-    elif shutil.which("notify-send"):
-        cmd = ["notify-send", title, message]
-    else:
-        return status
-    return "sent" if subprocess.run(cmd, capture_output=True).returncode == 0 else "failed"
-
-
-def notify(title, message):
-    """Post a desktop notification; True if one was handed to the OS."""
-    return notify_status(title, message) == "sent"
-
-
-def notification_help():
-    return ("macOS isn't allowing notifications from \"kb reminders\" yet.\n"
-            "  System Settings -> Notifications -> kb reminders -> Allow Notifications\n"
-            "  (if you clicked Don't Allow earlier, this is the only place to undo it, or run:\n"
-            f"   tccutil reset UserNotification {NOTIFIER_BUNDLE_ID})\n"
-            "  then check with: kb remind test")
-
-
-def open_notification_settings(force=False):
-    """Open System Settings at the Notifications pane. By default only for a person at
-    a terminal (a background job opening windows would be rude); kb web passes
-    force=True because the person asked by clicking a button. True if it was opened."""
-    if sys.platform == "darwin" and (force or sys.stdout.isatty()):
-        return subprocess.run(["open", NOTIFICATION_SETTINGS_URL], capture_output=True).returncode == 0
-    return False
-
-
-def send_test_notification():
-    """Post a test notification through the same path real reminders use and return
-    (ok, message) -- the message says what to do when it didn't work."""
-    status = notify_status("kb reminders are on", "You'll get a notification like this when a TODO comes due.",
-                            group="kb-remind-test", fallback=False)
-    if status == "sent":
-        return True, ("sent a test notification -- if you don't see it, a Focus / Do Not Disturb "
-                      "mode may be holding it back")
-    if status == "denied":
-        open_notification_settings()
-        return False, notification_help()
-    if status == "failed":
-        return False, "the notifier ran but failed -- run `kb remind test` again, or see `terminal-notifier -diagnose`"
-    if sys.platform == "darwin":
-        return False, ("no notifier available -- `brew install terminal-notifier`, then `kb remind install` "
-                       "builds the kb reminders app")
-    return False, "no notifier available -- install `notify-send` (libnotify)"
-
-
-def finish_reminder_install():
-    """After the reminder timer is installed: on macOS build the kb reminders app
-    (when terminal-notifier is there), then send a test notification so a missing
-    permission shows up now, with instructions, not silently at the first real
-    reminder. Returns (ok, message). Run from the user's terminal -- the permission
-    prompt needs a GUI session, which the background job doesn't have."""
-    lines = []
-    if sys.platform == "darwin":
-        if _terminal_notifier_app():
-            built, msg = build_notifier_app()
-            lines.append(msg)
-            if not built:
-                lines.append("falling back to osascript notifications (Script Editor's icon)")
-        else:
-            lines.append("terminal-notifier isn't installed, so notifications will use osascript "
-                         "(Script Editor's icon) -- `brew install terminal-notifier` and re-run "
-                         "`kb remind install` for kb's own icon")
-    ok, msg = send_test_notification()
-    lines.append(msg)
-    return ok, "\n".join(lines)
-
-
-def bd_reopen(root, issue_id):
-    """Reopen a closed bd issue, returning bd's own stdout. Raises
-    RuntimeError(stderr) on failure. Used by kb web's todo action endpoint."""
-    return _bd_run(["bd", "-C", root, "reopen", issue_id])
-
-
-def bd_delete(root, issue_id):
-    """Permanently delete a bd issue, returning bd's own stdout. Raises
-    RuntimeError(stderr) on failure. Used by kb web's DELETE /api/todo/{id}.
-    --force is required since kb web already confirms the action client-side."""
-    return _bd_run(["bd", "-C", root, "delete", issue_id, "--force"])
-
-
-def bd_deps(root, issue_id, direction="down"):
-    """List an issue's dependencies (direction='down', what it's blocked by) or
-    dependents (direction='up', what it blocks) as parsed JSON. Raises
-    RuntimeError(stderr) on failure. Used by kb web's GET /api/todo/{id}/deps."""
-    bd_args = ["bd", "-C", root, "dep", "list", issue_id, "--direction", direction, "--json"]
-    stdout = _bd_run(bd_args)
-    return json.loads(stdout) if stdout else []
-
-
-def bd_dep_add(root, from_id, to_id):
-    """Record that `from_id` depends on (is blocked by) `to_id`, returning bd's
-    own stdout. Raises RuntimeError(stderr) on failure."""
-    return _bd_run(["bd", "-C", root, "dep", "add", from_id, to_id])
-
-
-def bd_dep_remove(root, from_id, to_id):
-    """Remove the dependency recorded by bd_dep_add(from_id, to_id), returning
-    bd's own stdout. Raises RuntimeError(stderr) on failure."""
-    return _bd_run(["bd", "-C", root, "dep", "remove", from_id, to_id])
-
-
-def bd_action(root, action, issue_id, comment_text=None):
-    """Run `bd show|close|comment|reopen` for one issue, returning bd's own
-    stdout. Raises RuntimeError(stderr) on failure. Used by kb web's todo
-    action endpoint -- the CLI's interactive picker (_todo_interactive) calls
-    bd directly via subprocess instead, since it streams straight to the
-    terminal rather than needing a return value."""
-    bd_args = ["bd", "-C", root, action, issue_id]
-    if action == "comment":
-        bd_args.append(comment_text or "")
-    result = subprocess.run(bd_args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
-    return result.stdout.strip()
-
-
 def cmd_todo(args):
     if not shutil.which("bd"):
         print("bd CLI not found -- install it (`brew install beads`) to track TODOs. "
@@ -1780,13 +1095,13 @@ def cmd_todo(args):
         return _todo_add(root, args)
 
     try:
-        issues = bd_list(root, include_all=args.all)
+        issues = todos.bd_list(root, include_all=args.all)
     except RuntimeError as e:
         print(f"error: bd list failed: {e}", file=sys.stderr)
         return 1
     if not args.all:
         # snoozed todos are out of sight until the snooze ends (--all shows them)
-        issues = [i for i in issues if not todo_is_snoozed(i)]
+        issues = [i for i in issues if not todos.todo_is_snoozed(i)]
 
     if args.json:
         import json
@@ -1818,7 +1133,7 @@ def cmd_todo(args):
 
 
 def _due_suffix(issue):
-    label = format_due(issue)
+    label = todos.format_due(issue)
     return f"  ({label})" if label else ""
 
 
@@ -1828,15 +1143,15 @@ def _todo_word_command(root, words, json_out=False):
     verb, rest = words[0], words[1:]
     try:
         if verb == "snooze" and len(rest) == 2:
-            bd_snooze(root, rest[0], rest[1])
+            todos.bd_snooze(root, rest[0], rest[1])
             _emit(json_out, {"action": "snooze", "id": rest[0], "until": rest[1]},
                   f"snoozed {rest[0]} until {rest[1]} -- it will come back and remind you then")
         elif verb == "unsnooze" and len(rest) == 1:
-            output = bd_unsnooze(root, rest[0])
+            output = todos.bd_unsnooze(root, rest[0])
             _emit(json_out, {"action": "unsnooze", "id": rest[0]}, output)
         elif verb == "due" and len(rest) == 2:
             clear = rest[1] in ("none", "clear")
-            bd_update(root, rest[0], due="" if clear else rest[1])
+            todos.bd_update(root, rest[0], due="" if clear else rest[1])
             _emit(json_out, {"action": "due", "id": rest[0], "due": None if clear else rest[1]},
                   f"{rest[0]}: due date cleared" if clear else f"{rest[0]}: due {rest[1]}")
         else:
@@ -1860,7 +1175,7 @@ def _todo_add(root, args):
         os.execvp("bd", ["bd", "-C", root, "create-form"])  # replaces this process
 
     try:
-        output = bd_create(root, args.add, description=args.description,
+        output = todos.bd_create(root, args.add, description=args.description,
                             priority=args.priority, issue_type=args.type, labels=args.labels,
                             due=args.due, as_json=args.json)
     except RuntimeError as e:
@@ -1918,42 +1233,6 @@ def _todo_interactive(root, issues):
     return 0
 
 
-def reminders_install(root, interval_minutes):
-    """Install the reminder timer and run the post-install notification check
-    (`kb remind install`, minus the printing of the check's result). Returns
-    (returncode, notifications_ok, message) -- message is the post-install guidance, empty
-    if the timer itself couldn't be installed. Shared by the CLI and kb web."""
-    kind = _service_kind()
-    if kind is None:
-        print(f"error: reminders can't be scheduled on {sys.platform}", file=sys.stderr)
-        return 1, False, ""
-    rc = _interval_service_install(kind, "remind", root, ["remind", "check"], interval_minutes,
-                                    "kb remind -- notify about due TODOs")
-    if rc != 0:
-        return rc, False, ""
-    ok, msg = finish_reminder_install()
-    return 0, ok, msg
-
-
-def reminders_info():
-    """Structured reminder state for kb web's Reminders card: the timer
-    ({installed, running, detail, interval_minutes}) and, on macOS, the "kb reminders"
-    notifier ({app_built, terminal_notifier, authorization, allowed}). Read-only --
-    never prompts or notifies."""
-    kind = _service_kind()
-    if kind is None:
-        return {"supported": False}
-    out = {"supported": True, "kind": kind, **_service_state(kind, "remind")}
-    out["healthy"], out["message"] = reminder_status_line(kind)
-    out["interval_minutes"] = _timer_interval_minutes(kind, "remind") if out["installed"] else None
-    if kind == "launchd":
-        auth = notifier_authorization()
-        out["notifier"] = {"app_built": _notifier_binary() is not None,
-                           "terminal_notifier": _terminal_notifier_app() is not None,
-                           "authorization": auth, "allowed": notifier_allowed(auth)}
-    return out
-
-
 def _print_result(ok, msg):
     """Print a success on stdout or a problem on stderr, flushing stdout first so a
     problem never appears ahead of output that was printed before it (stdout is
@@ -1963,46 +1242,15 @@ def _print_result(ok, msg):
     sys.stderr.flush()
 
 
-def reminder_status_line(kind=None):
-    """(ok, message) describing the `kb remind` timer for setup/doctor -- ok is True
-    when it's scheduled and healthy, False when it needs attention or isn't on.
-    Read-only; never installs anything."""
-    kind = kind or _service_kind()
-    if kind is None:
-        return False, f"reminders can't be scheduled on {sys.platform} -- run `kb remind check` from your own scheduler"
-    info = _service_state(kind, "remind")
-    if not info["installed"]:
-        return False, ("TODO reminders aren't scheduled (optional) -- `kb remind install` sends a desktop "
-                       "notification when a TODO with a due date comes due")
-    if kind == "launchd" and info["detail"]:
-        return False, f"reminder job is {info['detail']}"
-    if kind == "systemd" and not info["running"]:
-        return False, f"reminder timer is {info['detail'] or 'inactive'} -- run `kb remind install` again"
-    if kind == "launchd" and _notifier_binary():
-        auth = notifier_authorization()
-        if not notifier_allowed(auth):
-            return False, (f"reminders are scheduled but notifications for \"kb reminders\" are "
-                           f"{auth or 'in an unknown state'} -- System Settings -> Notifications -> "
-                           f"kb reminders -> Allow, then `kb remind test`")
-    elif kind == "launchd" and _terminal_notifier_app():
-        return False, ("terminal-notifier is installed but the \"kb reminders\" app isn't built -- run "
-                       "`kb remind install` (gives notifications kb's own icon)")
-    else:
-        notifier = "osascript" if kind == "launchd" else "notify-send"
-        if not shutil.which(notifier):
-            return False, f"reminders are scheduled but `{notifier}` isn't installed, so no notification can appear"
-    return True, "TODO reminders are scheduled (`kb remind status`)"
-
-
 def cmd_remind(args):
     """`kb remind` -- list what's due; `check` notifies about it (run on a timer);
     `install`/`uninstall`/`status` manage that timer."""
     if args.ask and not (args.action == "push" and args.rest[:1] == ["deploy"]):
         print("error: --ask only applies to `kb remind push deploy`", file=sys.stderr)
         return 2
-    kind = _service_kind()
+    kind = service._service_kind()
     if args.action == "test":
-        ok, msg = send_test_notification()
+        ok, msg = notifier.send_test_notification()
         _print_result(ok, msg)
         if remind_push.get_config():
             push_ok, push_msg = remind_push.send_test()
@@ -2018,21 +1266,21 @@ def cmd_remind(args):
                   f"scheduler instead.", file=sys.stderr)
             return 1
         if args.action == "install":
-            root = _resolve_agent_repo(args)
+            root = service._resolve_agent_repo(args)
             if root is None:
                 return 1
-            rc, ok, msg = reminders_install(root, args.interval_minutes)
+            rc, ok, msg = reminders.reminders_install(root, args.interval_minutes)
             if rc == 0:
                 _print_result(ok, msg)
             return rc
         if args.action == "uninstall":
-            rc = _interval_service_uninstall(kind, "remind")
-            app = _notifier_app_path()
+            rc = service._interval_service_uninstall(kind, "remind")
+            app = notifier._notifier_app_path()
             if sys.platform == "darwin" and os.path.isdir(app):
                 shutil.rmtree(app)
                 print(f"removed {app}")
             return rc
-        rc = _interval_service_status(kind, "remind", "kb remind install")
+        rc = service._interval_service_status(kind, "remind", "kb remind install")
         if remind_push.get_config():
             _print_result(*remind_push.status())
         return rc
@@ -2042,7 +1290,7 @@ def cmd_remind(args):
         return 1
 
     if args.action == "list":
-        due = todos_due(issues)
+        due = todos.todos_due(issues)
         if not due:
             print("nothing due")
             return 0
@@ -2052,22 +1300,22 @@ def cmd_remind(args):
         return 0
 
     # check
-    pending = reminders_to_send(issues, repeat_hours=args.repeat_hours)
-    state = _reminder_load()
+    pending = todos.reminders_to_send(issues, repeat_hours=args.repeat_hours)
+    state = todos._reminder_load()
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     shown, rest = pending[:5], len(pending) - 5
     for i in shown:
-        label = format_due(i)
+        label = todos.format_due(i)
         print(f"{i['id']}  {i['title']}  ({label})")
-        notify(f"TODO {label}", f"{i['title']}  --  kb todo snooze {i['id']} 1h")
+        notifier.notify(f"TODO {label}", f"{i['title']}  --  kb todo snooze {i['id']} 1h")
         state[i["id"]] = now
     if rest > 0:
         # past the cap: one summary instead of a wall of notifications
-        notify("kb: more TODOs due", f"and {rest} more -- run `kb remind` to see them")
+        notifier.notify("kb: more TODOs due", f"and {rest} more -- run `kb remind` to see them")
         for i in pending[5:]:
             state[i["id"]] = now
     if pending:
-        _reminder_save(state)
+        todos._reminder_save(state)
     if remind_push.get_config():
         # mirror every due time to the Worker each run, so the phone push stays right even
         # when nothing was announced here; a failure is logged, not fatal to the desktop path
@@ -2084,7 +1332,7 @@ def _remind_issues():
               "See `kb doctor`.", file=sys.stderr)
         return None
     try:
-        return bd_list(pc.get_repo_root())
+        return todos.bd_list(pc.get_repo_root())
     except RuntimeError as e:
         print(f"error: bd list failed: {e}", file=sys.stderr)
         return None
@@ -2101,11 +1349,11 @@ def _apply_phone_action(root, action):
     if not isinstance(todo_id, str) or not _PHONE_TODO_ID.fullmatch(todo_id):
         raise RuntimeError(f"ignored a request for an odd TODO id {str(todo_id)[:40]!r}")
     if verb == "close":
-        bd_action(root, "close", todo_id)
+        todos.bd_action(root, "close", todo_id)
     elif verb == "snooze" and isinstance(action.get("until"), int):
         now = datetime.now().astimezone()
         until = max(datetime.fromtimestamp(action["until"]).astimezone(), now + timedelta(minutes=1))
-        bd_snooze(root, todo_id, until.isoformat(timespec="seconds"))
+        todos.bd_snooze(root, todo_id, until.isoformat(timespec="seconds"))
     else:
         raise RuntimeError(f"ignored an unknown request {str(verb)[:20]!r} for {todo_id}")
 
@@ -2132,7 +1380,7 @@ def _phone_exchange(issues):
             for a in done:
                 print(f"phone: {a['action']} {a['todo_id']}")
             try:
-                issues = bd_list(root)
+                issues = todos.bd_list(root)
             except RuntimeError as e:
                 return False, f"applied the phone's requests but couldn't re-read TODOs: {e}"
     return remind_push.sync(issues)
@@ -2253,7 +1501,7 @@ def cmd_secrets(args):
     # from (the whole point of resolving `root` in the first place). Re-editing an
     # existing file also needs the *private* key (sops_key_env), not just the
     # public recipient in .sops.yaml -- only first-time creation gets away without it.
-    env = sops_key_env()
+    env = health.sops_key_env()
     if "EDITOR" not in env:
         editor = pc.get_editor()
         if editor:
@@ -2283,249 +1531,9 @@ def cmd_config(args):
 _confirm = pc.confirm
 
 
-# --- shared status checks, used by both `kb setup` (which acts on them) and
-# `kb doctor` (which only reports) -- one place to know how to detect each
-# piece of state so the two commands can't drift apart on what "ok" means.
-
-HOOK_MARKER = "# pkb-managed-hook"
-
-
-def hook_expected_content():
-    content = (
-        "#!/bin/sh\n"
-        f"{HOOK_MARKER} -- regenerated by `kb setup`, do not hand-edit\n"
-        f'exec "{sys.executable}" -m {__package__}.validate_frontmatter\n'
-    )
-    return content
-
-
-def read_hook(root):
-    hook_path = os.path.join(root, ".git", "hooks", "pre-commit")
-    if os.path.exists(hook_path):
-        with open(hook_path, "r", encoding="utf-8") as f:
-            return hook_path, f.read()
-    return hook_path, None
-
-
-def hook_managed_python(content):
-    """Extract the interpreter path baked into a kb-managed hook's
-    `exec "<python>" -m ...` line, or None if content isn't ours."""
-    if not content or HOOK_MARKER not in content:
-        return None
-    parts = content.split('"')
-    return parts[1] if len(parts) > 1 else None
-
-
-# brew formula names for the always-checked tools that aren't declared by a
-# sync source's SOURCE_META (those declare their own "brew_formula").
-BUILTIN_BREW_FORMULAS = {"sops": "sops", "rg": "ripgrep", "fzf": "fzf"}
-if sys.platform == "darwin":
-    # desktop notifications for `kb remind` -- see build_notifier_app()
-    BUILTIN_BREW_FORMULAS["terminal-notifier"] = "terminal-notifier"
-
-
-def missing_deps_with_formulas(tools, sync_sources):
-    """(tool, brew_formula) pairs for every optional CLI tool kb knows how to
-    install that isn't currently on PATH -- the always-checked tools plus any
-    sync source that declares both cli_tool and brew_formula."""
-    missing = [(t, f) for t, f in BUILTIN_BREW_FORMULAS.items() if not tools.get(t)]
-    for _name, (_fname, meta) in sync_sources.items():
-        cli_tool, formula = meta.get("cli_tool"), meta.get("brew_formula")
-        if cli_tool and formula and not tools.get(cli_tool):
-            missing.append((cli_tool, formula))
-    return missing
-
-
-def tool_status(sync_sources=None):
-    """Presence (and, where SOURCE_META declares an auth_check, auth status) of
-    every CLI tool kb cares about: the always-checked ones (sops for encrypted
-    credentials, rg/fzf for Tier 1 search) plus whatever cli_tool each
-    auto-discovered sync source declares -- so a new sync_<name>.py with a
-    cli_tool/auth_check in its SOURCE_META gets a "<tool>"/"<tool>_auth" entry
-    here automatically, no edit needed. Callers that already discovered sync
-    sources for their own use (e.g. `kb setup`) can pass them in to avoid
-    re-scanning/re-importing every sync_<name>.py a second time."""
-    if sync_sources is None:
-        sync_sources = discover_sync_sources()
-    cli_tools = set(BUILTIN_BREW_FORMULAS)
-    for _name, (_fname, meta) in sync_sources.items():
-        if meta.get("cli_tool"):
-            cli_tools.add(meta["cli_tool"])
-    status = {t: shutil.which(t) is not None for t in cli_tools}
-    for _name, (_fname, meta) in sync_sources.items():
-        cli_tool, auth_check = meta.get("cli_tool"), meta.get("auth_check")
-        if cli_tool and auth_check:
-            status[f"{cli_tool}_auth"] = (
-                subprocess.run(auth_check, capture_output=True).returncode == 0
-                if status[cli_tool] else False
-            )
-    return status
-
-
-def semantic_status(root):
-    """(ok, message) for the optional semantic index, or None when it isn't in play
-    (switched off in config, or the extra isn't installed). Read-only."""
-    model_ref = semantic.active_model(root)
-    if not model_ref:
-        return None
-    db_path = index_status(root)
-    if not os.path.exists(db_path):
-        return False, "no semantic index -- run `kb index --full`"
-    try:
-        semantic.check_model(model_ref)
-    except semantic.SemanticUnavailable as e:
-        return False, f"semantic model unavailable: {e}"
-    conn = sqlite3.connect(db_path)
-    try:
-        embedded, total, current = semantic.index_state(conn, model_ref)
-        stored = semantic.stored_model(conn)
-    except sqlite3.OperationalError:
-        return False, "no semantic index -- run `kb index`"
-    finally:
-        conn.close()
-    if current:
-        return True, f"semantic index is current ({embedded}/{total} embedded, {model_ref})"
-    if stored not in (None, model_ref):
-        return False, f"semantic index was built with {stored}, config says {model_ref} -- run `kb index`"
-    return False, f"semantic index is incomplete ({embedded}/{total} embedded) -- run `kb index`"
-
-
-def index_status(root):
-    return os.path.join(root, ".pkb", "fts.db")
-
-
-def bd_store_status(root):
-    store_exists = os.path.isdir(os.path.join(root, ".beads"))
-    exclude_path = os.path.join(root, ".git", "info", "exclude")
-    git_excluded = False
-    if os.path.exists(exclude_path):
-        with open(exclude_path, "r", encoding="utf-8") as f:
-            git_excluded = ".beads/" in f.read()
-    return store_exists, git_excluded
-
-
-def secrets_status(root):
-    sops_configured = os.path.exists(os.path.join(root, ".sops.yaml"))
-    secrets_exists = os.path.exists(os.path.join(root, ".pkb", "secrets.enc.env"))
-    return sops_configured, secrets_exists
-
-
-def sops_key_env():
-    """Env dict for invoking sops (decrypt operations specifically -- this is about
-    the *private* key, unrelated to .sops.yaml's public recipients used for
-    encryption). sops's own built-in default age key location on macOS is under
-    ~/Library/Application Support, not the more common ~/.config/sops/age/keys.txt
-    -- if that's where the key actually lives and SOPS_AGE_KEY_FILE isn't already
-    set, point sops at it explicitly rather than relying on its own discovery."""
-    env = dict(os.environ)
-    if "SOPS_AGE_KEY_FILE" not in env:
-        candidate = os.path.expanduser("~/.config/sops/age/keys.txt")
-        if os.path.isfile(candidate):
-            env["SOPS_AGE_KEY_FILE"] = candidate
-    return env
-
-
-def _git(*args, cwd=TOOL_ROOT):
-    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
-
-
-def _github_request(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "pkb-cli"})
-    with urllib.request.urlopen(req, timeout=30, context=pc.ssl_context()) as resp:
-        return resp.read()
-
-
-def _latest_release_version():
-    """Version of the latest GitHub release, from a tag like "v1.2.3" (or the
-    component-prefixed "pkb-cli-v1.2.3" that 0.1.0 was tagged with)."""
-    data = json.loads(_github_request(f"https://api.github.com/repos/{TOOL_REPO_SLUG}/releases/latest"))
-    return re.sub(r"^(?:pkb-cli-)?v", "", data["tag_name"])
-
-
-def _version_tuple(version):
-    return tuple(int(n) for n in re.findall(r"\d+", version.split("+")[0]))
-
-
-def _installer():
-    """"uv" or "pipx", whichever tool owns this install's venv (each drops a marker
-    file in it, wherever its home is configured); None if we can't tell (e.g. a
-    plain pip install into some other environment)."""
-    if os.path.exists(os.path.join(sys.prefix, "uv-receipt.toml")):
-        return "uv"
-    if os.path.exists(os.path.join(sys.prefix, "pipx_metadata.json")):
-        return "pipx"
-    return None
-
-
-def _install_command(installer, ref):
-    """Install pkb-cli at `ref` (a tag or branch) with `installer`. Reinstalling by
-    ref rather than running `upgrade`: installs are pinned to the tag they were made
-    from (see install.sh), and uv/pipx `upgrade` never moves a pinned ref."""
-    base = [installer, "tool", "install"] if installer == "uv" else [installer, "install"]
-    return base + ["--force", f"git+https://github.com/{TOOL_REPO_SLUG}@{ref}"]
-
-
-def update_status(fetch=False):
-    """Compare this pkb-cli checkout's HEAD against its upstream.
-
-    fetch=False (used by `kb doctor`) never touches the network -- it only compares
-    against whatever origin/<branch> was last fetched, so it can go stale, but stays
-    within doctor's "never writes, never hits the network" contract. fetch=True (used
-    by `kb update`) refreshes that ref first, so its answer is authoritative.
-
-    Returns a dict: is_git, upstream, local, remote, behind, dirty. Fields are None
-    when they don't apply (e.g. not a git checkout, or no upstream configured).
-    """
-    result = {"is_git": os.path.isdir(os.path.join(TOOL_ROOT, ".git")),
-              "upstream": None, "local": None, "remote": None, "behind": None, "dirty": None}
-    if not result["is_git"]:
-        return result
-
-    if fetch:
-        _git("fetch", "--quiet", "origin")
-
-    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    if upstream.returncode != 0:
-        return result
-    result["upstream"] = upstream.stdout.strip()
-
-    result["local"] = _git("rev-parse", "HEAD").stdout.strip()
-    result["remote"] = _git("rev-parse", result["upstream"]).stdout.strip()
-    if result["local"] and result["remote"]:
-        behind = _git("rev-list", "--count", f"{result['local']}..{result['remote']}")
-        result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
-    result["dirty"] = bool(_git("status", "--porcelain").stdout.strip())
-    return result
-
-
-def push_status(root):
-    """Local-only (no fetch) ahead/behind of a data repo's upstream -- the
-    counterpart to update_status() but for the *data* repo's own remote, not
-    pkb-cli's tool repo. Never touches the network, so this can go stale
-    relative to what's actually on the remote, but stays within `kb doctor`'s
-    "never writes, never hits the network" contract; `kb push` itself always
-    attempts the real push regardless of what this reports.
-
-    Returns a dict: is_git, upstream, ahead, behind. upstream/ahead/behind are
-    None when they don't apply (not a git repo, or no upstream configured)."""
-    result = {"is_git": os.path.isdir(os.path.join(root, ".git")),
-              "upstream": None, "ahead": None, "behind": None}
-    if not result["is_git"]:
-        return result
-    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=root)
-    if upstream.returncode != 0:
-        return result
-    result["upstream"] = upstream.stdout.strip()
-    ahead = _git("rev-list", "--count", f"{result['upstream']}..HEAD", cwd=root)
-    behind = _git("rev-list", "--count", f"HEAD..{result['upstream']}", cwd=root)
-    result["ahead"] = int(ahead.stdout.strip()) if ahead.returncode == 0 else None
-    result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
-    return result
-
-
 def cmd_push(args):
     root = pc.get_repo_root()
-    status = push_status(root)
+    status = health.push_status(root)
     if not status["is_git"]:
         print("error: not a git repo", file=sys.stderr)
         return 1
@@ -2600,13 +1608,13 @@ def cmd_setup(args):
         os.symlink(skill_src, skill_target)
         ok.append(f"installed kb skill -> {skill_target}")
 
-    sync_sources = discover_sync_sources()
-    tools = tool_status(sync_sources)
+    sync_sources = sources.discover_sync_sources()
+    tools = health.tool_status(sync_sources)
 
     # 0c. install missing optional CLI deps via brew -- guided, default yes
     # (this is the "including optional tooling" part of setup: bd/beads,
     # glab/gh for sync sources, rg/fzf for Tier 1 search, sops for secrets).
-    to_install = missing_deps_with_formulas(tools, sync_sources)
+    to_install = health.missing_deps_with_formulas(tools, sync_sources)
     if not to_install:
         ok.append("all optional CLI deps (bd/glab/gh/rg/fzf/sops) already installed")
     elif not shutil.which("brew"):
@@ -2640,11 +1648,11 @@ def cmd_setup(args):
         if not os.path.isdir(git_dir):
             todo.append("not a git repo (or .git not found here) -- pre-commit hook skipped")
         else:
-            hook_content = hook_expected_content()
-            hook_path, existing = read_hook(root)
+            hook_content = health.hook_expected_content()
+            hook_path, existing = health.read_hook(root)
             if existing == hook_content:
                 ok.append("pre-commit hook already installed")
-            elif existing is not None and HOOK_MARKER not in existing:
+            elif existing is not None and health.HOOK_MARKER not in existing:
                 todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
             else:
                 os.makedirs(os.path.dirname(hook_path), exist_ok=True)
@@ -2662,11 +1670,11 @@ def cmd_setup(args):
             ok.append("auto-commit excludes (fts.db, entry locks) are in place")
 
         # 2. FTS index
-        db_path = index_status(root)
+        db_path = health.index_status(root)
         full = not os.path.exists(db_path)
-        rc = run_script("index_fts", ["--full"] if full else [])
+        rc = proc.run_script("index_fts", ["--full"] if full else [])
         ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
-        sem = semantic_status(root)
+        sem = health.semantic_status(root)
         if sem:
             (ok if sem[0] else todo).append(sem[1])
         elif semantic.missing_dependency() and semantic.config(root)[0]:
@@ -2675,7 +1683,7 @@ def cmd_setup(args):
 
         # 3. local bd store
         if tools["bd"]:
-            store_exists, _git_excluded = bd_store_status(root)
+            store_exists, _git_excluded = health.bd_store_status(root)
             if store_exists:
                 ok.append("local bd (beads) store already initialized")
             else:
@@ -2689,22 +1697,22 @@ def cmd_setup(args):
                     todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
             # 3b. TODO reminders -- opt-in, default no (a background job on a timer is
             # not something to turn on unasked, including under --yes)
-            kind = _service_kind()
-            reminders_on, reminder_msg = reminder_status_line(kind)
+            kind = service._service_kind()
+            reminders_on, reminder_msg = reminders.reminder_status_line(kind)
             if reminders_on:
                 ok.append(reminder_msg)
-            elif kind is not None and not _service_state(kind, "remind")["installed"]:
+            elif kind is not None and not service._service_state(kind, "remind")["installed"]:
                 if _confirm("Check for due TODOs every 5 minutes and send desktop notifications "
                             "(kb remind install)?", default=False, assume_yes=args.yes):
                     out = io.StringIO()
                     with contextlib.redirect_stdout(out):
-                        rc = _interval_service_install(kind, "remind", root, ["remind", "check"], 5,
+                        rc = service._interval_service_install(kind, "remind", root, ["remind", "check"], 5,
                                                        "kb remind -- notify about due TODOs")
                     if rc != 0:
                         todo.append(f"kb remind install failed: {out.getvalue().strip()}")
                     else:
                         ok.append("installed the TODO reminder check (every 5 minutes)")
-                        notified, note = finish_reminder_install()
+                        notified, note = notifier.finish_reminder_install()
                         (ok if notified else todo).append(note.replace("\n", "\n         "))
                 else:
                     todo.append(reminder_msg)
@@ -2714,7 +1722,7 @@ def cmd_setup(args):
             todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
 
         # 4. secrets (sops), informational only -- never touch/create real secrets ourselves
-        sops_configured, secrets_exists = secrets_status(root)
+        sops_configured, secrets_exists = health.secrets_status(root)
         if sops_configured:
             if secrets_exists:
                 ok.append(".pkb/secrets.enc.env already set up")
@@ -2727,7 +1735,7 @@ def cmd_setup(args):
                             "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT/PKB_GITHUB_REPO directly")
 
     # 5. cli_tool sync sources (e.g. glab/gh, required for GitLab/GitHub issue sync)
-    todo.extend(sync_tool_todos(sync_sources, tools))
+    todo.extend(sources.sync_tool_todos(sync_sources, tools))
 
     # 6. rg/fzf (Tier 1 search, optional -- kb search/index work without them)
     missing_search_tools = [t for t in ("rg", "fzf") if not tools[t]]
@@ -2736,7 +1744,7 @@ def cmd_setup(args):
                      f"search (`brew install ripgrep fzf`); kb search/index don't need them")
 
     # 7. what's actually configured for sync right now (informational)
-    configured = sync_configured_sources(sync_sources, tools)
+    configured = sources.sync_configured_sources(sync_sources, tools)
     if configured:
         ok.append(f"sync sources ready in this shell: {', '.join(configured)}")
     else:
@@ -2757,747 +1765,6 @@ def cmd_web(args):
     return kb_web.serve(root, args.port, open_browser=not args.no_open)
 
 
-# --- `kb service` / `kb sync-service` -- run `kb web` or `kb sync` as a
-# login-scoped background job via launchd (macOS) or systemd --user (Linux).
-# Both stay strictly per-user (no root, no system-wide daemon) and just wrap
-# the same `kb web`/`kb sync` invocation a person would run by hand -- this
-# only automates when it runs, nothing the underlying command doesn't already
-# do. `kb service` keeps `kb web` alive continuously (RunAtLoad+KeepAlive /
-# a plain systemd service); `kb sync-service` fires `kb sync` on a timer
-# (StartInterval / a oneshot service driven by a systemd timer unit). Those
-# two shapes differ enough (persistent vs interval-triggered) that both go
-# through one shared installer, parameterized by everything else that's
-# actually identical: label/unit naming, the launchctl/systemctl dance, PATH,
-# and status/uninstall.
-
-AGENTS = {
-    "web": {
-        "launchd_label": "dev.pkb-cli.web",
-        "systemd_unit": "kb-web.service",
-        "log_name": "kb-web",
-    },
-    "sync": {
-        "launchd_label": "dev.pkb-cli.sync",
-        "systemd_unit": "kb-sync.service",
-        "systemd_timer": "kb-sync.timer",
-        "log_name": "kb-sync",
-    },
-    "remind": {
-        "launchd_label": "dev.pkb-cli.remind",
-        "systemd_unit": "kb-remind.service",
-        "systemd_timer": "kb-remind.timer",
-        "log_name": "kb-remind",
-    },
-}
-
-
-def _service_kind():
-    if sys.platform == "darwin":
-        return "launchd"
-    if sys.platform.startswith("linux"):
-        return "systemd"
-    return None
-
-
-def _agent_launchd_plist_path(agent):
-    return os.path.expanduser(f"~/Library/LaunchAgents/{AGENTS[agent]['launchd_label']}.plist")
-
-
-def _agent_systemd_unit_path(agent):
-    return os.path.expanduser(f"~/.config/systemd/user/{AGENTS[agent]['systemd_unit']}")
-
-
-def _agent_systemd_timer_path(agent):
-    return os.path.expanduser(f"~/.config/systemd/user/{AGENTS[agent]['systemd_timer']}")
-
-
-def _service_path_env():
-    """PATH for a background `kb` job: os.defpath (the bare minimum
-    launchd/systemd --user give a service) plus the standard Homebrew/local
-    prefixes, so bd/glab/gh/rg/fzf resolve the same as they do under `kb
-    setup`/`kb doctor`. Deterministic on purpose -- unlike snapshotting
-    whoever ran `install`'s ambient PATH, this doesn't bake in transient
-    shims (pyenv, an active venv) or go stale once install-time is behind us."""
-    extra = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"]
-    return os.pathsep.join(extra + [os.defpath])
-
-
-def _resolve_agent_repo(args):
-    if args.repo:
-        root = os.path.abspath(os.path.expanduser(args.repo))
-        if not os.path.isdir(root):
-            print(f"error: --repo {root} does not exist", file=sys.stderr)
-            return None
-        return root
-    try:
-        return pc.get_repo_root()
-    except SystemExit:
-        print("error: no pkb data repo found -- pass --repo DIR, or cd into one "
-              "first (see `kb setup`)", file=sys.stderr)
-        return None
-
-
-def _launchd_load(label, plist_path):
-    """(re)load a plist -- bootout first (ignore failure, fine if nothing was
-    loaded yet) so a re-install picks up changes instead of bootstrap
-    erroring "already loaded". Returns an error string, or None on success."""
-    uid = os.getuid()
-    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
-    # bootout returns before launchd has finished tearing the old job down, so an
-    # immediate bootstrap can fail with "Input/output error" (exit 5) -- retry briefly.
-    error = None
-    for attempt in range(5):
-        if attempt:
-            time.sleep(0.5)
-        result = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
-                                 capture_output=True, text=True)
-        if result.returncode == 0:
-            return None
-        error = result.stderr.strip()
-    return error
-
-
-def _launchd_unload_and_remove(label, plist_path):
-    uid = os.getuid()
-    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
-    if os.path.exists(plist_path):
-        os.remove(plist_path)
-        return True
-    return False
-
-
-def _launchd_status(label, plist_path):
-    """(installed, running, detail) -- detail is a human string for the
-    not-running/not-loaded cases."""
-    if not os.path.exists(plist_path):
-        return False, False, "not installed"
-    uid = os.getuid()
-    result = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
-                             capture_output=True, text=True)
-    if result.returncode != 0:
-        return True, False, f"installed ({plist_path}) but not loaded -- run `install` again"
-    return True, "state = running" in result.stdout, None
-
-
-def _systemd_enable_now(unit_name):
-    """daemon-reload then enable --now one unit. Returns an error string, or
-    None on success."""
-    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name],
-                             capture_output=True, text=True)
-    if result.returncode != 0:
-        return result.stderr.strip()
-    return None
-
-
-def _systemd_disable_and_remove(unit_name, *paths):
-    subprocess.run(["systemctl", "--user", "disable", "--now", unit_name], capture_output=True)
-    removed = False
-    for path in paths:
-        if os.path.exists(path):
-            os.remove(path)
-            removed = True
-    if removed:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    return removed
-
-
-def _systemd_active_state(unit_name):
-    result = subprocess.run(["systemctl", "--user", "is-active", unit_name],
-                             capture_output=True, text=True)
-    return result.stdout.strip()
-
-
-def _linger_note():
-    """None, or a note to print when the current user isn't lingering --
-    without it a systemd --user timer/service dies at logout."""
-    user = os.environ.get("USER", "")
-    result = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
-                             capture_output=True, text=True)
-    if result.returncode == 0 and "Linger=no" in result.stdout:
-        return (f"  note: enable lingering so this survives logout/reboot without an active "
-                f"session: loginctl enable-linger {user}")
-    return None
-
-
-def cmd_service(args):
-    kind = _service_kind()
-    if kind is None:
-        print(f"error: `kb service` isn't supported on {sys.platform} -- only macOS "
-              f"(launchd) and Linux (systemd --user) are supported. See `kb web` to "
-              f"run it by hand instead.", file=sys.stderr)
-        return 1
-    if args.action == "install":
-        return _service_install(kind, args)
-    if args.action == "uninstall":
-        return _service_uninstall(kind, "web")
-    if args.action == "refresh":
-        return _service_refresh(kind)
-    return _service_status(kind, "web")
-
-
-def _service_install(kind, args):
-    root = _resolve_agent_repo(args)
-    if root is None:
-        return 1
-
-    port = args.port
-    agent = AGENTS["web"]
-
-    if kind == "launchd":
-        import plistlib
-        log_dir = os.path.expanduser("~/Library/Logs")
-        os.makedirs(log_dir, exist_ok=True)
-        plist_path = _agent_launchd_plist_path("web")
-        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
-        plist = {
-            "Label": agent["launchd_label"],
-            "ProgramArguments": _kb_cmd("web", "--port", str(port), "--no-open"),
-            "WorkingDirectory": root,
-            "RunAtLoad": True,
-            "KeepAlive": True,
-            "StandardOutPath": os.path.join(log_dir, f"{agent['log_name']}.log"),
-            "StandardErrorPath": os.path.join(log_dir, f"{agent['log_name']}.err.log"),
-            # launchd defaults to /usr/bin:/bin:/usr/sbin:/sbin (no Homebrew) --
-            # without this, bd/glab/gh/rg/fzf all read as "not found" under the
-            # service even though `kb setup`/`kb doctor` find them fine in a shell.
-            "EnvironmentVariables": {"PATH": _service_path_env()},
-        }
-        with open(plist_path, "wb") as f:
-            plistlib.dump(plist, f)
-
-        error = _launchd_load(agent["launchd_label"], plist_path)
-        if error:
-            print(f"error: launchctl bootstrap failed: {error}", file=sys.stderr)
-            return 1
-        print(f"installed and started {agent['launchd_label']} -> http://127.0.0.1:{port}/")
-        print(f"  repo:  {root}")
-        print(f"  plist: {plist_path}")
-        print(f"  logs:  {log_dir}/{agent['log_name']}.log")
-        return 0
-
-    # systemd --user
-    unit_path = _agent_systemd_unit_path("web")
-    os.makedirs(os.path.dirname(unit_path), exist_ok=True)
-    unit = (
-        "[Unit]\n"
-        "Description=kb web -- pkb-cli local web UI\n"
-        "\n"
-        "[Service]\n"
-        f"ExecStart={shlex.join(_kb_cmd('web', '--port', str(port), '--no-open'))}\n"
-        f"WorkingDirectory={root}\n"
-        # systemd --user services get a minimal PATH by default too -- see
-        # _service_path_env() for why this is a fixed Homebrew-aware PATH
-        # rather than a snapshot of the installer's shell PATH.
-        f'Environment="PATH={_service_path_env()}"\n'
-        "Restart=on-failure\n"
-        "\n"
-        "[Install]\n"
-        "WantedBy=default.target\n"
-    )
-    with open(unit_path, "w", encoding="utf-8") as f:
-        f.write(unit)
-    error = _systemd_enable_now(agent["systemd_unit"])
-    if error:
-        print(f"error: systemctl enable --now failed: {error}", file=sys.stderr)
-        return 1
-    print(f"installed and started {agent['systemd_unit']} -> http://127.0.0.1:{port}/")
-    print(f"  repo: {root}")
-    print(f"  unit: {unit_path}")
-    print(f"  logs: journalctl --user -u {agent['systemd_unit']} -f")
-    note = _linger_note()
-    if note:
-        print(note)
-    return 0
-
-
-def _service_uninstall(kind, agent_name):
-    agent = AGENTS[agent_name]
-    if kind == "launchd":
-        plist_path = _agent_launchd_plist_path(agent_name)
-        if _launchd_unload_and_remove(agent["launchd_label"], plist_path):
-            print(f"stopped and removed {agent['launchd_label']} ({plist_path})")
-        else:
-            print(f"{agent['launchd_label']} wasn't installed")
-        return 0
-
-    unit_path = _agent_systemd_unit_path(agent_name)
-    if _systemd_disable_and_remove(agent["systemd_unit"], unit_path):
-        print(f"stopped and removed {agent['systemd_unit']} ({unit_path})")
-    else:
-        print(f"{agent['systemd_unit']} wasn't installed")
-    return 0
-
-
-def _service_state(kind, name):
-    """{installed, running, detail} for one installed-or-not service --
-    what `kb service status`, `kb sync-service status` and kb web's Manage panel
-    all report, so they can't disagree. `detail` is a human string for the
-    not-installed / not-loaded / not-active cases; On systemd it's the unit's active state ("inactive", "failed", ...)."""
-    agent = AGENTS[name]
-    if kind == "launchd":
-        installed, running, detail = _launchd_status(agent["launchd_label"], _agent_launchd_plist_path(name))
-        return {"installed": installed, "running": bool(running), "detail": detail}
-    # the sync/remind services are driven by their timer unit, not the oneshot service
-    path, unit = ((_agent_systemd_timer_path(name), agent["systemd_timer"]) if "systemd_timer" in agent
-                  else (_agent_systemd_unit_path(name), agent["systemd_unit"]))
-    if not os.path.exists(path):
-        return {"installed": False, "running": False, "detail": "not installed"}
-    state = _systemd_active_state(unit)
-    return {"installed": True, "running": state == "active", "detail": None if state == "active" else state}
-
-
-def _service_status(kind, agent_name):
-    info = _service_state(kind, agent_name)
-    if not info["installed"]:
-        print(info["detail"])
-        return 1
-    if kind == "launchd":
-        path = _agent_launchd_plist_path(agent_name)
-        if info["detail"]:
-            print(info["detail"])
-            return 1
-        print(f"installed and {'running' if info['running'] else 'loaded but not running'} ({path})")
-        return 0 if info["running"] else 1
-    print(f"installed ({_agent_systemd_unit_path(agent_name)}), {info['detail'] or 'active'}")
-    return 0 if info["running"] else 1
-
-
-def _timer_interval_minutes(kind, name):
-    """Minutes between runs of an installed interval service (sync, remind), or None
-    if it can't be read."""
-    try:
-        if kind == "launchd":
-            import plistlib
-            with open(_agent_launchd_plist_path(name), "rb") as f:
-                return plistlib.load(f).get("StartInterval", 0) // 60 or None
-        with open(_agent_systemd_timer_path(name), encoding="utf-8") as f:
-            m = re.search(r"^OnUnitActiveSec=(\d+)min", f.read(), re.M)
-        return int(m.group(1)) if m else None
-    except (OSError, ValueError):
-        return None
-
-
-def service_info():
-    """Structured `kb service status` / `kb sync-service status` for kb web's Manage
-    panel: {supported, kind, web: {...}, sync: {...}}, each service reporting
-    {installed, running, detail}. Never writes anything."""
-    kind = _service_kind()
-    if kind is None:
-        return {"supported": False, "kind": None}
-    out = {"supported": True, "kind": kind}
-    for name in AGENTS:
-        out[name] = _service_state(kind, name)
-    if out["sync"]["installed"]:
-        out["sync"]["interval_minutes"] = _timer_interval_minutes(kind, "sync")
-    return out
-
-
-def _unit_args(argv):
-    """The kb subcommand + args from an installed unit's command line, whichever
-    launcher it was written with (`python -m pkb_cli ...`, or the pre-package
-    `python <checkout>/scripts/kb ...`)."""
-    return argv[3:] if argv[1:3] == ["-m", __package__] else argv[2:]
-
-
-def _service_refresh(kind):
-    """Repoint each installed kb service unit at this install and restart it, keeping
-    its repo/port/interval. Run after an update so units written by an older install
-    (a stale launcher path) work again and a long-running `kb web` picks up the new
-    code. Units that aren't installed are skipped."""
-    import plistlib
-    for name, agent in AGENTS.items():
-        if kind == "launchd":
-            path = _agent_launchd_plist_path(name)
-            if not os.path.exists(path):
-                continue
-            with open(path, "rb") as f:
-                plist = plistlib.load(f)
-            plist["ProgramArguments"] = _kb_cmd(*_unit_args(plist["ProgramArguments"]))
-            with open(path, "wb") as f:
-                plistlib.dump(plist, f)
-            error = _launchd_load(agent["launchd_label"], path)
-            label = agent["launchd_label"]
-        else:
-            path = _agent_systemd_unit_path(name)
-            if not os.path.exists(path):
-                continue
-            with open(path, encoding="utf-8") as f:
-                unit = f.read()
-            unit = re.sub(r"^ExecStart=(.*)$",
-                          lambda m: "ExecStart=" + shlex.join(_kb_cmd(*_unit_args(shlex.split(m.group(1))))),
-                          unit, count=1, flags=re.M)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(unit)
-            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-            error = None
-            if name == "web":  # the timer-driven services pick up the new unit next run
-                result = subprocess.run(["systemctl", "--user", "restart", agent["systemd_unit"]],
-                                        capture_output=True, text=True)
-                error = result.stderr.strip() if result.returncode != 0 else None
-            label = agent["systemd_unit"]
-        print(f"refreshed {label}" if error is None else f"error: couldn't restart {label}: {error}")
-    return 0
-
-
-# --- `kb sync-service` -- runs `kb sync` on a recurring interval via launchd
-# (macOS, StartInterval) or a systemd --user timer (Linux), instead of
-# `kb service`'s persistent process. Shares everything above but the plist/
-# unit shape and status/uninstall need the extra timer unit on systemd.
-
-
-def cmd_sync_service(args):
-    kind = _service_kind()
-    if kind is None:
-        print(f"error: `kb sync-service` isn't supported on {sys.platform} -- only macOS "
-              f"(launchd) and Linux (systemd --user) are supported. See `kb sync` to "
-              f"run it by hand instead.", file=sys.stderr)
-        return 1
-    if args.action == "install":
-        return _sync_service_install(kind, args)
-    if args.action == "uninstall":
-        return _sync_service_uninstall(kind)
-    return _sync_service_status(kind)
-
-
-def _sync_service_install(kind, args):
-    root = _resolve_agent_repo(args)
-    if root is None:
-        return 1
-    return _interval_service_install(kind, "sync", root, ["sync"], args.interval_minutes,
-                                      "kb sync -- pull in pkb-cli sync sources")
-
-
-def _interval_service_install(kind, name, root, kb_args, interval_minutes, description):
-    """Install a job that runs `kb <kb_args>` every interval_minutes: a launchd
-    LaunchAgent with StartInterval, or a oneshot systemd --user service driven
-    by a timer unit. Shared by `kb sync-service` and `kb remind install`."""
-    agent = AGENTS[name]
-    shown = " ".join(kb_args)
-
-    if kind == "launchd":
-        import plistlib
-        log_dir = os.path.expanduser("~/Library/Logs")
-        os.makedirs(log_dir, exist_ok=True)
-        plist_path = _agent_launchd_plist_path(name)
-        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
-        plist = {
-            "Label": agent["launchd_label"],
-            "ProgramArguments": _kb_cmd(*kb_args),
-            "WorkingDirectory": root,
-            "StartInterval": interval_minutes * 60,
-            "StandardOutPath": os.path.join(log_dir, f"{agent['log_name']}.log"),
-            "StandardErrorPath": os.path.join(log_dir, f"{agent['log_name']}.err.log"),
-            # see _service_path_env() -- launchd's default PATH has no Homebrew
-            "EnvironmentVariables": {"PATH": _service_path_env()},
-        }
-        with open(plist_path, "wb") as f:
-            plistlib.dump(plist, f)
-
-        error = _launchd_load(agent["launchd_label"], plist_path)
-        if error:
-            print(f"error: launchctl bootstrap failed: {error}", file=sys.stderr)
-            return 1
-        print(f"installed and started {agent['launchd_label']} -> `kb {shown}` every {interval_minutes}m")
-        print(f"  repo:  {root}")
-        print(f"  plist: {plist_path}")
-        print(f"  logs:  {log_dir}/{agent['log_name']}.log")
-        return 0
-
-    # systemd --user: a oneshot service triggered by a timer
-    service_path = _agent_systemd_unit_path(name)
-    timer_path = _agent_systemd_timer_path(name)
-    os.makedirs(os.path.dirname(service_path), exist_ok=True)
-    service_unit = (
-        "[Unit]\n"
-        f"Description={description}\n"
-        "\n"
-        "[Service]\n"
-        "Type=oneshot\n"
-        f"ExecStart={shlex.join(_kb_cmd(*kb_args))}\n"
-        f"WorkingDirectory={root}\n"
-        f'Environment="PATH={_service_path_env()}"\n'
-    )
-    with open(service_path, "w", encoding="utf-8") as f:
-        f.write(service_unit)
-    timer_unit = (
-        "[Unit]\n"
-        f"Description=run {agent['systemd_unit']} on an interval\n"
-        "\n"
-        "[Timer]\n"
-        f"OnBootSec={interval_minutes}min\n"
-        f"OnUnitActiveSec={interval_minutes}min\n"
-        "Persistent=true\n"
-        "\n"
-        "[Install]\n"
-        "WantedBy=timers.target\n"
-    )
-    with open(timer_path, "w", encoding="utf-8") as f:
-        f.write(timer_unit)
-    error = _systemd_enable_now(agent["systemd_timer"])
-    if error:
-        print(f"error: systemctl enable --now failed: {error}", file=sys.stderr)
-        return 1
-    print(f"installed and started {agent['systemd_timer']} -> `kb {shown}` every {interval_minutes}m")
-    print(f"  repo:    {root}")
-    print(f"  service: {service_path}")
-    print(f"  timer:   {timer_path}")
-    print(f"  logs:    journalctl --user -u {agent['systemd_unit']} -f")
-    note = _linger_note()
-    if note:
-        print(note)
-    return 0
-
-
-def _interval_service_uninstall(kind, name):
-    agent = AGENTS[name]
-    if kind == "launchd":
-        plist_path = _agent_launchd_plist_path(name)
-        if _launchd_unload_and_remove(agent["launchd_label"], plist_path):
-            print(f"stopped and removed {agent['launchd_label']} ({plist_path})")
-        else:
-            print(f"{agent['launchd_label']} wasn't installed")
-        return 0
-
-    service_path = _agent_systemd_unit_path(name)
-    timer_path = _agent_systemd_timer_path(name)
-    if _systemd_disable_and_remove(agent["systemd_timer"], timer_path, service_path):
-        print(f"stopped and removed {agent['systemd_timer']} ({timer_path})")
-    else:
-        print(f"{agent['systemd_timer']} wasn't installed")
-    return 0
-
-
-def _interval_service_status(kind, name, install_cmd):
-    info = _service_state(kind, name)
-    if not info["installed"]:
-        print(info["detail"])
-        return 1
-    if kind == "launchd":
-        if info["detail"]:
-            print(info["detail"].replace("`install`", f"`{install_cmd}`"))
-            return 1
-        # an interval job is only "running" while it's actually firing, so scheduled is healthy
-        print(f"installed and scheduled ({_agent_launchd_plist_path(name)})")
-        return 0
-    print(f"installed ({_agent_systemd_timer_path(name)}), timer {info['detail'] or 'active'}")
-    return 0 if info["running"] else 1
-
-
-def _sync_service_uninstall(kind):
-    return _interval_service_uninstall(kind, "sync")
-
-
-def _sync_service_status(kind):
-    return _interval_service_status(kind, "sync", "kb sync-service install")
-
-
-def doctor_checks(root, push=None):
-    """(ok, todo) lists of human-readable status lines -- the actual health
-    check logic behind `kb doctor`, factored out so `kb web`'s Manage panel can
-    show (and poll) the exact same read-only checks as data instead of parsing
-    printed output. Never writes anything. root may be None (tool-level checks
-    -- glab/rg/fzf, pkb-cli's own update status -- don't need a data repo;
-    only frontmatter/hook/index/bd/secrets/cursors do).
-
-    `push` lets a caller that already computed push_status(root) (kb web's
-    /api/admin/status also reports it separately) pass it in instead of this
-    function running its own -- push_status shells out to git twice
-    (rev-list ahead + behind), not worth doing twice per request."""
-    ok, todo = [], []
-
-    if root is None:
-        todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to check "
-                     "frontmatter, the pre-commit hook, the search index, and cursors.json")
-    else:
-        # frontmatter integrity (reuses validate_frontmatter.py itself)
-        result = subprocess.run(
-            _module_cmd("validate_frontmatter"),
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            ok.append("frontmatter validates cleanly")
-        else:
-            todo.append("frontmatter validation is failing -- run `kb validate` for details")
-
-        # pre-commit hook: installed, ours, matches what we'd generate now, and points
-        # at a file that still exists (setup doesn't check that last part)
-        hook_content = hook_expected_content()
-        hook_path, existing = read_hook(root)
-        if existing is None:
-            todo.append("no pre-commit hook installed -- run `kb setup`")
-        elif HOOK_MARKER not in existing:
-            todo.append(f"{os.path.relpath(hook_path, root)} exists but isn't kb-managed")
-        else:
-            hooked_python = hook_managed_python(existing)
-            if hooked_python and not os.path.exists(hooked_python):
-                todo.append(f"pre-commit hook points at a missing interpreter ({hooked_python}) -- "
-                            f"pkb-cli may have been reinstalled or moved; run `kb setup`")
-            elif existing != hook_content:
-                todo.append("pre-commit hook is stale (points at a different pkb-cli install/interpreter "
-                            "than this one) -- run `kb setup`")
-            else:
-                ok.append("pre-commit hook is current")
-
-        # FTS index: present, and its row count matches the number of files on disk
-        # (a mismatch means something changed without a reindex)
-        db_path = index_status(root)
-        if not os.path.exists(db_path):
-            todo.append("no search index -- run `kb index --full`")
-        else:
-            import sqlite3
-            file_count = sum(1 for _ in pc.iter_markdown_files(root))
-            conn = sqlite3.connect(db_path)
-            try:
-                indexed_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            except sqlite3.OperationalError:
-                indexed_count = None
-            conn.close()
-            if indexed_count is None:
-                todo.append(f"{os.path.relpath(db_path, root)} exists but doesn't look like a kb index -- "
-                            f"run `kb index --full`")
-            elif indexed_count != file_count:
-                todo.append(f"search index is stale ({indexed_count} indexed vs {file_count} files on disk) "
-                            f"-- run `kb index`")
-            else:
-                ok.append(f"search index is current ({indexed_count} files)")
-            sem = semantic_status(root)
-            if sem:
-                (ok if sem[0] else todo).append(sem[1])
-
-        # promoted entries whose source (e.g. an edited usememos memo) has been
-        # re-synced since promotion -- promotion is a one-time copy, so nothing
-        # else notices the source moving on without this
-        stale_promoted = pc.stale_promoted_entries(root)
-        if stale_promoted:
-            for promoted_path, mirror_path in stale_promoted:
-                todo.append(
-                    f"{os.path.relpath(promoted_path, root)} is stale -- its source "
-                    f"{os.path.relpath(mirror_path, root)} was updated since promotion; review and reconcile"
-                )
-        else:
-            ok.append("no promoted entries are stale relative to their source")
-
-        # auto-commit: every kb mutation commits automatically, but only when root
-        # is a git repo -- and the derived files it must never stage need to
-        # actually be excluded, or every commit picks up index/lock churn
-        if not os.path.isdir(os.path.join(root, ".git")):
-            todo.append("not a git repo -- kb won't auto-commit changes; `git init` this data repo "
-                        "to get commit-per-action history")
-        else:
-            exclude_path = os.path.join(root, ".git", "info", "exclude")
-            excluded_text = ""
-            if os.path.exists(exclude_path):
-                with open(exclude_path, "r", encoding="utf-8") as f:
-                    excluded_text = f.read()
-            missing = [p for p in pc.AUTOCOMMIT_EXCLUDES if p not in excluded_text]
-            if missing:
-                todo.append(f"auto-commit excludes missing ({', '.join(missing)}) -- run `kb setup` "
-                            f"(fixed automatically on the next mutation regardless)")
-            else:
-                ok.append("auto-commit excludes (fts.db, entry locks) are in place")
-
-            # every kb mutation auto-commits, so anything left uncommitted means
-            # that failed -- most likely the pre-commit hook rejected invalid
-            # frontmatter, or something outside kb touched the repo directly
-            status = subprocess.run(["git", "-C", root, "status", "--porcelain"],
-                                     capture_output=True, text=True)
-            dirty = status.returncode == 0 and status.stdout.strip()
-            if dirty:
-                n = len(status.stdout.strip().splitlines())
-                todo.append(f"{n} uncommitted change(s) in the data repo -- auto-commit should have caught "
-                            f"this; run `git -C {root} status` (a failing pre-commit hook is the likely cause)")
-            elif status.returncode == 0:
-                ok.append("data repo is clean (auto-commit is keeping up)")
-
-            # push: local commits waiting on the remote -- informational (offline
-            # work is normal), but auto-commit's durability guarantee only holds
-            # up to "this machine" until these are actually pushed. Only reported
-            # when an upstream is actually configured -- a local-only data repo
-            # (no remote at all) is a legitimate setup, not something to flag.
-            push = push if push is not None else push_status(root)
-            if push["upstream"]:
-                if push["ahead"]:
-                    todo.append(f"{push['ahead']} commit(s) ahead of {push['upstream']}, not yet pushed "
-                                f"-- run `kb push`")
-                else:
-                    ok.append(f"up to date with {push['upstream']}")
-
-    # local bd store: present and actually git-excluded
-    tools = tool_status()
-    if root is not None:
-        if tools["bd"]:
-            store_exists, git_excluded = bd_store_status(root)
-            if not store_exists:
-                todo.append("no local bd store -- run `kb setup`")
-            elif not git_excluded:
-                todo.append(".beads/ exists but isn't in .git/info/exclude -- it may get committed accidentally")
-            else:
-                ok.append("local bd store is present and git-excluded")
-            reminders_on, reminder_msg = reminder_status_line()
-            (ok if reminders_on else todo).append(reminder_msg)
-        else:
-            todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking")
-
-        # secrets
-        sops_configured, secrets_exists = secrets_status(root)
-        if sops_configured and not secrets_exists:
-            todo.append("no .pkb/secrets.enc.env yet -- run `kb secrets` if you sync memos/gitlab/github")
-        elif sops_configured:
-            ok.append(".pkb/secrets.enc.env is present")
-
-    # cli_tool sync sources / rg / fzf -- not data-repo-specific, always checked
-    todo.extend(sync_tool_todos(discover_sync_sources(), tools))
-    missing_search_tools = [t for t in ("rg", "fzf") if not tools[t]]
-    if missing_search_tools:
-        todo.append(f"{'/'.join(missing_search_tools)} not found (optional, Tier 1 search)")
-
-    # cursors.json sanity
-    if root is not None:
-        cursors = pc.load_cursors(root)
-        now = datetime.now().astimezone()
-        for source, fields in cursors.items():
-            for key, value in (fields or {}).items():
-                if value is None:
-                    continue
-                dt = pc.parse_iso(value)
-                if dt is None:
-                    todo.append(f"cursors.json: {source}.{key} = {value!r} doesn't parse as a timestamp")
-                elif dt > now:
-                    todo.append(f"cursors.json: {source}.{key} = {value} is in the future")
-        if not any("cursors.json" in t for t in todo):
-            ok.append("cursors.json looks sane")
-
-    # config.yml sanity (the parser is lenient, so typos would otherwise go unnoticed)
-    if root is not None:
-        config_path = os.path.join(root, ".pkb", "config.yml")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                problems = pc.config_problems(f.read())
-            todo.extend(f"config.yml: {p}" for p in problems)
-            if not problems:
-                ok.append("config.yml looks sane")
-
-    # pkb-cli version, checked against whatever was last fetched -- no network call
-    # here (that's `kb update`'s job), so this can go stale but never blocks/slows
-    # down a doctor run or touches the network on its own.
-    update = update_status(fetch=False)
-    if update["is_git"]:
-        if update["upstream"]:
-            if update["behind"]:
-                todo.append(f"pkb-cli is {update['behind']} commit(s) behind {update['upstream']} as of the last "
-                            f"fetch -- run `kb update` to check for real and pull")
-            else:
-                ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
-    elif os.path.exists(LEGACY_VERSION_PATH):
-        todo.append("pkb-cli is an old tarball-style install that can no longer self-update -- "
-                    "run `kb update` to migrate it to uv/pipx")
-    else:
-        ok.append(f"pkb-cli {__version__} (run `kb update` to check for a newer release)")
-
-    return ok, todo
-
-
 def cmd_doctor(args):
     """Read-only health check -- reuses the same detection helpers as `kb setup`
     but never writes anything, and adds a few deeper checks setup doesn't do."""
@@ -3505,7 +1772,7 @@ def cmd_doctor(args):
         root = pc.get_repo_root()
     except SystemExit:
         root = None
-    ok, todo = doctor_checks(root)
+    ok, todo = health.doctor_checks(root)
 
     print("kb doctor\n")
     for line in ok:
@@ -3515,210 +1782,6 @@ def cmd_doctor(args):
     if not todo:
         print("\nall clear")
     return 1 if todo else 0
-
-
-def plan_update():
-    """Decide what `kb update` would do, without doing it -- the single source of
-    truth for `kb update`, `kb update --check` and kb web's Manage panel, so they
-    can't disagree about whether an update is available or allowed. Touches the
-    network (git fetch / GitHub releases API) but never writes to the install.
-
-    Returns {mode, current, latest, update_available, can_update, command,
-    installer, detail, error}. `mode` is "git" (source checkout), "release"
-    (uv/pipx/pip install) or "legacy" (old tarball installer). `detail` is the
-    status line to show; `error` is why it can't proceed (or couldn't check);
-    `command` is the argv that installs the update (release/legacy modes)."""
-    plan = {"mode": "release", "current": __version__, "latest": None, "update_available": False,
-            "can_update": False, "command": None, "installer": None, "detail": None, "error": None}
-
-    if os.path.exists(LEGACY_VERSION_PATH):
-        plan["mode"] = "legacy"
-        plan["update_available"] = True
-        installer = next((t for t in ("uv", "pipx") if shutil.which(t)), None)
-        if installer is None:
-            plan["error"] = ("kb was installed by the old tarball installer, which can't update itself any "
-                             "more.\ninstall uv (https://docs.astral.sh/uv/) or pipx, then re-run the "
-                             f"installer:\n  curl -fsSL https://raw.githubusercontent.com/{TOOL_REPO_SLUG}/main/install.sh | bash")
-            return plan
-        try:
-            ref = f"v{_latest_release_version()}"
-        except (urllib.error.URLError, OSError, ValueError, KeyError):
-            ref = "main"  # no release yet (or GitHub unreachable) -- fall back to the branch
-        plan.update(installer=installer, can_update=True, command=_install_command(installer, ref))
-        plan["detail"] = f"migrating this old-style install to {installer}: {' '.join(plan['command'])}"
-        return plan
-
-    if os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
-        plan["mode"] = "git"
-        fetch = _git("fetch", "--quiet", "origin")
-        if fetch.returncode != 0:
-            plan["error"] = f"git fetch failed: {fetch.stderr.strip()}"
-            return plan
-        status = update_status(fetch=False)  # already fetched above, no need to do it twice
-        if not status["upstream"]:
-            plan["error"] = f"no upstream branch configured for {TOOL_ROOT}"
-            return plan
-        local, remote = status["local"][:8], status["remote"][:8]
-        plan.update(current=local, latest=remote, update_available=bool(status["behind"]))
-        if not status["behind"]:
-            plan["detail"] = f"kb is up to date with {status['upstream']} ({local})"
-        else:
-            plan["detail"] = f"kb is {status['behind']} commit(s) behind {status['upstream']} ({local} -> {remote})"
-            if status["dirty"]:
-                plan["error"] = f"{TOOL_ROOT} has local changes -- commit or stash them before updating"
-            else:
-                plan["can_update"] = True
-        return plan
-
-    try:
-        latest = _latest_release_version()
-    except urllib.error.HTTPError as e:
-        if e.code == 404:  # no release has been published yet
-            plan["detail"] = f"kb {__version__}: no releases published for {TOOL_REPO_SLUG} yet"
-        else:
-            plan["error"] = f"couldn't check for updates: {e}"
-        return plan
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        plan["error"] = f"couldn't check for updates: {e}"
-        return plan
-
-    plan["latest"] = latest
-    if _version_tuple(latest) <= _version_tuple(__version__):
-        plan["detail"] = f"kb is up to date ({__version__})"
-        return plan
-    plan["update_available"] = True
-    plan["detail"] = f"kb {latest} is available (you have {__version__})"
-    plan["installer"] = _installer()
-    if plan["installer"]:
-        plan.update(can_update=True, command=_install_command(plan["installer"], f"v{latest}"))
-    else:
-        plan["error"] = ("can't tell how kb was installed -- reinstall it with the tool you used "
-                         f"(e.g. `{' '.join(_install_command('pipx', f'v{latest}'))}`)")
-    return plan
-
-
-def update_info():
-    """plan_update() as JSON-friendly data for kb web (the command as one string)."""
-    info = plan_update()
-    info["command"] = " ".join(info["command"]) if info["command"] else None
-    return info
-
-
-class _UpdateOpts(typing.NamedTuple):
-    check: bool = False
-    # print the installer's output (so a caller can capture it) instead of letting
-    # it stream straight to the terminal -- see _run_captured
-    capture: bool = False
-    # leave restarting the login services to the caller: kb web's Manage panel
-    # can't have its own service restarted underneath an in-flight request
-    defer_refresh: bool = False
-
-
-def cmd_update(args):
-    return apply_update(check=args.check)[0]
-
-
-def apply_update(check=False, capture=False, defer_refresh=False):
-    """Update this pkb-cli install if plan_update() says it's behind. Returns
-    (returncode, updated) -- `updated` is True when new code was installed, which
-    with `defer_refresh` is the caller's cue to refresh the services itself.
-
-    A source checkout (e.g. a contributor's `git clone` + `pip install -e .`) uses
-    git pull; a normal install runs the upgrade command for whichever tool
-    installed it (pipx or uv). The only kb command besides `kb sync` that touches
-    the network."""
-    opts = _UpdateOpts(check, capture, defer_refresh)
-    plan = plan_update()
-    if plan["detail"]:
-        print(plan["detail"])
-    if plan["update_available"] and opts.check:
-        if plan["mode"] == "git":
-            print("run `kb update` (without --check) to pull")
-        elif plan["mode"] == "release":
-            print(f"run `{' '.join(plan['command'])}` to upgrade" if plan["command"] else "run `kb update` to upgrade")
-        return 1, False
-    if plan["error"]:
-        print(f"error: {plan['error']}", file=sys.stderr)
-        return 1, False
-    if not plan["update_available"]:
-        return 0, False
-
-    if plan["mode"] == "git":
-        pull = _git("pull", "--ff-only")
-        if pull.returncode != 0:
-            print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
-            return 1, False
-        print(pull.stdout.strip())
-        print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
-        return 0, True
-
-    rc = _run_update_step(plan["command"], opts)
-    if rc != 0:
-        return rc, False
-    _refresh_services_after_update(opts)
-    _refresh_worker_after_update(opts)
-    if plan["mode"] == "legacy":
-        print(f"migrated. future `kb update`s use {plan['installer']}; run `kb setup` to refresh the hook and "
-              f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
-    else:
-        print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
-    return 0, True
-
-
-def _run_update_step(cmd, opts):
-    """Run an install/refresh command for `kb update`, streaming its output to
-    the terminal unless `opts.capture`."""
-    if opts.capture:
-        return _run_captured(cmd)
-    return subprocess.run(cmd).returncode
-
-
-def _refresh_services_after_update(opts):
-    """Run `kb service refresh` from the freshly installed kb -- this process is still
-    the old code (and possibly the old interpreter), so it can't write units that
-    point at the new install itself."""
-    if not opts.defer_refresh and _service_kind():
-        _run_update_step(installed_kb_argv("service", "refresh"), opts)
-
-
-def _refresh_worker_after_update(opts):
-    """Carry the phone-reminder Worker along with the release, using the freshly installed
-    kb: update it if kb is pointed at one and its source changed, else offer to set one up
-    (once). It needs a terminal -- wrangler may log in or prompt -- so an update run from
-    the web UI or a script only says what to do."""
-    if opts.capture or opts.defer_refresh or not pc.is_interactive():
-        if remind_push.get_config():
-            print("the phone-reminder Worker wasn't updated here -- run `kb remind push deploy` "
-                  "in a terminal to update it")
-        return
-    _run_update_step(installed_kb_argv("remind", "push", "deploy", "--ask"), opts)
-
-
-def installed_kb_argv(*args):
-    """argv for the `kb` on PATH -- the freshly reinstalled one, after an update --
-    falling back to this interpreter's `python -m pkb_cli`."""
-    exe = shutil.which("kb")
-    return [exe, *args] if exe else _kb_cmd(*args)
-
-
-def schedule_kb_command(*args, delay=1):
-    """Run `kb <args>` as a separate one-shot job after `delay` seconds, outside the
-    caller's own process tree. For anything that restarts or removes the service kb
-    web itself runs under: a plain child would be killed with it before finishing,
-    and the delay lets the HTTP response that scheduled it flush first. launchd/
-    systemd run it as their own job; elsewhere a new session is the best available."""
-    wrapped = ["sh", "-c", f'sleep {int(delay)}; exec "$@"', "sh", *installed_kb_argv(*args)]
-    if sys.platform == "darwin" and shutil.which("launchctl"):
-        label = f"dev.pkb-cli.admin-{os.getpid()}-{int(time.time())}"
-        attempt = ["launchctl", "submit", "-l", label, "--", *wrapped]
-    elif sys.platform.startswith("linux") and shutil.which("systemd-run"):
-        attempt = ["systemd-run", "--user", "--quiet", "--collect", *wrapped]
-    else:
-        attempt = None
-    if attempt and subprocess.run(attempt, capture_output=True).returncode == 0:
-        return
-    subprocess.Popen(wrapped, start_new_session=True, stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 EPILOG = """\
@@ -3734,17 +1797,14 @@ kb operates on a data repo found by walking up from the current directory to a
 """
 
 
-def main():
-    commands = ["search", "new", "journal", "inbox", "triage", "sync", "index", "validate",
-                "links", "show", "tag", "link", "rm", "mv", "todo", "bd", "secrets", "config", "setup",
-                "web", "service", "sync-service", "remind", "doctor", "update", "push", "help"]
+def build_parser():
+    """The full `kb` argument parser (split from main() so tests can inspect it)."""
     parser = KBArgumentParser(
         prog="kb",
         description="A CLI for a Diataxis-based personal knowledge base: search, "
                      "create, triage, and sync your notes.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        subcommands=commands,
     )
     parser.add_argument("--version", action="version", version=f"kb {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
@@ -3865,7 +1925,7 @@ def main():
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_triage)
 
-    sync_source_names = list(discover_sync_sources().keys())
+    sync_source_names = list(sources.discover_sync_sources().keys())
     p = sub.add_parser("sync", help="pull in " + " / ".join(sync_source_names))
     p.add_argument("source", nargs="?", choices=sync_source_names + ["all"], default="all",
                     help="which source to sync (default: all)")
@@ -4126,7 +2186,7 @@ def main():
     p.add_argument("--repo", metavar="DIR",
                     help="data repo to serve (default: resolved the same way `kb` normally "
                          "does -- cwd's repo, falling back to the central ~/.pkb; install only)")
-    p.set_defaults(func=cmd_service)
+    p.set_defaults(func=service.cmd_service)
 
     p = sub.add_parser(
         "sync-service", help="install/uninstall a recurring `kb sync` timer (launchd/systemd)",
@@ -4148,22 +2208,27 @@ def main():
     p.add_argument("--repo", metavar="DIR",
                     help="data repo to sync (default: resolved the same way `kb` normally "
                          "does -- cwd's repo, falling back to the central ~/.pkb; install only)")
-    p.set_defaults(func=cmd_sync_service)
+    p.set_defaults(func=service.cmd_sync_service)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("update", help="check for and pull kb tool updates")
     p.add_argument("--check", action="store_true", help="only check, don't pull even if behind")
-    p.set_defaults(func=cmd_update)
+    p.set_defaults(func=updater.cmd_update)
 
     p = sub.add_parser("help", help="show this help message")
     p.set_defaults(func=lambda args: parser.print_help() or 0)
 
+    parser._subcommands = list(sub.choices)  # for the "did you mean" suggestion
+    return parser
+
+
+def main():
+    parser = build_parser()
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(0)
-
     args = parser.parse_args()
     sys.exit(args.func(args) or 0)
 

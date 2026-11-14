@@ -11,7 +11,11 @@ from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-from pkb_cli import cli as kb_cli  # noqa: E402
+from pkb_cli import cli as kb_cli
+from pkb_cli import reminders
+from pkb_cli import todos
+from pkb_cli import service
+from pkb_cli import notifier  # noqa: E402
 
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
 
@@ -57,27 +61,27 @@ class BdListOrderTest(unittest.TestCase):
         rows = [row("p2-late", 2, timedelta(days=3)), row("p1-none", 1, None), row("p2-soon", 2, timedelta(hours=1)),
                 row("p1-soon", 1, timedelta(hours=2)), row("p2-none", 2, None)]
         import json
-        with mock.patch.object(kb_cli, "_bd_run", return_value=json.dumps(rows)):
-            ids = [r["id"] for r in kb_cli.bd_list("/repo")]
+        with mock.patch.object(todos, "_bd_run", return_value=json.dumps(rows)):
+            ids = [r["id"] for r in todos.bd_list("/repo")]
         self.assertEqual(ids, ["p1-soon", "p1-none", "p2-soon", "p2-late", "p2-none"])
 
 
 class ResolveWhenTest(unittest.TestCase):
     def test_minutes_become_an_absolute_timestamp_because_bd_reads_m_as_months(self):
         for text in ("30m", "+30m", "30 min", "30 minutes"):
-            when = datetime.fromisoformat(kb_cli.resolve_when(text))
+            when = datetime.fromisoformat(todos.resolve_when(text))
             delta = when - datetime.now().astimezone()
             self.assertAlmostEqual(delta.total_seconds(), 1800, delta=5, msg=text)
 
     def test_bare_hours_days_weeks_get_the_plus_bd_needs(self):
-        self.assertEqual(kb_cli.resolve_when("2h"), "+2h")
-        self.assertEqual(kb_cli.resolve_when("3D"), "+3d")
-        self.assertEqual(kb_cli.resolve_when("1w"), "+1w")
+        self.assertEqual(todos.resolve_when("2h"), "+2h")
+        self.assertEqual(todos.resolve_when("3D"), "+3d")
+        self.assertEqual(todos.resolve_when("1w"), "+1w")
 
     def test_everything_else_passes_through_to_bd(self):
         for text in ("+2h", "tomorrow 9am", "friday", "2026-11-02", "2026-11-02T09:00:00-06:00",
                      "2026-11-02T15:00:00Z"):
-            self.assertEqual(kb_cli.resolve_when(f"  {text} "), text)
+            self.assertEqual(todos.resolve_when(f"  {text} "), text)
 
 
 class DueLogicTest(unittest.TestCase):
@@ -90,12 +94,12 @@ class DueLogicTest(unittest.TestCase):
             issue("snoozed", status="deferred", due=timedelta(hours=-1), defer=timedelta(hours=2)),
             issue("worse", due=timedelta(days=-2)),
         ]
-        self.assertEqual([i["id"] for i in kb_cli.todos_due(issues, NOW)], ["worse", "late"])
+        self.assertEqual([i["id"] for i in todos.todos_due(issues, NOW)], ["worse", "late"])
 
     def test_an_expired_snooze_no_longer_hides_a_todo(self):
         woke = issue("woke", status="deferred", due=timedelta(minutes=-5), defer=timedelta(minutes=-5))
-        self.assertFalse(kb_cli.todo_is_snoozed(woke, NOW))
-        self.assertEqual([i["id"] for i in kb_cli.todos_due([woke], NOW)], ["woke"])
+        self.assertFalse(todos.todo_is_snoozed(woke, NOW))
+        self.assertEqual([i["id"] for i in todos.todos_due([woke], NOW)], ["woke"])
 
     def test_format_due(self):
         cases = [
@@ -106,7 +110,7 @@ class DueLogicTest(unittest.TestCase):
             (issue("a"), ""),
         ]
         for i, expected in cases:
-            self.assertEqual(kb_cli.format_due(i, NOW), expected)
+            self.assertEqual(todos.format_due(i, NOW), expected)
 
 
 class ReminderStateTest(unittest.TestCase):
@@ -119,53 +123,53 @@ class ReminderStateTest(unittest.TestCase):
         self.issues = [issue("a", due=timedelta(hours=-1))]
 
     def announce(self, issue_id, ago):
-        kb_cli._reminder_save({**kb_cli._reminder_load(), issue_id: (NOW - ago).isoformat()})
+        todos._reminder_save({**todos._reminder_load(), issue_id: (NOW - ago).isoformat()})
 
     def test_unannounced_due_todo_is_sent(self):
-        self.assertEqual([i["id"] for i in kb_cli.reminders_to_send(self.issues, now=NOW)], ["a"])
+        self.assertEqual([i["id"] for i in todos.reminders_to_send(self.issues, now=NOW)], ["a"])
 
     def test_announced_todo_stays_quiet_until_the_repeat_interval(self):
         self.announce("a", timedelta(hours=1))
-        self.assertEqual(kb_cli.reminders_to_send(self.issues, repeat_hours=4, now=NOW), [])
+        self.assertEqual(todos.reminders_to_send(self.issues, repeat_hours=4, now=NOW), [])
         self.announce("a", timedelta(hours=5))
-        self.assertEqual(len(kb_cli.reminders_to_send(self.issues, repeat_hours=4, now=NOW)), 1)
+        self.assertEqual(len(todos.reminders_to_send(self.issues, repeat_hours=4, now=NOW)), 1)
 
     def test_forget_rearms_a_todo_that_was_just_announced(self):
         self.announce("a", timedelta(minutes=1))
-        kb_cli.reminder_forget("a")
-        self.assertEqual(len(kb_cli.reminders_to_send(self.issues, now=NOW)), 1)
+        todos.reminder_forget("a")
+        self.assertEqual(len(todos.reminders_to_send(self.issues, now=NOW)), 1)
 
     def test_snooze_and_due_changes_rearm_the_reminder(self):
-        for call in (lambda: kb_cli.bd_snooze("/r", "a", "1h"),
-                     lambda: kb_cli.bd_update("/r", "a", due="tomorrow")):
+        for call in (lambda: todos.bd_snooze("/r", "a", "1h"),
+                     lambda: todos.bd_update("/r", "a", due="tomorrow")):
             self.announce("a", timedelta(minutes=1))
-            with mock.patch.object(kb_cli, "_bd_run", return_value="ok"):
+            with mock.patch.object(todos, "_bd_run", return_value="ok"):
                 call()
-            self.assertNotIn("a", kb_cli._reminder_load())
+            self.assertNotIn("a", todos._reminder_load())
 
     def test_corrupt_state_file_is_treated_as_empty(self):
-        path = kb_cli._reminder_state_path()
+        path = todos._reminder_state_path()
         os.makedirs(os.path.dirname(path))
         with open(path, "w") as f:
             f.write("{not json")
-        self.assertEqual(kb_cli._reminder_load(), {})
+        self.assertEqual(todos._reminder_load(), {})
 
 
 class BdCommandsTest(unittest.TestCase):
     def test_snooze_defers_and_moves_the_due_date_so_a_dueless_todo_still_fires(self):
-        with mock.patch.object(kb_cli, "_bd_run", return_value="ok") as run, \
-                mock.patch.object(kb_cli, "reminder_forget"):
-            kb_cli.bd_snooze("/r", "t-1", "2h")
+        with mock.patch.object(todos, "_bd_run", return_value="ok") as run, \
+                mock.patch.object(todos, "reminder_forget"):
+            todos.bd_snooze("/r", "t-1", "2h")
         self.assertEqual([c.args[0] for c in run.call_args_list], [
             ["bd", "-C", "/r", "defer", "t-1", "--until", "+2h"],
             ["bd", "-C", "/r", "update", "t-1", "--due", "+2h"],
         ])
 
     def test_create_and_update_pass_due_through_resolve_when(self):
-        with mock.patch.object(kb_cli, "_bd_run", return_value="ok") as run, \
-                mock.patch.object(kb_cli, "reminder_forget"):
-            kb_cli.bd_create("/r", "email", due="2h")
-            kb_cli.bd_update("/r", "t-1", due="")
+        with mock.patch.object(todos, "_bd_run", return_value="ok") as run, \
+                mock.patch.object(todos, "reminder_forget"):
+            todos.bd_create("/r", "email", due="2h")
+            todos.bd_update("/r", "t-1", due="")
         self.assertEqual(run.call_args_list[0].args[0][-2:], ["--due", "+2h"])
         self.assertEqual(run.call_args_list[1].args[0][-2:], ["--due", ""])
 
@@ -183,8 +187,8 @@ class RemindCheckTest(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def run_check(self, issues):
-        with mock.patch.object(kb_cli, "bd_list", return_value=issues), \
-                mock.patch.object(kb_cli, "notify", return_value=True) as notify, \
+        with mock.patch.object(todos, "bd_list", return_value=issues), \
+                mock.patch.object(notifier, "notify", return_value=True) as notify, \
                 redirect_stdout(io.StringIO()):
             rc = kb_cli.cmd_remind(mock.Mock(action="check", repeat_hours=4, ask=False))
         return rc, notify
@@ -215,33 +219,33 @@ class NotifyTest(unittest.TestCase):
     def test_text_is_passed_as_argv_not_interpolated_into_the_script(self):
         evil = 'x" & do shell script "touch /tmp/pwned" & "'
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
-                mock.patch.object(kb_cli, "_notifier_binary", return_value=None), \
+                mock.patch.object(notifier, "_notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
-            self.assertTrue(kb_cli.notify("title", evil))
+            self.assertTrue(notifier.notify("title", evil))
         cmd = run.call_args.args[0]
         self.assertEqual(cmd[-2:], [evil, "title"])
         self.assertNotIn(evil, " ".join(cmd[:-2]))
 
     def test_returns_false_without_a_notifier(self):
         with mock.patch.object(kb_cli.sys, "platform", "linux"), \
-                mock.patch.object(kb_cli, "_notifier_binary", return_value=None), \
+                mock.patch.object(notifier, "_notifier_binary", return_value=None), \
                 mock.patch.object(kb_cli.shutil, "which", return_value=None):
-            self.assertFalse(kb_cli.notify("t", "m"))
-            self.assertEqual(kb_cli.notify_status("t", "m"), "unavailable")
+            self.assertFalse(notifier.notify("t", "m"))
+            self.assertEqual(notifier.notify_status("t", "m"), "unavailable")
 
 
 class NotifierTest(unittest.TestCase):
     def run_status(self, code, **kwargs):
-        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=code)) as run:
-            return kb_cli.notify_status("title", "msg", **kwargs), run
+            return notifier.notify_status("title", "msg", **kwargs), run
 
     def test_notifier_gets_text_as_separate_argv_entries(self):
         evil = '"; rm -rf ~ #'
-        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
-            self.assertEqual(kb_cli.notify_status("title", evil, group="g"), "sent")
+            self.assertEqual(notifier.notify_status("title", evil, group="g"), "sent")
         self.assertEqual(run.call_args.args[0],
                          ["/n/terminal-notifier", "-title", "title", "-message", evil, "-group", "g"])
 
@@ -251,62 +255,62 @@ class NotifierTest(unittest.TestCase):
         self.assertEqual(run.call_count, 1)  # no osascript attempt
 
     def test_denied_falls_back_to_osascript_for_real_reminders(self):
-        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n/terminal-notifier"), \
+        with mock.patch.object(notifier, "_notifier_binary", return_value="/n/terminal-notifier"), \
                 mock.patch.object(kb_cli.sys, "platform", "darwin"), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/usr/bin/osascript"), \
                 mock.patch.object(kb_cli.subprocess, "run",
                                   side_effect=[mock.Mock(returncode=3), mock.Mock(returncode=0)]) as run:
-            self.assertEqual(kb_cli.notify_status("t", "m"), "sent")
+            self.assertEqual(notifier.notify_status("t", "m"), "sent")
         self.assertEqual(run.call_args_list[1].args[0][0], "osascript")
 
     def test_authorization_parsing_and_allowed(self):
         out = "terminal-notifier 3.1.0\n  authorization       denied\n  alerts              enabled\n"
-        with mock.patch.object(kb_cli, "_notifier_binary", return_value="/n"), \
+        with mock.patch.object(notifier, "_notifier_binary", return_value="/n"), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(stdout=out)):
-            self.assertEqual(kb_cli.notifier_authorization(), "denied")
-        with mock.patch.object(kb_cli, "_notifier_binary", return_value=None):
-            self.assertIsNone(kb_cli.notifier_authorization())
-        self.assertTrue(kb_cli.notifier_allowed("authorized"))
-        self.assertFalse(kb_cli.notifier_allowed("denied"))
-        self.assertFalse(kb_cli.notifier_allowed("not requested yet"))
-        self.assertFalse(kb_cli.notifier_allowed(None))
+            self.assertEqual(notifier.notifier_authorization(), "denied")
+        with mock.patch.object(notifier, "_notifier_binary", return_value=None):
+            self.assertIsNone(notifier.notifier_authorization())
+        self.assertTrue(notifier.notifier_allowed("authorized"))
+        self.assertFalse(notifier.notifier_allowed("denied"))
+        self.assertFalse(notifier.notifier_allowed("not requested yet"))
+        self.assertFalse(notifier.notifier_allowed(None))
 
     def test_test_notification_reports_each_outcome(self):
         cases = {"sent": True, "denied": False, "failed": False, "unavailable": False}
         for status, expected in cases.items():
-            with mock.patch.object(kb_cli, "notify_status", return_value=status), \
-                    mock.patch.object(kb_cli, "open_notification_settings") as opened:
-                ok, msg = kb_cli.send_test_notification()
+            with mock.patch.object(notifier, "notify_status", return_value=status), \
+                    mock.patch.object(notifier, "open_notification_settings") as opened:
+                ok, msg = notifier.send_test_notification()
             self.assertEqual(ok, expected, status)
             self.assertTrue(msg)
             self.assertEqual(opened.called, status == "denied")  # denial opens System Settings
             if status == "denied":
                 self.assertIn("System Settings", msg)
                 self.assertIn("kb remind test", msg)
-                self.assertIn(kb_cli.NOTIFIER_BUNDLE_ID, msg)
+                self.assertIn(notifier.NOTIFIER_BUNDLE_ID, msg)
 
     def test_finish_install_builds_the_app_then_tests(self):
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
-                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value="/tn.app"), \
-                mock.patch.object(kb_cli, "build_notifier_app", return_value=(True, "built it")) as build, \
-                mock.patch.object(kb_cli, "send_test_notification", return_value=(False, "NOT ALLOWED")):
-            ok, msg = kb_cli.finish_reminder_install()
+                mock.patch.object(notifier, "_terminal_notifier_app", return_value="/tn.app"), \
+                mock.patch.object(notifier, "build_notifier_app", return_value=(True, "built it")) as build, \
+                mock.patch.object(notifier, "send_test_notification", return_value=(False, "NOT ALLOWED")):
+            ok, msg = notifier.finish_reminder_install()
         build.assert_called_once()
         self.assertFalse(ok)
         self.assertEqual(msg.splitlines(), ["built it", "NOT ALLOWED"])
 
     def test_finish_install_explains_the_osascript_fallback_without_terminal_notifier(self):
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
-                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value=None), \
-                mock.patch.object(kb_cli, "build_notifier_app") as build, \
-                mock.patch.object(kb_cli, "send_test_notification", return_value=(True, "sent")):
-            ok, msg = kb_cli.finish_reminder_install()
+                mock.patch.object(notifier, "_terminal_notifier_app", return_value=None), \
+                mock.patch.object(notifier, "build_notifier_app") as build, \
+                mock.patch.object(notifier, "send_test_notification", return_value=(True, "sent")):
+            ok, msg = notifier.finish_reminder_install()
         build.assert_not_called()
         self.assertIn("brew install terminal-notifier", msg)
 
     def test_remind_test_action_sets_the_exit_code(self):
         for ok, code in ((True, 0), (False, 1)):
-            with mock.patch.object(kb_cli, "send_test_notification", return_value=(ok, "m")), \
+            with mock.patch.object(notifier, "send_test_notification", return_value=(ok, "m")), \
                     redirect_stdout(io.StringIO()), mock.patch.object(kb_cli.sys, "stderr", io.StringIO()):
                 self.assertEqual(kb_cli.cmd_remind(mock.Mock(action="test", ask=False)), code)
 
@@ -324,16 +328,16 @@ class BuildNotifierAppTest(unittest.TestCase):
 
     def test_builds_a_branded_copy_and_skips_an_identical_rebuild(self):
         import plistlib
-        ok, msg = kb_cli.build_notifier_app()
+        ok, msg = notifier.build_notifier_app()
         self.assertTrue(ok, msg)
         with open(os.path.join(self.app, "Contents", "Info.plist"), "rb") as f:
             info = plistlib.load(f)
-        self.assertEqual(info["CFBundleIdentifier"], kb_cli.NOTIFIER_BUNDLE_ID)
+        self.assertEqual(info["CFBundleIdentifier"], notifier.NOTIFIER_BUNDLE_ID)
         self.assertEqual(info["CFBundleName"], "kb reminders")
         self.assertTrue(os.path.exists(os.path.join(self.app, "Contents", "Resources", "kb-reminder.icns")))
-        self.assertTrue(os.access(kb_cli._notifier_binary(), os.X_OK))
+        self.assertTrue(os.access(notifier._notifier_binary(), os.X_OK))
         before = os.stat(os.path.join(self.app, "Contents", "Info.plist")).st_mtime_ns
-        ok, msg = kb_cli.build_notifier_app()
+        ok, msg = notifier.build_notifier_app()
         self.assertTrue(ok)
         self.assertIn("up to date", msg)  # re-signing would risk losing a granted permission
         self.assertEqual(before, os.stat(os.path.join(self.app, "Contents", "Info.plist")).st_mtime_ns)
@@ -341,14 +345,14 @@ class BuildNotifierAppTest(unittest.TestCase):
 
 class RemindersInfoTest(unittest.TestCase):
     def info(self, kind, state, auth="denied", built=True, stock=True):
-        with mock.patch.object(kb_cli, "_service_kind", return_value=kind), \
-                mock.patch.object(kb_cli, "_service_state", return_value=state), \
-                mock.patch.object(kb_cli, "reminder_status_line", return_value=(False, "msg")), \
-                mock.patch.object(kb_cli, "_timer_interval_minutes", return_value=5), \
-                mock.patch.object(kb_cli, "notifier_authorization", return_value=auth), \
-                mock.patch.object(kb_cli, "_notifier_binary", return_value="/n" if built else None), \
-                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value="/t.app" if stock else None):
-            return kb_cli.reminders_info()
+        with mock.patch.object(service, "_service_kind", return_value=kind), \
+                mock.patch.object(service, "_service_state", return_value=state), \
+                mock.patch.object(reminders, "reminder_status_line", return_value=(False, "msg")), \
+                mock.patch.object(service, "_timer_interval_minutes", return_value=5), \
+                mock.patch.object(notifier, "notifier_authorization", return_value=auth), \
+                mock.patch.object(notifier, "_notifier_binary", return_value="/n" if built else None), \
+                mock.patch.object(notifier, "_terminal_notifier_app", return_value="/t.app" if stock else None):
+            return reminders.reminders_info()
 
     def test_unsupported_platform(self):
         self.assertEqual(self.info(None, {}), {"supported": False})
@@ -372,22 +376,22 @@ class OpenSettingsTest(unittest.TestCase):
         with mock.patch.object(kb_cli.sys, "platform", "darwin"), \
                 mock.patch.object(kb_cli.sys.stdout, "isatty", return_value=False), \
                 mock.patch.object(kb_cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
-            self.assertFalse(kb_cli.open_notification_settings())
+            self.assertFalse(notifier.open_notification_settings())
             run.assert_not_called()
-            self.assertTrue(kb_cli.open_notification_settings(force=True))
-            self.assertEqual(run.call_args.args[0], ["open", kb_cli.NOTIFICATION_SETTINGS_URL])
+            self.assertTrue(notifier.open_notification_settings(force=True))
+            self.assertEqual(run.call_args.args[0], ["open", notifier.NOTIFICATION_SETTINGS_URL])
 
     def test_never_on_linux(self):
         with mock.patch.object(kb_cli.sys, "platform", "linux"):
-            self.assertFalse(kb_cli.open_notification_settings(force=True))
+            self.assertFalse(notifier.open_notification_settings(force=True))
 
 
 class TodoWordCommandTest(unittest.TestCase):
     def run_words(self, *words):
         err = io.StringIO()
-        with mock.patch.object(kb_cli, "bd_snooze") as snooze, \
-                mock.patch.object(kb_cli, "bd_update") as update, \
-                mock.patch.object(kb_cli, "bd_unsnooze", return_value="woken") as unsnooze, \
+        with mock.patch.object(todos, "bd_snooze") as snooze, \
+                mock.patch.object(todos, "bd_update") as update, \
+                mock.patch.object(todos, "bd_unsnooze", return_value="woken") as unsnooze, \
                 redirect_stdout(io.StringIO()), mock.patch.object(kb_cli.sys, "stderr", err):
             rc = kb_cli._todo_word_command("/r", list(words))
         return rc, snooze, update, unsnooze
@@ -413,12 +417,12 @@ class TodoWordCommandTest(unittest.TestCase):
 class ReminderStatusLineTest(unittest.TestCase):
     def status(self, kind, state, have_notifier=True, bundle=None, stock_app=None):
         """bundle: the built kb reminders app's authorization string (None = not built)."""
-        with mock.patch.object(kb_cli, "_service_state", return_value=state), \
+        with mock.patch.object(service, "_service_state", return_value=state), \
                 mock.patch.object(kb_cli.shutil, "which", return_value="/x" if have_notifier else None), \
-                mock.patch.object(kb_cli, "_notifier_binary", return_value="/n" if bundle else None), \
-                mock.patch.object(kb_cli, "notifier_authorization", return_value=bundle), \
-                mock.patch.object(kb_cli, "_terminal_notifier_app", return_value=stock_app):
-            return kb_cli.reminder_status_line(kind)
+                mock.patch.object(notifier, "_notifier_binary", return_value="/n" if bundle else None), \
+                mock.patch.object(notifier, "notifier_authorization", return_value=bundle), \
+                mock.patch.object(notifier, "_terminal_notifier_app", return_value=stock_app):
+            return reminders.reminder_status_line(kind)
 
     def test_built_app_needs_notification_permission(self):
         up = {"installed": True, "running": False, "detail": None}
@@ -459,8 +463,8 @@ class ReminderStatusLineTest(unittest.TestCase):
         self.assertIn("osascript", msg)
 
     def test_unsupported_platform(self):
-        with mock.patch.object(kb_cli, "_service_kind", return_value=None):
-            ok, msg = kb_cli.reminder_status_line()
+        with mock.patch.object(service, "_service_kind", return_value=None):
+            ok, msg = reminders.reminder_status_line()
         self.assertFalse(ok)
         self.assertIn("kb remind check", msg)
 

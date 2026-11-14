@@ -247,13 +247,14 @@ class UpdateFlowTest(unittest.TestCase):
 
     def run_refresh(self, capture=False, defer=False, tty=True, configured=False):
         from pkb_cli import cli as kb_cli
-        opts = kb_cli._UpdateOpts(False, capture, defer)
+        from pkb_cli import updater
+        opts = updater._UpdateOpts(False, capture, defer)
         out = io.StringIO()
         with mock.patch.object(wd.pc, "is_interactive", return_value=tty), \
-                mock.patch.object(kb_cli, "installed_kb_argv", side_effect=lambda *a: ["kb", *a]), \
+                mock.patch.object(updater, "installed_kb_argv", side_effect=lambda *a: ["kb", *a]), \
                 mock.patch.object(kb_cli.remind_push, "get_config", return_value=("u", "t") if configured else None), \
-                mock.patch.object(kb_cli, "_run_update_step") as step, redirect_stdout(out):
-            kb_cli._refresh_worker_after_update(opts)
+                mock.patch.object(updater, "_run_update_step") as step, redirect_stdout(out):
+            updater._refresh_worker_after_update(opts)
         return step, out.getvalue()
 
     def test_in_a_terminal_it_runs_deploy_in_ask_mode(self):
