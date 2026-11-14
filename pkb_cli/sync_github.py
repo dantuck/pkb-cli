@@ -55,15 +55,7 @@ def fetch_issues(repo, updated_after):
 
 
 def write_issue(root, issue, existing_paths, all_ids, inbox_all):
-    """Write or refresh the sources/github/ mirror for one issue.
-
-    A source_id already on disk gets its mirror updated in place (title/body/
-    updated timestamp) rather than skipped outright -- otherwise an issue that
-    changes after its first sync (retitled, edited, closed) would leave a
-    permanently stale mirror. The inbox stub is only ever created once, on
-    first sight, so this can't reopen something already triaged out of inbox.
-    Returns (path, "added" | "updated" | "unchanged").
-    """
+    """Write or refresh the sources/github/ mirror for one issue (see pc.write_source_mirror)."""
     source_id = str(issue["number"])
     created = issue.get("created_at") or pc.now_iso()
     updated = issue.get("updated_at") or created
@@ -71,42 +63,8 @@ def write_issue(root, issue, existing_paths, all_ids, inbox_all):
     body = issue.get("body") or ""
     html_url = issue.get("html_url") or ""
     content = f"{body}\n\n[GitHub issue]({html_url})\n" if html_url else body
-
-    existing_path = existing_paths.get(source_id)
-    if existing_path:
-        fm, _ = pc.read_entry(existing_path)
-        if fm.get("updated") == updated and fm.get("title") == title:
-            return existing_path, "unchanged"
-        fm["updated"] = updated
-        fm["title"] = title
-        pc.write_entry(existing_path, fm, content)
-        return existing_path, "updated"
-
-    entry_id = pc.gen_id(all_ids)
-    fm = {
-        "id": entry_id,
-        "created": created,
-        "updated": updated,
-        "type": "source",
-        "extension": "source",
-        "source": "github",
-        "source_id": source_id,
-        "tags": [],
-        "links": [],
-        "title": title,
-    }
-    path = os.path.join(root, "sources", "github", f"{entry_id}.md")
-    pc.write_entry(path, fm, content)
-
-    if inbox_all:
-        inbox_id = pc.gen_id(all_ids)
-        inbox_fm = dict(fm)
-        inbox_fm.update({"id": inbox_id, "type": "inbox", "extension": "inbox", "links": [entry_id]})
-        inbox_path = os.path.join(root, "inbox", f"{inbox_id}.md")
-        pc.write_entry(inbox_path, inbox_fm, f"Synced from GitHub (see [{entry_id}]).\n\n{content}")
-
-    return path, "added"
-
+    return pc.write_source_mirror(root, "github", "GitHub", source_id, title, content, created, updated,
+                                  existing_paths, all_ids, inbox_all)
 
 def main():
     root = pc.get_repo_root()
@@ -115,38 +73,14 @@ def main():
     if not repo:
         pc.fail(f"missing GitHub repo: set ${config['repo_env']} in the environment (owner/repo)")
 
-    cursors = pc.load_cursors(root)
-    updated_after = cursors.get("github", {}).get("last_updated_after")
-
+    updated_after = pc.load_cursors(root).get("github", {}).get("last_updated_after")
     try:
         issues = fetch_issues(repo, updated_after)
     except RuntimeError as e:
         pc.fail(str(e))
-
-    if not issues:
-        print("sync_github: no new/updated issues")
-        return
-
-    existing_paths = pc.existing_source_paths(root, "github")
-    all_ids = pc.collect_existing_ids(root)
-    added, updated_count = 0, 0
-    last_updated = updated_after
-    try:
-        for issue in issues:
-            path, outcome = write_issue(root, issue, existing_paths, all_ids, config["inbox_all_issues"])
-            existing_paths[str(issue["number"])] = path
-            if outcome == "added":
-                added += 1
-            elif outcome == "updated":
-                updated_count += 1
-            last_updated = issue.get("updated_at") or last_updated
-    except Exception as e:
-        pc.fail(f"failed writing issue {issue.get('number')}: {e} (cursor not advanced)")
-
-    cursors.setdefault("github", {})["last_updated_after"] = last_updated
-    pc.save_cursors(cursors, root)
-    print(f"sync_github: {added} new, {updated_count} updated, cursor advanced to {last_updated}")
-
+    pc.mirror_items(root, "github", issues, lambda i: i["number"],
+                    lambda i, paths, ids: write_issue(root, i, paths, ids, config["inbox_all_issues"]),
+                    "last_updated_after", updated_after)
 
 if __name__ == "__main__":
     main()
