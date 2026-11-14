@@ -67,7 +67,7 @@ def missing_deps_with_formulas(tools, sync_sources):
     return missing
 
 
-def tool_status(sync_sources=None):
+def tool_status(sync_sources=None, check_auth=True):
     """Presence (and, where SOURCE_META declares an auth_check, auth status) of
     every CLI tool kb cares about: the always-checked ones (sops for encrypted
     credentials, rg/fzf for Tier 1 search) plus whatever cli_tool each
@@ -75,7 +75,8 @@ def tool_status(sync_sources=None):
     cli_tool/auth_check in its SOURCE_META gets a "<tool>"/"<tool>_auth" entry
     here automatically, no edit needed. Callers that already discovered sync
     sources for their own use (e.g. `kb setup`) can pass them in to avoid
-    re-scanning/re-importing every sync_<name>.py a second time."""
+    re-scanning/re-importing every sync_<name>.py a second time. `check_auth=False`
+    skips running the auth checks (those report False) for callers that only need the PATH.""" 
     if sync_sources is None:
         sync_sources = sources.discover_sync_sources()
     cli_tools = set(BUILTIN_BREW_FORMULAS)
@@ -88,7 +89,7 @@ def tool_status(sync_sources=None):
         if cli_tool and auth_check:
             status[f"{cli_tool}_auth"] = (
                 subprocess.run(auth_check, capture_output=True).returncode == 0
-                if status[cli_tool] else False
+                if check_auth and status[cli_tool] else False
             )
     return status
 

@@ -65,6 +65,7 @@ def write_bead(root, bead, existing_paths, all_ids, inbox_all):
     return pc.write_source_mirror(root, "beads", "beads", source_id, title, body, created, updated,
                                   existing_paths, all_ids, inbox_all)
 
+
 def main():
     root = pc.get_repo_root()
     config = pc.load_config(root)["sync"]["beads"]
@@ -86,6 +87,7 @@ def main():
     pc.mirror_items(root, "beads", beads, lambda b: b.get("id"),
                     lambda b, paths, ids: write_bead(root, b, paths, ids, config["inbox_all"]),
                     "last_timestamp", since_timestamp, noun="bead")
+
 
 if __name__ == "__main__":
     main()
