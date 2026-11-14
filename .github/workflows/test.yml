@@ -16,7 +16,8 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
   test:
-    runs-on: ubuntu-latest
+    # pinned: ubuntu-latest (26.04) has no Python 3.9 build for setup-python
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.12"]
