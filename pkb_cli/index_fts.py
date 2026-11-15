@@ -151,10 +151,20 @@ def _embed(conn, model_ref, wanted, allow_download):
         return 0, str(e)
 
 
+def run(root, full=False):
+    """Index `root` for the CLI/web entry points; returns an exit code instead of raising, so callers
+    that used to shell out to `python -m pkb_cli.index_fts` can run it in-process and keep the same
+    contract (progress on stdout, 0 on success, nonzero plus a message on failure)."""
+    try:
+        index_repo(root, full=full, allow_download=True)
+    except Exception as e:
+        print(f"error: index failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main():
-    root = pc.get_repo_root()
-    full = "--full" in sys.argv[1:]
-    index_repo(root, full=full, allow_download=True)
+    sys.exit(run(pc.get_repo_root(), full="--full" in sys.argv[1:]))
 
 
 if __name__ == "__main__":

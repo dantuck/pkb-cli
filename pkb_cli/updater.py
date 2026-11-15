@@ -8,7 +8,6 @@ import sys
 import time
 import typing
 import urllib.error
-import urllib.request
 
 from . import __version__
 from . import pkb_common as pc
@@ -23,11 +22,12 @@ LEGACY_VERSION_PATH = os.path.join(TOOL_ROOT, ".pkb-cli-version")  # marker left
 TOOL_REPO_SLUG = os.environ.get("PKB_CLI_REPO", "dantuck/pkb-cli")
 
 
-def _git(*args, cwd=TOOL_ROOT):
-    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+def _git(*args, cwd=None):
+    return subprocess.run(["git", "-C", cwd or TOOL_ROOT, *args], capture_output=True, text=True)
 
 
 def _github_request(url):
+    import urllib.request  # deferred: pulls in ssl/http, which most kb commands never need
     req = urllib.request.Request(url, headers={"User-Agent": "pkb-cli"})
     with urllib.request.urlopen(req, timeout=30, context=pc.ssl_context()) as resp:
         return resp.read()
@@ -82,9 +82,30 @@ def update_status(fetch=False):
     if fetch:
         _git("fetch", "--quiet", "origin")
 
-    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    if upstream.returncode != 0:
+    # one `status --branch` call yields HEAD, the upstream, how far behind it is, and whether the
+    # tree is dirty -- instead of a separate git process for each
+    status = _git("status", "--porcelain=v2", "--branch")
+    if status.returncode != 0:
         return result
+    oid = upstream = behind = None
+    dirty = False
+    for line in status.stdout.splitlines():
+        if line.startswith("# branch.oid "):
+            oid = line.split(" ", 2)[2]
+        elif line.startswith("# branch.upstream "):
+            upstream = line.split(" ", 2)[2]
+        elif line.startswith("# branch.ab "):
+            behind = int(line.split()[3].lstrip("-"))
+        elif not line.startswith("#"):
+            dirty = True
+    if upstream is None or behind is None:  # no upstream configured, or its ref doesn't exist
+        return result
+    result["upstream"] = upstream
+    result["local"] = None if oid == "(initial)" else oid
+    result["remote"] = _git("rev-parse", upstream).stdout.strip()
+    result["behind"] = behind
+    result["dirty"] = dirty
+    return result
     result["upstream"] = upstream.stdout.strip()
 
     result["local"] = _git("rev-parse", "HEAD").stdout.strip()
