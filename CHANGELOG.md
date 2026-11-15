@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.1](https://github.com/dantuck/pkb-cli/compare/v0.13.0...v0.13.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* release the admin lock before sending the response ([2ae7044](https://github.com/dantuck/pkb-cli/commit/2ae70442bf617ce135c7e410a42792656a73b91c))
+* write journal rollups to journal/summaries as journal entries ([ff6ba32](https://github.com/dantuck/pkb-cli/commit/ff6ba3295f6ae4b578f30aee71d105eec4b23372))
+
+
+### Performance Improvements
+
+* index in-process, defer network imports, batch update_status git calls ([8f5b705](https://github.com/dantuck/pkb-cli/commit/8f5b705297c7c60eafa1172fa8c6ec6315b7943c))
+* list sync sources without importing them ([36e9e58](https://github.com/dantuck/pkb-cli/commit/36e9e58c652bb1bbb5cdd2c8f487f87cc731fd81))
+
 ## [0.13.0](https://github.com/dantuck/pkb-cli/compare/v0.12.0...v0.13.0) (2026-11-15)
 
 
