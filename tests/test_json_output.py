@@ -23,7 +23,6 @@ class JsonOutputTest(unittest.TestCase):
             os.makedirs(os.path.join(self.root, d), exist_ok=True)
         for patch in (mock.patch.object(pc, "get_repo_root", lambda: self.root),
                       mock.patch.object(pc, "git_autocommit", lambda *a, **k: None),
-                      mock.patch.object(kb_cli, "_reindex_fast", lambda root: None),
                       mock.patch("pkb_cli.pkb_entries._reindex_fast", lambda root: None)):
             patch.start()
             self.addCleanup(patch.stop)

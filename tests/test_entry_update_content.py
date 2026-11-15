@@ -1,4 +1,4 @@
-"""Tests for pkb_cli/cli.py's entry_update_content -- the write path behind kb
+"""Tests for pkb_cli/pkb_entries.py's entry_update_content -- the write path behind kb
 web's content-edit panel. Runs against a throwaway repo dir
 so nothing here touches a real .pkb.
 """
@@ -11,7 +11,6 @@ from pkb_cli import pkb_common as pc  # noqa: E402
 from pkb_cli import pkb_entries  # noqa: E402
 
 
-from pkb_cli import cli as kb_cli  # noqa: E402
 
 
 class EntryUpdateContentTest(unittest.TestCase):
@@ -62,12 +61,12 @@ class EntryUpdateContentTest(unittest.TestCase):
         return pc.read_entry(self.path)
 
     def test_unknown_entry_returns_none(self):
-        result = kb_cli.entry_update_content(self.root, "0000-00-00-0000", title="x")
+        result = pkb_entries.entry_update_content(self.root, "0000-00-00-0000", title="x")
         self.assertIsNone(result)
         self.assertEqual(self.reindex_calls, 0)
 
     def test_updates_title_only(self):
-        result = kb_cli.entry_update_content(self.root, self.entry_id, title="New title")
+        result = pkb_entries.entry_update_content(self.root, self.entry_id, title="New title")
         self.assertEqual(result["title"], "New title")
         self.assertEqual(result["body"], "Original body.\n")
 
@@ -78,7 +77,7 @@ class EntryUpdateContentTest(unittest.TestCase):
         self.assertEqual(self.reindex_calls, 1)
 
     def test_updates_body_only(self):
-        result = kb_cli.entry_update_content(self.root, self.entry_id, body="New body.\n")
+        result = pkb_entries.entry_update_content(self.root, self.entry_id, body="New body.\n")
         self.assertEqual(result["title"], "Original title")
         self.assertEqual(result["body"], "New body.\n")
 
@@ -88,7 +87,7 @@ class EntryUpdateContentTest(unittest.TestCase):
         self.assertEqual(self.reindex_calls, 1)
 
     def test_updates_title_and_body(self):
-        result = kb_cli.entry_update_content(self.root, self.entry_id, title="New title", body="New body.\n")
+        result = pkb_entries.entry_update_content(self.root, self.entry_id, title="New title", body="New body.\n")
         self.assertEqual(result, {"title": "New title", "body": "New body.\n"})
 
         fm, body = self._read()
@@ -97,7 +96,7 @@ class EntryUpdateContentTest(unittest.TestCase):
         self.assertEqual(self.reindex_calls, 1)
 
     def test_no_change_is_a_noop(self):
-        result = kb_cli.entry_update_content(
+        result = pkb_entries.entry_update_content(
             self.root, self.entry_id, title="Original title", body="Original body.\n"
         )
         self.assertEqual(result, {"title": "Original title", "body": "Original body.\n"})
@@ -107,7 +106,7 @@ class EntryUpdateContentTest(unittest.TestCase):
         self.assertEqual(self.reindex_calls, 0)
 
     def test_no_args_is_a_noop(self):
-        result = kb_cli.entry_update_content(self.root, self.entry_id)
+        result = pkb_entries.entry_update_content(self.root, self.entry_id)
         self.assertEqual(result, {"title": "Original title", "body": "Original body.\n"})
         self.assertEqual(self.reindex_calls, 0)
 

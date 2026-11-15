@@ -5,6 +5,7 @@ Shared by the `kb` CLI and `kb web`. Everything here operates on an explicit
 `root` and returns plain dicts (`{"error": ...}` on failure) rather than
 printing or exiting, so both front ends can render results their own way.
 """
+import json
 import os
 import re
 from datetime import datetime
@@ -378,3 +379,43 @@ def _all_tags(root):
             continue
         tags.update(fm.get("tags") or [])
     return sorted(tags)
+
+
+def show_links(root, target_id, json_out=False):
+    """Print forward links + backlinks for an entry. Shared by cmd_links and the
+    interactive search picker's 'links' action."""
+    forward = None
+    backlinks = []
+    target_path = None
+
+    for path in pc.iter_markdown_files(root):
+        try:
+            fm, _ = pc.read_entry(path)
+        except ValueError:
+            continue
+        if fm.get("id") == target_id:
+            forward = fm.get("links") or []
+            target_path = os.path.relpath(path, root)
+        if target_id in (fm.get("links") or []):
+            backlinks.append((fm.get("id"), fm.get("title"), os.path.relpath(path, root)))
+
+    if forward is None:
+        return pc.report_error(f"no entry with id '{target_id}'", json_out)
+
+    if json_out:
+        print(json.dumps({
+            "id": target_id,
+            "path": target_path,
+            "forward": forward,
+            "backlinks": [{"id": lid, "title": title, "path": path} for lid, title, path in backlinks],
+        }))
+        return 0
+
+    print(f"{target_id}  ({target_path})")
+    print(f"\nforward links ({len(forward)}):")
+    for link_id in forward:
+        print(f"  -> {link_id}")
+    print(f"\nbacklinks ({len(backlinks)}):")
+    for link_id, title, path in backlinks:
+        print(f"  <- {link_id}  {title}  ({path})")
+    return 0

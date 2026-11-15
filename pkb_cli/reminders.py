@@ -1,4 +1,5 @@
 """Installing, inspecting and summarising the TODO reminder timer."""
+import os
 import shutil
 import sys
 
@@ -72,3 +73,13 @@ def reminder_status_line(kind=None, state=None):
         if not shutil.which(notifier_tool):
             return False, f"reminders are scheduled but `{notifier_tool}` isn't installed, so no notification can appear"
     return True, "TODO reminders are scheduled (`kb remind status`)"
+
+
+def reminders_uninstall(kind):
+    """Remove the reminder timer (and, on macOS, the notifier app bundle); returns an exit code."""
+    rc = service._interval_service_uninstall(kind, "remind")
+    app = notifier._notifier_app_path()
+    if sys.platform == "darwin" and os.path.isdir(app):
+        shutil.rmtree(app)
+        print(f"removed {app}")
+    return rc
