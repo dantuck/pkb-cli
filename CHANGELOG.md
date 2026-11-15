@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.0](https://github.com/dantuck/pkb-cli/compare/v0.12.0...v0.13.0) (2026-11-15)
+
+
+### Features
+
+* add spec-driven project workflow ([7e0eb4b](https://github.com/dantuck/pkb-cli/commit/7e0eb4b24133228ec170b887a741f0be76b3450e))
+
+
+### Bug Fixes
+
+* **search:** fall back to plain terms on invalid queries ([f7a4761](https://github.com/dantuck/pkb-cli/commit/f7a4761ff8716f0f72dec7845ee148587d263900))
+
+
+### Documentation
+
+* document project specs, docs and agent files ([a13e41e](https://github.com/dantuck/pkb-cli/commit/a13e41e38f67d58419b03e5532f748a4631555f9))
+
 ## [0.12.0](https://github.com/dantuck/pkb-cli/compare/v0.11.0...v0.12.0) (2026-10-30)
 
 
