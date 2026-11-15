@@ -48,6 +48,30 @@ kb setup [--yes]                # guided onboarding: PATH, Claude Code skill, op
                                  # deps (asks before each), hook, index, bd store, and (default no)
                                  # the `kb remind` timer.
                                  # --yes skips prompts and accepts defaults (scripted installs)
+kb project init|status [--dir DIR] [--json]
+                                  scaffold / inspect a code project's docs/ (Diataxis + specs/ + decisions/)
+kb spec new "<title>" [--tags a,b] [--json]   create docs/specs/NNNN-slug.md (status: draft)
+kb spec list [--status S] [--json]            specs with status and task progress
+kb spec show <id> [--json]                    print a spec (id: 3, 0003, or a slug fragment)
+kb spec status <id> [<status>] [--by ID] [--force] [--json]
+                                  show or move a spec: draft -> approved -> implementing -> done
+                                  (or superseded/abandoned); gated, --force skips the gates
+kb spec task <id> <T-id> [--undo] [--json]    tick (or untick) a task under "## Tasks"; ids (T1, T2, ...)
+                                  are written into the spec on first use and never change; closes a linked bd issue
+kb spec todos <id> [--json]                   create a bd issue per open task, recorded as [bd:<id>] on the task
+kb spec renumber <slug> [--json]             give a spec the next free id (after a merge produced duplicate ids)
+kb spec resume [--quiet] [--json]             implementing/approved specs and their next open task
+                                  (--quiet prints nothing when none, which is what the SessionStart hook runs)
+kb adr new|list|show|status|renumber ...               decision records in docs/decisions/; statuses
+                                  proposed, accepted, deprecated, superseded (--by ID)
+kb agents init [--link] [--hook] [--guard] [--json]  create/refresh AGENTS.md (managed kb block) and a CLAUDE.md that
+                                  imports it; --link adds the import to an existing CLAUDE.md; --hook adds a
+                                  SessionStart hook (`kb spec resume`) to .claude/settings.json;
+                                  --guard adds permission prompts before an agent approves a spec or uses --force
+kb agents check [--json]          read-only: report AGENTS.md / CLAUDE.md problems with the fix
+kb docs new <type> "<title>" [--json]         add a page in the right docs/ quadrant from a skeleton
+kb docs check [--json]                        misfiled, unlinked or step-heavy explanation pages, broken links
+kb docs search "<query>" [--limit N] [--json] AND-search docs/ pages, best match first
 kb doctor                       # diagnose issues -- read-only, never writes anything
 kb update [--check]             # reinstall the latest release (via uv/pipx), refresh installed services, or git pull
                                  # for a source checkout; --check reports without upgrading

@@ -10,13 +10,14 @@ writing for four different needs.
   meaning, triaging the
   inbox, setting up ingestion credentials, installing the Claude Code skill,
   using the web UI, getting [reminded about a TODO](how-to/get-reminded-about-a-todo.md)
-  on your desktop or [your phone](how-to/get-phone-reminders.md)).
+  on your desktop or [your phone](how-to/get-phone-reminders.md), and
+  [working spec-first in a project](how-to/work-spec-first-in-a-project.md)).
 - **[Reference](reference/)** — information-oriented lookup: the full CLI
   command surface, the data repo layout, the frontmatter schema, `config.yml` keys, the
   ingestion contract, journal file conventions.
 - **[Explanation](explanation/)** — understanding-oriented discussion of why
   the tool is built this way, including the search architecture's tiering and
-  the [phone reminders](explanation/design.md#phone-reminders) trust model.
+  the [phone reminders](explanation/design.md#phone-reminders) trust model, and [why specs, decisions and AGENTS.md](explanation/spec-driven-development.md).
 
 This mirrors the content model `kb` itself enforces on your notes — see
 [explanation: design principles](explanation/design.md).
