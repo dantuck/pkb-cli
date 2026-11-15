@@ -2,10 +2,9 @@
 import os
 from datetime import datetime
 
+from . import journal
 from . import pkb_common as pc
 from . import pkb_entries
-
-_emit = pc.emit_result
 
 
 def promote(root, path, fm, body, target_type, json_out=False):
@@ -20,7 +19,7 @@ def promote(root, path, fm, body, target_type, json_out=False):
     pc.write_entry(new_path, fm, body)
     os.remove(path)
     rel = os.path.relpath(new_path, root)
-    _emit(json_out, {"action": "promote", "id": fm["id"], "type": target_type, "path": rel},
+    pc.emit_result(json_out, {"action": "promote", "id": fm["id"], "type": target_type, "path": rel},
           f"promoted -> {rel}")
     pkb_entries._reindex_fast(root)
     pc.git_autocommit(root, f"inbox promote: {title} -> {target_type}")
@@ -33,26 +32,14 @@ def redirect(root, path, fm, body, json_out=False):
     interactive picker and non-interactive `kb inbox <id> redirect`."""
     title = fm.get("title") or os.path.basename(path)
     created_dt = pc.parse_iso(fm.get("created")) or datetime.now().astimezone()
-    journal_dir = os.path.join(root, "journal", f"{created_dt.year:04d}", f"{created_dt.month:02d}")
-    journal_path = os.path.join(journal_dir, f"{created_dt.date().isoformat()}.md")
-    if not os.path.exists(journal_path):
-        all_ids = pc.collect_existing_ids(root)
-        jid = pc.gen_id(all_ids, dt=created_dt)
-        now_s = pc.now_iso()
-        jfm = {
-            "id": jid, "created": now_s, "updated": now_s,
-            "type": "journal", "extension": "journal", "source": "manual",
-            "source_id": None, "tags": [], "links": [],
-            "title": created_dt.date().isoformat(),
-        }
-        pc.write_entry(journal_path, jfm, f"# {created_dt.date().isoformat()}\n\n")
+    journal_path = journal._ensure_journal_entry(root, created_dt.date())
     with open(journal_path, "r", encoding="utf-8") as f:
         existing = f.read()
     with open(journal_path, "w", encoding="utf-8") as f:
         f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
     os.remove(path)
     rel = os.path.relpath(journal_path, root)
-    _emit(json_out, {"action": "redirect", "id": fm.get("id"), "path": rel}, f"redirected -> {rel}")
+    pc.emit_result(json_out, {"action": "redirect", "id": fm.get("id"), "path": rel}, f"redirected -> {rel}")
     pkb_entries._reindex_fast(root)
     pc.git_autocommit(root, f"inbox redirect: {title}")
     return 0
@@ -61,7 +48,7 @@ def redirect(root, path, fm, body, json_out=False):
 def discard(root, path, json_out=False):
     name = os.path.basename(path)
     os.remove(path)
-    _emit(json_out, {"action": "discard", "name": name}, f"discarded {name}")
+    pc.emit_result(json_out, {"action": "discard", "name": name}, f"discarded {name}")
     pkb_entries._reindex_fast(root)
     pc.git_autocommit(root, f"inbox discard: {name}")
     return 0

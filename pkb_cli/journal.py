@@ -20,6 +20,15 @@ def _journal_path(root, target):
     return os.path.join(dir_path, f"{target.isoformat()}.md")
 
 
+def _journal_fm(entry_id, title, created, updated, tags=(), links=()):
+    """Frontmatter for a journal-extension entry (a daily file or a monthly rollup)."""
+    return {
+        "id": entry_id, "created": created, "updated": updated,
+        "type": "journal", "extension": "journal", "source": "manual", "source_id": None,
+        "tags": list(tags), "links": list(links), "title": title,
+    }
+
+
 def _ensure_journal_entry(root, target):
     """Create target's journal file (with frontmatter) if it doesn't exist yet.
     Returns its path either way."""
@@ -28,18 +37,7 @@ def _ensure_journal_entry(root, target):
         all_ids = pc.collect_existing_ids(root)
         now = pc.now_iso()
         entry_id = pc.gen_id(all_ids, dt=datetime.combine(target, datetime.now().time()))
-        fm = {
-            "id": entry_id,
-            "created": now,
-            "updated": now,
-            "type": "journal",
-            "extension": "journal",
-            "source": "manual",
-            "source_id": None,
-            "tags": [],
-            "links": [],
-            "title": target.isoformat(),
-        }
+        fm = _journal_fm(entry_id, target.isoformat(), now, now)
         pc.write_entry(file_path, fm, f"# {target.isoformat()}\n\n")
     return file_path
 
@@ -213,18 +211,8 @@ def journal_rollup(root, month_arg, json_out=False):
         entry_id = pc.gen_id(pc.collect_existing_ids(root), dt=datetime(year, month, 1))
         created = now
 
-    fm = {
-        "id": entry_id,
-        "created": created,
-        "updated": now,
-        "type": "journal",
-        "extension": "journal",
-        "source": "manual",
-        "source_id": None,
-        "tags": ["journal-summary"],
-        "links": day_ids,
-        "title": f"Journal summary: {month_label}",
-    }
+    fm = _journal_fm(entry_id, f"Journal summary: {month_label}", created, now,
+                     tags=["journal-summary"], links=day_ids)
 
     body = f"# Journal summary: {month_label}\n\n{len(days)} entries.\n"
     if tag_counts:
