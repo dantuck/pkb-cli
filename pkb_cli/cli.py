@@ -27,6 +27,7 @@ from . import service
 from . import health
 from . import journal
 from . import project
+from . import projdocs
 from . import reminders
 from . import sources
 from . import todos
@@ -195,16 +196,8 @@ def _search_interactive(root, rows):
     return 0
 
 
-def _fail(message, json_out=False, code=1):
-    """Report an error on stderr -- as {"error": ...} JSON under --json, so a caller
-    parsing the output gets one shape on both success and failure -- and return `code`."""
-    print(json.dumps({"error": message}) if json_out else f"error: {message}", file=sys.stderr)
-    return code
-
-
-def _emit(json_out, payload, text):
-    """Print `payload` as one JSON line under --json, else the human `text`."""
-    print(json.dumps(payload) if json_out else text)
+_fail = pc.report_error
+_emit = pc.emit_result
 
 
 def cmd_new(args):
@@ -1641,7 +1634,7 @@ def cmd_doctor(args):
         root = None
     ok, todo = health.doctor_checks(root)
 
-    p_ok, p_todo = project.doctor_lines()
+    p_ok, p_todo = projdocs.doctor_lines()
     ok, todo = ok + p_ok, todo + p_todo
 
     print("kb doctor\n")
@@ -2091,6 +2084,7 @@ def build_parser():
     p.set_defaults(func=lambda args: parser.print_help() or 0)
 
     project.add_parsers(sub)
+    projdocs.add_parser(sub)
 
     parser._subcommands = list(sub.choices)  # for the "did you mean" suggestion
     return parser
