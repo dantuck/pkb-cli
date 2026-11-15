@@ -21,6 +21,8 @@ pkb/
     2026/
       08/
         2026-08-31.md
+    summaries/
+      2026-08.md
 
   inbox/
 
@@ -45,7 +47,9 @@ pkb/
   triaged core content only. Nothing is written here automatically by a sync
   script.
 - `journal/YYYY/MM/YYYY-MM-DD.md` — one file per day, append-only during the
-  day. See [journal](journal.md).
+  day. `journal/summaries/YYYY-MM.md` holds the generated monthly rollups —
+  the one place kb writes a derived page, kept out of the core dirs on
+  purpose. See [journal](journal.md).
 - `inbox/` — landing zone for anything not yet triaged. Nothing is permanent
   here — see [how-to: triage the inbox](../how-to/triage-the-inbox.md).
 - `sources/<tool>/` — raw, machine-written mirrors of external systems. Never

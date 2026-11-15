@@ -1,4 +1,6 @@
 """Journal helpers: appending (single line vs block), listing newest-first, month math, on-this-day."""
+import contextlib
+import io
 import os
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from unittest import mock
 
 from pkb_cli import journal
 from pkb_cli import pkb_common as pc
+from pkb_cli import validate_frontmatter
 
 
 class JournalTest(unittest.TestCase):
@@ -62,6 +65,47 @@ class JournalTest(unittest.TestCase):
         labels = [label for label, _d, _p in journal._on_this_day(self.root, target)]
         self.assertEqual(labels[0], "1 week ago")
         self.assertEqual(len(labels), 2)
+
+    # ---------- monthly rollup ----------
+
+    def _rollup(self, month="2026-03"):
+        journal.journal_append(self.root, date(2026, 3, 5), "one")
+        journal.journal_append(self.root, date(2026, 3, 9), "two")
+        with contextlib.redirect_stdout(io.StringIO()):
+            return journal.journal_rollup(self.root, month)
+
+    def test_rollup_is_a_journal_extension_entry_outside_the_core_dirs(self):
+        self.assertEqual(self._rollup(), 0)
+        path = os.path.join(self.root, "journal", "summaries", "2026-03.md")
+        fm, body = pc.read_entry(path)
+        self.assertEqual((fm["type"], fm["extension"]), ("journal", "journal"))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "reference")))
+        self.assertIn("2 entries.", body)
+        self.assertEqual(validate_frontmatter.validate_repo(self.root), [])
+
+    def test_rollup_page_is_not_mistaken_for_a_daily_entry(self):
+        self._rollup()
+        self.assertEqual([d for d, _p in journal.list_journal_entries(self.root)], ["2026-03-09", "2026-03-05"])
+        self.assertEqual(journal.journal_months(self.root), ["2026-03"])
+
+    def test_rerunning_a_rollup_refreshes_the_same_id(self):
+        self._rollup()
+        path = os.path.join(self.root, "journal", "summaries", "2026-03.md")
+        first = pc.read_entry(path)[0]["id"]
+        self._rollup()
+        self.assertEqual(pc.read_entry(path)[0]["id"], first)
+
+    def test_rollup_moves_a_page_an_older_kb_wrote_to_reference(self):
+        self._rollup()
+        new = os.path.join(self.root, "journal", "summaries", "2026-03.md")
+        fm, body = pc.read_entry(new)
+        old = os.path.join(self.root, "reference", "journal-summaries", "2026-03.md")
+        pc.write_entry(old, dict(fm, type="reference", extension=None), body)
+        os.remove(new)
+        self._rollup()
+        self.assertEqual(pc.read_entry(new)[0]["id"], fm["id"])  # same entry, not a duplicate
+        self.assertFalse(os.path.exists(old))
+        self.assertFalse(os.path.exists(os.path.dirname(old)))
 
     def test_looks_like_date(self):
         self.assertTrue(journal._looks_like_date("2026-02-28"))

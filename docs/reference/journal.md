@@ -12,10 +12,14 @@
   text opens a scratch buffer in `$EDITOR` for a longer, multiline note
   instead.
 - **Monthly rollup:** `kb journal rollup [YYYY-MM]` generates/refreshes
-  `reference/journal-summaries/YYYY-MM.md` — that month's daily entries
+  `journal/summaries/YYYY-MM.md` — that month's daily entries
   concatenated onto one page plus a tag-frequency line — for browsing without
   opening 30 daily files. Defaults to last month; rerunning it for the same
   month refreshes the same file/id in place rather than minting a new one.
+  It is a `type: journal` entry, not core content: the core Diataxis dirs stay
+  hand-curated, so a generated page never shows up among your `reference`
+  entries. A page an older kb wrote to `reference/journal-summaries/` is
+  moved here, keeping its id, the next time that month is rolled up.
 - **Look-back surfacing:** opening today's entry (`kb journal`, no explicit
   date) prints/pins an "on this day" section — entries from 1 week ago, 1
   month ago, and this month/day in earlier years, whichever exist — so the

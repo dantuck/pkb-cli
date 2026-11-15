@@ -35,7 +35,7 @@ the data repo.
   the interactive picker. `kb journal --tag <tag>` lists every past entry
   carrying that tag, newest first, for browsing one theme across time instead
   of `kb search`'s relevance ranking. `kb journal rollup [YYYY-MM]` (default:
-  last month) generates/refreshes `reference/journal-summaries/YYYY-MM.md`,
+  last month) generates/refreshes `journal/summaries/YYYY-MM.md`,
   concatenating that month's daily entries plus a tag-frequency line onto one
   browsable page -- rerunning it just refreshes the same file/id in place.
 - **Write a new tutorial/how-to/reference/explanation entry**:

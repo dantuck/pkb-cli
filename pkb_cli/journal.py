@@ -1,5 +1,6 @@
 """Journal entries on disk: paths, creation, listing, appending, and the look-back (on-this-day) helpers. No terminal I/O here, so kb web can share it."""
 import calendar
+import contextlib
 import os
 from datetime import datetime, timedelta
 
@@ -59,7 +60,7 @@ def list_journal_entries(root, limit=None):
         return sorted((d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))), reverse=True)
 
     entries = []
-    for year in _subdirs_desc(journal_dir):
+    for year in (y for y in _subdirs_desc(journal_dir) if y.isdigit()):  # not journal/summaries/
         year_dir = os.path.join(journal_dir, year)
         for month in _subdirs_desc(year_dir):
             month_dir = os.path.join(year_dir, month)
@@ -159,11 +160,16 @@ def _rollup_month(month_arg):
 
 
 def journal_rollup(root, month_arg, json_out=False):
-    """Generate/refresh reference/journal-summaries/YYYY-MM.md: every day's
-    entry in the month concatenated under a heading, plus a tag-frequency line,
-    so a month of daily files can be browsed as one page instead of opened one
-    by one. Deliberately not AI summarization -- just the raw entries assembled
-    in one place; the point is browsability, not compression."""
+    """Generate/refresh journal/summaries/YYYY-MM.md: every day's entry in the
+    month concatenated under a heading, plus a tag-frequency line, so a month of
+    daily files can be browsed as one page instead of opened one by one.
+    Deliberately not AI summarization -- just the raw entries assembled in one
+    place; the point is browsability, not compression.
+
+    A journal-extension entry, not core content: the core Diataxis dirs are
+    hand-curated only, and a machine-written page there would turn up in
+    `reference` searches. Pages an older kb wrote to reference/journal-summaries/
+    are moved here (same id) the next time that month is rolled up."""
     parsed = _rollup_month(month_arg)
     if parsed is None:
         return pc.report_error(f"invalid month '{month_arg}' -- expected YYYY-MM", json_out)
@@ -196,9 +202,11 @@ def journal_rollup(root, month_arg, json_out=False):
             text = text[len(heading):].lstrip("\n")
         sections.append(f"## {date_str}\n\n{text.strip() or '(no content)'}\n")
 
-    out_path = os.path.join(root, "reference", "journal-summaries", f"{month_label}.md")
+    out_path = os.path.join(root, "journal", "summaries", f"{month_label}.md")
+    legacy_path = os.path.join(root, "reference", "journal-summaries", f"{month_label}.md")
     now = pc.now_iso()
-    existing_fm = pc.read_entry(out_path)[0] if os.path.exists(out_path) else None
+    prior_path = out_path if os.path.exists(out_path) else legacy_path if os.path.exists(legacy_path) else None
+    existing_fm = pc.read_entry(prior_path)[0] if prior_path else None
     if existing_fm and existing_fm.get("id"):
         entry_id, created = existing_fm["id"], existing_fm.get("created", now)
     else:
@@ -209,8 +217,8 @@ def journal_rollup(root, month_arg, json_out=False):
         "id": entry_id,
         "created": created,
         "updated": now,
-        "type": "reference",
-        "extension": None,
+        "type": "journal",
+        "extension": "journal",
         "source": "manual",
         "source_id": None,
         "tags": ["journal-summary"],
@@ -225,6 +233,10 @@ def journal_rollup(root, month_arg, json_out=False):
     body += "\n---\n\n" + "\n".join(sections)
 
     pc.write_entry(out_path, fm, body)
+    if prior_path == legacy_path:
+        os.remove(legacy_path)
+        with contextlib.suppress(OSError):  # only if that was the last one
+            os.rmdir(os.path.dirname(legacy_path))
     pkb_entries._reindex_fast(root)
     pc.emit_result(json_out, {"id": entry_id, "path": out_path, "month": month_label, "entries": len(days)}, out_path)
     return 0
