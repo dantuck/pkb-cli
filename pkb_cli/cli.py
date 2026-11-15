@@ -1245,7 +1245,7 @@ def build_parser():
             "browsing one theme across time:\n"
             "  kb journal --tag homelab\n\n"
             "`rollup` generates/refreshes a browsable month-at-a-glance page at "
-            "reference/journal-summaries/YYYY-MM.md (every day's entry concatenated, "
+            "journal/summaries/YYYY-MM.md (every day's entry concatenated, "
             "plus a tag-frequency line) -- defaults to last month if MONTH is omitted:\n"
             "  kb journal rollup\n"
             "  kb journal rollup 2026-07"

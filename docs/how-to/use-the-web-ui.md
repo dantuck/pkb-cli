@@ -92,7 +92,7 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   - **Maintenance** — **Reindex** (with a full-rebuild option), **Sync**
     against a chosen source (`kb sync [memos|gitlab|github|beads|all]`),
     **Validate**, **Doctor**, **Triage report**, **Journal rollup**
-    (`kb journal rollup [YYYY-MM]`: collects a month's daily entries into one page under `reference/journal-summaries/`; pick from the months that have entries), and **Run setup** (`kb setup --yes`).
+    (`kb journal rollup [YYYY-MM]`: collects a month's daily entries into one page under `journal/summaries/`; pick from the months that have entries), and **Run setup** (`kb setup --yes`).
   - **Services** — status of the login services behind `kb service` and
     `kb sync-service`. Install, change, or remove the scheduled sync; refresh
     or uninstall the web service. Installing the web service itself stays a
