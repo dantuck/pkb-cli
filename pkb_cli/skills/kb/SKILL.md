@@ -1,6 +1,6 @@
 ---
 name: kb
-description: Use the `kb` CLI to work with the user's personal Diataxis-based knowledge base -- search notes, create tutorial/how-to/reference/explanation entries, log to today's journal, triage the inbox, check TODOs (via beads), and sync external sources (usememos, GitLab, GitHub, beads). Trigger whenever the user asks to look something up in their notes, write something down, log a journal entry, check their inbox or TODO list, or sync notes from an external source.
+description: Use the `kb` CLI to work with the user's personal Diataxis-based knowledge base -- search notes, create tutorial/how-to/reference/explanation entries, log to today's journal, triage the inbox, check TODOs (via beads), and sync external sources (usememos, GitLab, GitHub, beads). Also drives spec-driven work in a code project: specs, decision records (ADRs), project Diataxis docs, and AGENTS.md/CLAUDE.md. Trigger whenever the user asks to look something up in their notes, write something down, log a journal entry, check their inbox or TODO list, sync notes from an external source, or plan/spec/resume a feature, record a decision, or set up AGENTS.md in a project (also when a project has docs/specs/).
 ---
 
 # kb -- personal knowledge base CLI
@@ -144,6 +144,34 @@ You never get a TTY, so the fzf pickers never open. Rules of thumb:
   CLAUDE.md) so it's filterable later: `kb new ... --tags a,b` /
   `kb journal -m` then `kb tag <id> add <tag>`.
 
+## Spec-driven work in a code project
+
+When the current project has `docs/specs/` (or the user asks you to plan/build
+something non-trivial), work spec-first. Specs live in the project, not the
+personal kb, so they survive sessions:
+
+1. Start every session with `kb spec resume --json`: it lists active specs
+   and the next open task. Continue that work.
+2. No active spec? `kb spec list --json`, else `kb spec new "<title>"` and fill
+   in Requirements (each with `Accept:`) and Tasks by editing the file.
+3. Ask the user to approve it, then `kb spec status <id> approved`. Do not
+   implement from a draft.
+4. `kb spec status <id> implementing`; tick tasks as you finish them with
+   `kb spec task <id> <T-id>` (ids like T3 are stable; never count by position);
+   `kb spec status <id> done` when all are ticked. `kb spec todos <id>` mirrors open
+   tasks into bd issues; ticking a task closes its issue.
+   Never use `--force` unless the user says to.
+5. Record significant choices with `kb adr new "<title>"`.
+   Project docs: `kb docs search "<q>"` before writing, `kb docs new <type> "<title>"` to add a
+   page in the right Diataxis quadrant, `kb docs check` for misfiled/unlinked pages and broken links.
+6. `kb project init` scaffolds the Diataxis `docs/` tree; `kb agents check`
+   reports AGENTS.md/CLAUDE.md problems and `kb agents init` fixes them.
+   Prefer `AGENTS.md` as the shared file with a `CLAUDE.md` that starts with
+   `@AGENTS.md`. Only pass `--link` when the user agrees to edit their CLAUDE.md, and
+   `--hook` (a SessionStart hook in .claude/settings.json running `kb spec resume`) and `--guard`
+   (permission prompts before a spec is approved or `--force` is used) likewise. Never approve a
+   spec yourself: ask the user. Duplicate ids after a merge: `kb spec renumber <slug>`.
+
 ## Conventions to respect
 
 - **Never hand-edit frontmatter** (`id`, `created`, `updated`, `type`,
@@ -212,6 +240,12 @@ kb doctor                         read-only health check
 kb config editor [<cmd>]          view/set the editor kb spawns when $EDITOR isn't set
 kb setup [--yes]                  guided onboarding, asks before each optional step
 kb update [--check]               upgrade kb (--check: only look)
+kb project init|status [--json]   scaffold/inspect a project's docs/ tree
+kb spec new "<title>" | list [--status S] | show <id> | status <id> [<status>] [--by ID] [--force]
+        | task <id> <T-id> [--undo] | resume [--quiet] | todos <id>      (all take --json)
+kb adr new "<title>" | list | show <id> | status <id> <status> [--by ID]
+kb agents init [--link] [--hook] [--guard] | check [--json]   AGENTS.md / CLAUDE.md for a project
+kb docs new <type> "<title>" | check | search "<q>" [--json]   project docs/ pages
 kb help                           top-level command list
 ```
 

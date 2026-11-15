@@ -26,6 +26,7 @@ from . import proc
 from . import service
 from . import health
 from . import journal
+from . import project
 from . import reminders
 from . import sources
 from . import todos
@@ -1640,6 +1641,9 @@ def cmd_doctor(args):
         root = None
     ok, todo = health.doctor_checks(root)
 
+    p_ok, p_todo = project.doctor_lines()
+    ok, todo = ok + p_ok, todo + p_todo
+
     print("kb doctor\n")
     for line in ok:
         print(f"  [ok]   {line}")
@@ -2085,6 +2089,8 @@ def build_parser():
 
     p = sub.add_parser("help", help="show this help message")
     p.set_defaults(func=lambda args: parser.print_help() or 0)
+
+    project.add_parsers(sub)
 
     parser._subcommands = list(sub.choices)  # for the "did you mean" suggestion
     return parser
