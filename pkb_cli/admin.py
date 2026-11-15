@@ -5,8 +5,10 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 
 from . import health
+from . import index_fts
 from . import pkb_common as pc
 from . import proc
 from . import notifier
@@ -50,12 +52,19 @@ def cmd_sync(args):
     # sync writes new/updated files straight to disk -- without this the FTS
     # index goes stale immediately and `kb doctor`/`kb search` won't see them
     # until someone remembers to run `kb index` by hand.
-    index_rc = proc.run_script("index_fts")
+    index_rc = _index(root)
     return index_rc or rc
 
 
+def _index(root, full=False):
+    """Run the indexer in-process (no fresh interpreter). Its stderr (semantic-index notes, errors) is
+    folded into stdout, as the old subprocess run did, so kb web's stdout capture still shows it."""
+    with contextlib.redirect_stderr(sys.stdout):
+        return index_fts.run(root, full=full)
+
+
 def cmd_index(args):
-    return proc.run_script("index_fts", ["--full"] if args.full else [])
+    return _index(pc.get_repo_root(), full=args.full)
 
 
 def cmd_validate(args):
@@ -178,7 +187,7 @@ def cmd_setup(args):
         # 2. FTS index
         db_path = health.index_status(root)
         full = not os.path.exists(db_path)
-        rc = proc.run_script("index_fts", ["--full"] if full else [])
+        rc = _index(root, full=full)
         ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
         sem = health.semantic_status(root)
         if sem:

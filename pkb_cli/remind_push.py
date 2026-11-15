@@ -14,8 +14,6 @@ import json
 import os
 import re
 import shutil
-import urllib.error
-import urllib.request
 from urllib.parse import urlparse
 
 from . import pkb_common as pc
@@ -206,6 +204,7 @@ def snapshot(issues):
 
 def request(config, method, path, body=None):
     """(status, parsed JSON or {}) from the Worker. Raises OSError on a network failure."""
+    import urllib.request  # deferred: pulls in ssl/http, which most kb commands never need
     url, token = config
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url + path, data=data, method=method, headers={

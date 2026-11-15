@@ -13,7 +13,6 @@ import os
 import re
 import shlex
 import shutil
-import ssl
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -866,6 +865,7 @@ def ssl_context():
     keychains. TLS-inspecting proxies like Zscaler re-sign traffic with a root CA
     that IT installs in the keychain but that Python's own CA bundle (python.org /
     uv builds) doesn't know, so requests would fail CERTIFICATE_VERIFY_FAILED."""
+    import ssl  # deferred: ~4ms to import, and only network commands need it
     ctx = ssl.create_default_context()
     if sys.platform == "darwin":
         keychains = ["/Library/Keychains/System.keychain", "/System/Library/Keychains/SystemRootCertificates.keychain"]
