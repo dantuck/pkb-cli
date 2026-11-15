@@ -28,16 +28,6 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn(__version__, out.stdout)
 
-    def test_legacy_scripts_kb_shim_forwards_to_the_package(self):
-        # old installs' `kb` symlink and service units point at scripts/kb
-        shim = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "kb")
-        with tempfile.TemporaryDirectory() as cwd:
-            link = os.path.join(cwd, "kb")
-            os.symlink(shim, link)
-            out = subprocess.run([sys.executable, link, "--version"], cwd=cwd, capture_output=True, text=True)
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn(__version__, out.stdout)
-
     def test_bundled_data_files_are_present(self):
         pkg = importlib.resources.files("pkb_cli")
         for rel in ("templates/schema.sql", "templates/web/index.html", "templates/web/vendor/alpine.min.js",
@@ -72,6 +62,17 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(updater._install_command("uv", "v1.2.3")[:3], ["uv", "tool", "install"])
         self.assertEqual(updater._install_command("pipx", "v1.2.3")[:2], ["pipx", "install"])
         self.assertTrue(updater._install_command("uv", "v1.2.3")[-1].endswith("@v1.2.3"))
+        self.assertEqual(updater._install_command("pipx", "v1.2.3", "semantic")[-1],
+                         f"pkb-cli[semantic] @ git+https://github.com/{updater.TOOL_REPO_SLUG}@v1.2.3")
+
+    def test_install_hint_uses_the_installer_that_owns_the_venv_and_the_running_version(self):
+        with mock.patch.object(updater, "_installer", return_value="pipx"), mock.patch.object(updater, "__version__", "1.2.3"):
+            hint = updater.install_hint("semantic")
+        self.assertTrue(hint.startswith("pipx install --force 'pkb-cli[semantic] @ git+https://"), hint)
+        self.assertTrue(hint.endswith("@v1.2.3'"), hint)
+        with mock.patch.object(updater, "_installer", return_value=None), mock.patch.object(updater, "__version__", "0.0.0+unknown"):
+            self.assertTrue(updater.install_hint("semantic").startswith("uv tool install --force "))
+            self.assertIn("@main'", updater.install_hint("semantic"))
 
     def test_launchd_load_retries_a_bootstrap_that_races_the_bootout(self):
         # launchctl bootout returns before the old job is gone; bootstrap then fails with exit 5
@@ -117,31 +118,27 @@ class PackagingTest(unittest.TestCase):
 
 
     def test_update_info_release_install(self):
-        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+        with mock.patch.object(updater, "_checkout_root", return_value=None), \
                 mock.patch.object(updater, "_installer", return_value="pipx"), \
                 mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"):
             info = updater.update_info()
             self.assertEqual((info["mode"], info["update_available"], info["can_update"]), ("release", True, True))
             self.assertEqual(info["command"].split()[:2], ["pipx", "install"])
             self.assertTrue(info["command"].endswith("@v999.0.0"))
-        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+        with mock.patch.object(updater, "_checkout_root", return_value=None), \
                 mock.patch.object(updater, "__version__", "1.0.0"), \
                 mock.patch.object(updater, "_latest_release_version", return_value="1.0.0"):
             self.assertFalse(updater.update_info()["update_available"])
 
     def test_update_info_reports_offline_as_error_not_exception(self):
-        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+        with mock.patch.object(updater, "_checkout_root", return_value=None), \
                 mock.patch.object(updater, "_latest_release_version", side_effect=OSError("offline")):
             info = updater.update_info()
         self.assertIn("offline", info["error"])
         self.assertFalse(info["can_update"])
 
     def _release_update(self, **kw):
-        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+        with mock.patch.object(updater, "_checkout_root", return_value=None), \
                 mock.patch.object(updater, "_installer", return_value="uv"), \
                 mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"), \
                 mock.patch.object(service, "service_kind", return_value="launchd"), \
@@ -190,8 +187,7 @@ class PackagingTest(unittest.TestCase):
     def _git_checkout(self, behind=2, dirty=False, upstream="origin/main"):
         status = {"is_git": True, "upstream": upstream, "local": "a" * 40, "remote": "b" * 40,
                   "behind": behind, "dirty": dirty}
-        return (mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"),
-                mock.patch.object(cli.os.path, "isdir", return_value=True),
+        return (mock.patch.object(updater, "_checkout_root", return_value="/checkout"),
                 mock.patch.object(updater, "_git", return_value=mock.Mock(returncode=0, stdout="pulled", stderr="")),
                 mock.patch.object(updater, "update_status", return_value=status))
 
@@ -200,7 +196,7 @@ class PackagingTest(unittest.TestCase):
         check = kw.pop("check", False)
         with ExitStack() as stack:
             patches = [stack.enter_context(p) for p in self._git_checkout(**kw)]
-            git = patches[2]
+            git = patches[1]
             result = updater.apply_update(check=check)
             info = updater.update_info()
         return result, info, git
@@ -228,22 +224,8 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(result, (0, False))
         self.assertEqual((info["update_available"], info["can_update"]), (False, False))
 
-    def test_legacy_install_migrates_with_available_installer_and_errors_without(self):
-        base = (mock.patch.object(updater, "LEGACY_VERSION_PATH", __file__),
-                mock.patch.object(updater, "_latest_release_version", return_value="9.9.9"))
-        with base[0], base[1], mock.patch.object(cli.shutil, "which", side_effect=lambda t: t if t == "pipx" else None):
-            plan = updater.plan_update()
-        self.assertEqual((plan["mode"], plan["installer"], plan["can_update"]), ("legacy", "pipx", True))
-        self.assertTrue(plan["command"][-1].endswith("@v9.9.9"))
-        with base[0], base[1], mock.patch.object(cli.shutil, "which", return_value=None):
-            plan = updater.plan_update()
-            rc = updater.apply_update()
-        self.assertEqual((plan["can_update"], rc), (False, (1, False)))
-        self.assertIn("old tarball installer", plan["error"])
-
     def test_release_update_without_known_installer_is_blocked_everywhere(self):
-        with mock.patch.object(updater, "LEGACY_VERSION_PATH", "/nonexistent"), \
-                mock.patch.object(updater, "TOOL_ROOT", tempfile.gettempdir()), \
+        with mock.patch.object(updater, "_checkout_root", return_value=None), \
                 mock.patch.object(updater, "_installer", return_value=None), \
                 mock.patch.object(updater, "_latest_release_version", return_value="999.0.0"):
             info = updater.update_info()

@@ -45,7 +45,8 @@ def missing_dependency():
     without importing, so every write command can ask without paying for numpy."""
     for name in ("numpy", "model2vec"):
         if importlib.util.find_spec(name) is None:
-            return f"{name} isn't installed -- `uv tool install 'pkb-cli[semantic]'`"
+            from . import updater  # deferred: only the not-installed message needs it
+            return f"{name} isn't installed -- `{updater.install_hint('semantic')}`"
     return None
 
 

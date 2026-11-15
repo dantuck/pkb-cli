@@ -30,6 +30,7 @@ if [ -z "$REF" ]; then
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
   REF="${REF:-main}"
 fi
+# keep in step with pkb_cli/updater.py _install_command(), which `kb update` uses (this runs before kb exists)
 SPEC="git+https://github.com/$REPO_SLUG@$REF"
 if [ -n "${PKB_CLI_SEMANTIC:-}" ]; then
   SPEC="pkb-cli[semantic] @ $SPEC"
