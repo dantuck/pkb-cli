@@ -126,12 +126,12 @@ class KbWebTest(unittest.TestCase):
 
     def test_admin_status_reports_version_and_sources(self):
         with patched_kb_web() as kb:
-            kb.push_status.return_value = {"is_git": False, "upstream": None, "ahead": None, "behind": None}
-            kb.doctor_checks.return_value = (["fine"], [])
-            kb.inbox_list.return_value = []
-            kb.bd_available.return_value = False
-            kb.discover_sync_sources.return_value = {"memos": ("sync_memos.py", {})}
-            kb.__version__ = "9.9.9"
+            kb.health.push_status.return_value = {"is_git": False, "upstream": None, "ahead": None, "behind": None}
+            kb.health.doctor_checks.return_value = (["fine"], [])
+            kb.pkb_entries.inbox_list.return_value = []
+            kb.todos.bd_available.return_value = False
+            kb.sources.discover_sync_sources.return_value = {"memos": ("sync_memos.py", {})}
+            kb.kb_web.__version__ = "9.9.9"
             status, data = self.json("GET", "/api/admin/status")
         self.assertEqual(status, 200)
         self.assertEqual((data["version"], data["sources"], data["busy"], data["root"]),
@@ -141,24 +141,24 @@ class KbWebTest(unittest.TestCase):
 
     def test_todo_snooze_and_unsnooze_route_to_bd_helpers(self):
         with patched_kb_web() as kb:
-            kb.bd_available.return_value = True
-            kb.bd_snooze.return_value = "snoozed"
-            kb.bd_unsnooze.return_value = "woken"
+            kb.todos.bd_available.return_value = True
+            kb.todos.bd_snooze.return_value = "snoozed"
+            kb.todos.bd_unsnooze.return_value = "woken"
             self.assertEqual(self.json("POST", "/api/todo/t-1/snooze", {"until": "1h"}), (200, {"message": "snoozed"}))
-            kb.bd_snooze.assert_called_once_with(self.root, "t-1", "1h")
+            kb.todos.bd_snooze.assert_called_once_with(self.root, "t-1", "1h")
             self.assertEqual(self.json("POST", "/api/todo/t-1/snooze", {})[0], 400)
             self.assertEqual(self.json("POST", "/api/todo/t-1/unsnooze", {}), (200, {"message": "woken"}))
-            kb.bd_unsnooze.assert_called_once_with(self.root, "t-1")
+            kb.todos.bd_unsnooze.assert_called_once_with(self.root, "t-1")
 
     def test_todo_due_flows_through_create_and_patch(self):
         with patched_kb_web() as kb:
-            kb.bd_available.return_value = True
-            kb.bd_create.return_value = "created"
-            kb.bd_update.return_value = "updated"
+            kb.todos.bd_available.return_value = True
+            kb.todos.bd_create.return_value = "created"
+            kb.todos.bd_update.return_value = "updated"
             self.assertEqual(self.json("POST", "/api/todo", {"title": "email", "due": " tomorrow "})[0], 201)
-            self.assertEqual(kb.bd_create.call_args.kwargs["due"], "tomorrow")
+            self.assertEqual(kb.todos.bd_create.call_args.kwargs["due"], "tomorrow")
             self.assertEqual(self.json("PATCH", "/api/todo/t-1", {"due": ""})[0], 200)  # "" clears, still an update
-            self.assertEqual(kb.bd_update.call_args.kwargs["due"], "")
+            self.assertEqual(kb.todos.bd_update.call_args.kwargs["due"], "")
 
     def test_index_html_tags_balance_and_scripts_are_not_inside_a_template(self):
         """A dropped </template> swallows everything after it -- including the <script>
@@ -207,19 +207,19 @@ class KbWebTest(unittest.TestCase):
 
     def test_reminders_state_and_action_validation(self):
         with patched_kb_web() as kb:
-            kb.reminders_info.return_value = self._reminders()
+            kb.reminders.reminders_info.return_value = self._reminders()
             status, data = self.json("GET", "/api/admin/reminders")
             self.assertEqual((status, data["notifier"]["authorization"]), (200, "denied"))
             self.assertEqual(self.json("POST", "/api/admin/reminders/bogus", {})[0], 404)
             for bad in (0, "x", 10081):
                 self.assertEqual(self.json("POST", "/api/admin/reminders/install", {"interval_minutes": bad})[0], 400, bad)
-            kb.reminders_info.return_value = {"supported": False}
+            kb.reminders.reminders_info.return_value = {"supported": False}
             self.assertEqual(self.json("POST", "/api/admin/reminders/test", {})[0], 400)
 
     def test_reminders_test_reports_the_notifications_outcome_and_fresh_state(self):
         with patched_kb_web() as kb:
-            kb.reminders_info.return_value = self._reminders()
-            kb.send_test_notification.return_value = (False, "allow it in Settings")
+            kb.reminders.reminders_info.return_value = self._reminders()
+            kb.notifier.send_test_notification.return_value = (False, "allow it in Settings")
             status, data = self.json("POST", "/api/admin/reminders/test", {})
         self.assertEqual(status, 200)
         self.assertFalse(data["ok"])
@@ -228,29 +228,29 @@ class KbWebTest(unittest.TestCase):
 
     def test_reminders_open_settings_only_on_macos_and_forces_the_open(self):
         with patched_kb_web() as kb:
-            kb.reminders_info.return_value = self._reminders()
-            kb.open_notification_settings.return_value = True
+            kb.reminders.reminders_info.return_value = self._reminders()
+            kb.notifier.open_notification_settings.return_value = True
             self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {}), (200, {"ok": True}))
-            kb.open_notification_settings.assert_called_once_with(force=True)
-            kb.open_notification_settings.return_value = False
+            kb.notifier.open_notification_settings.assert_called_once_with(force=True)
+            kb.notifier.open_notification_settings.return_value = False
             self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {})[0], 502)
-            kb.reminders_info.return_value = self._reminders(kind="systemd")
+            kb.reminders.reminders_info.return_value = self._reminders(kind="systemd")
             self.assertEqual(self.json("POST", "/api/admin/reminders/open-settings", {})[0], 400)
 
     def test_reminders_install_passes_interval_and_reports_the_permission_result(self):
         with patched_kb_web() as kb:
-            kb.reminders_info.return_value = self._reminders(installed=False)
-            kb.reminders_install.return_value = (0, False, "macOS isn't allowing it yet")
+            kb.reminders.reminders_info.return_value = self._reminders(installed=False)
+            kb.reminders.reminders_install.return_value = (0, False, "macOS isn't allowing it yet")
             status, data = self.json("POST", "/api/admin/reminders/install", {"interval_minutes": 10})
         self.assertEqual(status, 200)
-        kb.reminders_install.assert_called_once_with(self.root, 10)
+        kb.reminders.reminders_install.assert_called_once_with(self.root, 10)
         self.assertEqual((data["ok"], data["notifications_ok"]), (True, False))
         self.assertIn("isn't allowing", data["output"])
 
     def test_reminders_install_failure_is_not_ok(self):
         with patched_kb_web() as kb:
-            kb.reminders_info.return_value = self._reminders(installed=False)
-            kb.reminders_install.return_value = (1, False, "")
+            kb.reminders.reminders_info.return_value = self._reminders(installed=False)
+            kb.reminders.reminders_install.return_value = (1, False, "")
             status, data = self.json("POST", "/api/admin/reminders/install", {})
         self.assertEqual((status, data["ok"]), (200, False))
 
@@ -266,7 +266,7 @@ class KbWebTest(unittest.TestCase):
     def test_same_origin_post_is_allowed(self):
         headers = {"Origin": f"http://127.0.0.1:{self.port}"}
         with patched_kb_web() as kb:
-            kb.cmd_validate.return_value = 0
+            kb.admin.cmd_validate.return_value = 0
             status, _, raw = self.request("POST", "/api/validate", {}, headers)
         self.assertEqual((status, json.loads(raw)["ok"]), (200, True))
 
@@ -275,13 +275,13 @@ class KbWebTest(unittest.TestCase):
             print("checked 3 files")
             return 1
         with patched_kb_web() as kb:
-            kb.cmd_validate = noisy
+            kb.admin.cmd_validate = noisy
             status, data = self.json("POST", "/api/validate", {})
         self.assertEqual((status, data), (200, {"ok": False, "output": "checked 3 files"}))
 
     def test_admin_task_reports_system_exit_instead_of_hanging(self):
         with patched_kb_web() as kb:
-            kb.cmd_validate.side_effect = SystemExit("no pkb data repo found")
+            kb.admin.cmd_validate.side_effect = SystemExit("no pkb data repo found")
             status, data = self.json("POST", "/api/validate", {})
         self.assertEqual((status, data["ok"]), (500, False))
         self.assertIn("no pkb data repo", data["error"])
@@ -308,7 +308,7 @@ class KbWebTest(unittest.TestCase):
 
     def test_journal_months_endpoint(self):
         with patched_kb_web() as kb:
-            kb.journal_months.return_value = ["2026-09"]
+            kb.journal.journal_months.return_value = ["2026-09"]
             self.assertEqual(self.json("GET", "/api/admin/journal-months"), (200, {"months": ["2026-09"]}))
 
     def test_rollup_rejects_bad_month(self):
@@ -317,44 +317,44 @@ class KbWebTest(unittest.TestCase):
 
     def test_rollup_passes_month_through(self):
         with patched_kb_web() as kb:
-            kb._journal_rollup.return_value = 0
+            kb.journal.journal_rollup.return_value = 0
             status, data = self.json("POST", "/api/admin/rollup", {"month": "2026-07"})
         self.assertEqual((status, data["ok"]), (200, True))
-        kb._journal_rollup.assert_called_once_with(self.root, "2026-07")
+        kb.journal.journal_rollup.assert_called_once_with(self.root, "2026-07")
 
     def test_setup_runs_non_interactively(self):
         with patched_kb_web() as kb:
-            kb.cmd_setup.return_value = 0
+            kb.admin.cmd_setup.return_value = 0
             status, data = self.json("POST", "/api/admin/setup", {})
         self.assertEqual((status, data["ok"]), (200, True))
-        self.assertTrue(kb.cmd_setup.call_args.args[0].yes)
+        self.assertTrue(kb.admin.cmd_setup.call_args.args[0].yes)
 
     def test_update_check_returns_structured_info(self):
         info = {"mode": "release", "current": "0.2.0", "latest": "0.3.0", "update_available": True}
         with patched_kb_web() as kb:
-            kb.update_info.return_value = info
+            kb.updater.update_info.return_value = info
             status, data = self.json("GET", "/api/admin/update")
         self.assertEqual((status, data), (200, info))
 
     def test_update_defers_service_refresh_until_after_response(self):
         with patched_kb_web() as kb:
-            kb.apply_update.return_value = (0, True)
-            kb.service_info.return_value = {
+            kb.updater.apply_update.return_value = (0, True)
+            kb.service.service_info.return_value = {
                 "supported": True, "web": {"installed": True}, "sync": {"installed": False}}
             status, data = self.json("POST", "/api/admin/update", {})
         self.assertEqual((status, data["ok"], data["restart_scheduled"]), (200, True, True))
-        kb.apply_update.assert_called_once_with(capture=True, defer_refresh=True)
-        kb.schedule_kb_command.assert_called_once_with("service", "refresh")
+        kb.updater.apply_update.assert_called_once_with(capture=True, defer_refresh=True)
+        kb.updater.schedule_kb_command.assert_called_once_with("service", "refresh")
 
     def test_update_schedules_nothing_without_services_or_new_code(self):
         for updated, web_installed in ((True, False), (False, True)):
             with patched_kb_web() as kb:
-                kb.apply_update.return_value = (0, updated)
-                kb.service_info.return_value = {
+                kb.updater.apply_update.return_value = (0, updated)
+                kb.service.service_info.return_value = {
                     "supported": True, "web": {"installed": web_installed}, "sync": {"installed": False}}
                 _, data = self.json("POST", "/api/admin/update", {})
             self.assertFalse(data["restart_scheduled"], (updated, web_installed))
-            kb.schedule_kb_command.assert_not_called()
+            kb.updater.schedule_kb_command.assert_not_called()
 
     def test_concurrent_captures_do_not_steal_each_other_output(self):
         barrier = threading.Barrier(2)
@@ -385,34 +385,34 @@ class KbWebTest(unittest.TestCase):
 
     def test_service_action_validation(self):
         with patched_kb_web() as kb:
-            kb.service_info.return_value = self._services()
+            kb.service.service_info.return_value = self._services()
             self.assertEqual(self.json("POST", "/api/admin/services/db/install", {})[0], 404)
             self.assertEqual(self.json("POST", "/api/admin/services/web/install", {})[0], 400)
             self.assertEqual(self.json("POST", "/api/admin/services/sync/install", {"interval_minutes": 0})[0], 400)
             self.assertEqual(self.json("POST", "/api/admin/services/sync/install", {"interval_minutes": "x"})[0], 400)
             self.assertEqual(self.json("POST", "/api/admin/services/sync/refresh", {})[0], 400)
-            kb.service_info.return_value = self._services(web_installed=False)
+            kb.service.service_info.return_value = self._services(web_installed=False)
             self.assertEqual(self.json("POST", "/api/admin/services/web/refresh", {})[0], 400)
-            kb.service_info.return_value = self._services()
-            kb.service_info.return_value = self._services(supported=False)
+            kb.service.service_info.return_value = self._services()
+            kb.service.service_info.return_value = self._services(supported=False)
             self.assertEqual(self.json("POST", "/api/admin/services/sync/uninstall", {})[0], 400)
 
     def test_sync_service_install_runs_inline_for_this_repo(self):
         with patched_kb_web() as kb:
-            kb.service_info.return_value = self._services()
-            kb.cmd_sync_service.return_value = 0
+            kb.service.service_info.return_value = self._services()
+            kb.service.cmd_sync_service.return_value = 0
             status, data = self.json("POST", "/api/admin/services/sync/install", {"interval_minutes": 15})
         self.assertEqual((status, data["ok"]), (200, True))
-        args = kb.cmd_sync_service.call_args.args[0]
+        args = kb.service.cmd_sync_service.call_args.args[0]
         self.assertEqual((args.action, args.interval_minutes, args.repo), ("install", 15, self.root))
 
     def test_web_service_restart_and_uninstall_are_detached(self):
         for action in ("refresh", "uninstall"):
             with patched_kb_web() as kb:
-                kb.service_info.return_value = self._services()
+                kb.service.service_info.return_value = self._services()
                 status, data = self.json("POST", f"/api/admin/services/web/{action}", {})
             self.assertEqual((status, data["restart_scheduled"]), (200, True), action)
-            kb.schedule_kb_command.assert_called_once_with("service", action)
+            kb.updater.schedule_kb_command.assert_called_once_with("service", action)
 
     def test_editor_config_roundtrip(self):
         with tempfile.TemporaryDirectory() as cfg_dir, \
