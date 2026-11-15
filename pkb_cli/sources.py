@@ -2,9 +2,39 @@
 import importlib
 import os
 import sys
+from collections.abc import Mapping
 
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+
+class _LazyMeta(Mapping):
+    """A sync module's SOURCE_META, read (by importing the module) the first time it is looked at."""
+
+    def __init__(self, name, fname):
+        self._name = name
+        self._fname = fname
+        self._meta = None
+
+    def _load(self):
+        if self._meta is None:
+            try:
+                module = importlib.import_module(f".sync_{self._name}", __package__)
+                self._meta = getattr(module, "SOURCE_META", {})
+            except Exception as e:
+                print(f"warning: {self._fname} failed to load, ignoring its SOURCE_META "
+                      f"(kb sync {self._name} will likely fail): {e}", file=sys.stderr)
+                self._meta = {}
+        return self._meta
+
+    def __getitem__(self, key):
+        return self._load()[key]
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __len__(self):
+        return len(self._load())
+
 
 def discover_sync_sources():
     """Auto-discover sync_<name>.py modules in the package as pluggable sync sources.
@@ -20,20 +50,15 @@ def discover_sync_sources():
     argparse choices list, and --help output all have a stable order.
 
     This runs on every `kb` invocation (argparse needs the choices list up
-    front), so an import error in one sync_<name>.py must not take down every
-    `kb` command -- it's skipped with a warning instead, same as a broken
-    plugin in any discover-and-load system."""
+    front), so it only lists the files: `meta` is a lazy mapping that imports
+    the module the first time it is read (doctor/setup/sync), and an import
+    error there is a warning with empty metadata rather than taking down every
+    `kb` command."""
     sources = {}
     for fname in sorted(os.listdir(PKG_DIR)):
         if fname.startswith("sync_") and fname.endswith(".py"):
             name = fname[len("sync_"):-len(".py")]
-            try:
-                module = importlib.import_module(f".sync_{name}", __package__)
-            except Exception as e:
-                print(f"warning: {fname} failed to load, skipping (kb sync {name} unavailable): {e}",
-                      file=sys.stderr)
-                continue
-            sources[name] = (fname, getattr(module, "SOURCE_META", {}))
+            sources[name] = (fname, _LazyMeta(name, fname))
     return sources
 
 
