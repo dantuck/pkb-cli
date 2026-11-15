@@ -552,6 +552,15 @@
     <div class="edit-panel" :class="{ editing: modalEditing }" x-show="!modalLoading && !modalLoadError">
       <div class="md-view view-editable" :class="{ 'is-readonly': modalReadonly }" x-show="!modalEditing" x-html="modalViewHtml" @click="viewClick($event)"></div>
 
+      <nav class="backlinks" aria-label="Linked from" x-show="!modalEditing && modalBacklinks.length">
+        <h3>Linked from</h3>
+        <ul>
+          <template x-for="b in modalBacklinks" :key="b.id">
+            <li><button class="link-btn" @click="openBacklink(b)" x-text="b.title || b.id"></button></li>
+          </template>
+        </ul>
+      </nav>
+
       <div class="edit-form" x-show="modalEditing">
         <input type="text" class="edit-title" placeholder="title" x-model="modalTitle"
                @keydown.enter.prevent="document.querySelector('#entry-panel .edit-body')?.focus()"

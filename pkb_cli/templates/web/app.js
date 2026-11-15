@@ -1114,6 +1114,8 @@ document.addEventListener("alpine:init", () => {
     modalBody: "",
     modalTags: [],
     modalLinks: [],
+    // [{id, title, path}] for the entries whose `links` point at this one (GET /api/entries/<id>/links)
+    modalBacklinks: [],
     modalTagInput: "",
     modalLinkInput: "",
     modalLinkError: "",
@@ -1275,12 +1277,14 @@ document.addEventListener("alpine:init", () => {
       this.modalTagInput = "";
       this.modalLinkInput = "";
       this.modalLinkError = "";
+      this.modalBacklinks = [];
       this.modalSaveMsg = "";
       this.modalSaveErr = false;
       this.modalMode = "split";
       this.modalTagHighlight = -1;
       this.modalLinkHighlight = -1;
       this.modalOpen = true;
+      this.loadModalBacklinks(item.id);  // not awaited: the entry shows without waiting for its backlinks
       try {
         const res = await fetch(`/api/entries/${encodeURIComponent(item.id)}`);
         if (!res.ok) throw new Error();
@@ -1302,6 +1306,13 @@ document.addEventListener("alpine:init", () => {
         this.$nextTick(() => row.scrollIntoView({ block: "nearest" }));
       }
     },
+    async loadModalBacklinks(id) {
+      const { ok, data } = await apiFetch(`/api/entries/${encodeURIComponent(id)}/links`, "GET");
+      if (ok && this.modalEntryId === id) this.modalBacklinks = data.backlinks || [];  // not if another entry opened meanwhile
+    },
+    // Opens a linking entry as the overlay, the way the command palette does; openEntryModal refuses
+    // (and says so) while there are unsaved edits.
+    openBacklink(b) { this.openEntryModal({ id: b.id, title: b.title || b.id }); },
     // Warns instead of silently dropping edits when the user navigates away.
     guardUnsaved() {
       if (!this.modalDirty) return true;

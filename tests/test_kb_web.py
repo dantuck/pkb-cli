@@ -59,6 +59,16 @@ class KbWebTest(unittest.TestCase):
     def test_health(self):
         self.assertEqual(self.json("GET", "/api/health"), (200, {"ok": True, "root": self.root}))
 
+    def test_entry_links_lists_forward_links_and_backlinks_with_titles(self):
+        _, target = self.json("POST", "/api/entries", {"type": "how-to", "title": "Link target"})
+        _, source = self.json("POST", "/api/entries", {"type": "reference", "title": "Points at it", "links": [target["id"]]})
+        status, links = self.json("GET", f"/api/entries/{target['id']}/links")
+        self.assertEqual(status, 200)
+        self.assertEqual(links["forward"], [])
+        self.assertEqual([(b["id"], b["title"]) for b in links["backlinks"]], [(source["id"], "Points at it")])
+        self.assertEqual(self.json("GET", f"/api/entries/{source['id']}/links")[1]["forward"], [target["id"]])
+        self.assertEqual(self.json("GET", "/api/entries/nope/links")[0], 404)
+
     def test_create_entry_validates_and_roundtrips(self):
         self.assertEqual(self.json("POST", "/api/entries", {"type": "how-to", "title": " "})[0], 400)
         self.assertEqual(self.json("POST", "/api/entries", {"type": "bogus", "title": "T"})[0], 400)
