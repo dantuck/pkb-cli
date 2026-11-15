@@ -438,6 +438,11 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
   padding-left: 0.8rem; border-left: 2px solid var(--accent);
 }
 .edit-panel .row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.backlinks { margin-top: 1.2rem; padding-top: 0.7rem; border-top: 1px solid var(--border); font-size: 0.85rem; }
+.backlinks h3 { margin: 0 0 0.35rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.backlinks ul { list-style: none; margin: 0; padding: 0; }
+.backlinks li { padding: 0.12rem 0; }
+.backlinks .link-btn { text-align: left; }
 .edit-panel .label { color: var(--muted); min-width: 3.2rem; }
 .edit-panel input[type=text] { padding: 0.3rem 0.6rem; width: 100%; }
 

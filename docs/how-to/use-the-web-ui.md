@@ -58,6 +58,8 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   **edit** to change its title, body, tags, or links in place (tag/link
   inputs autocomplete against existing tags and entries). Corresponds to
   editing the file plus `kb tag`/`kb link` — never hand-edited frontmatter.
+  Under the rendered entry, a **Linked from** list shows the entries that link
+  to it (the same data as `kb links <id>`); click one to open it.
   Entries mirrored from an external source (`sources/…`) are read-only: the
   modal shows a banner linking to the origin instead of an edit button.
 - **Write a full entry…** (link beside the Jot box's **Add** button) — opens a modal to
