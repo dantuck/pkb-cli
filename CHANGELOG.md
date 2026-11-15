@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/dantuck/pkb-cli/compare/v0.14.0...v0.15.0) (2026-11-15)
+
+
+### Features
+
+* show a Linked from list under each entry in kb web ([8506ff3](https://github.com/dantuck/pkb-cli/commit/8506ff3b420de2c82d9e8a4055fb5ed408fdc783))
+
 ## [0.14.0](https://github.com/dantuck/pkb-cli/compare/v0.13.1...v0.14.0) (2026-11-15)
 
 
