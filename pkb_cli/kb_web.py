@@ -626,20 +626,23 @@ def _admin_task(h, fn, *args, extra=None):
     if not _ADMIN_LOCK.acquire(blocking=False):
         h.send_json({"ok": False, "error": "another admin task is still running"}, status=409)
         return None
+    status, rc = 200, None
     try:
         try:
             result, output = _capture_stdout(fn, *args)
         except SystemExit as e:
-            h.send_json({"ok": False, "error": str(e.code) if isinstance(e.code, str) else "command exited"},
-                        status=500)
-            return None
-        rc, info = result if isinstance(result, tuple) else (result, None)
-        payload = {"ok": rc in (0, None), "output": output}
-        payload.update(extra(info) if callable(extra) else (extra or {}))
-        h.send_json(payload)
-        return rc
+            status = 500
+            payload = {"ok": False, "error": str(e.code) if isinstance(e.code, str) else "command exited"}
+        else:
+            rc, info = result if isinstance(result, tuple) else (result, None)
+            payload = {"ok": rc in (0, None), "output": output}
+            payload.update(extra(info) if callable(extra) else (extra or {}))
     finally:
+        # released before the response goes out: a client that sees the response (or polls `busy`)
+        # and immediately starts another task must not be told the last one is still running
         _ADMIN_LOCK.release()
+    h.send_json(payload, status=status)
+    return rc
 
 
 @route("POST", "/api/index")
