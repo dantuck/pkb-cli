@@ -47,8 +47,8 @@ def _checkout_root():
     return path if os.path.isdir(os.path.join(path, ".git")) else None
 
 
-def _git(*args, cwd=None):
-    return subprocess.run(["git", "-C", cwd or _checkout_root(), *args], capture_output=True, text=True)
+def _git(*args, cwd):
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
 
 
 def _github_request(url):
@@ -113,17 +113,18 @@ def update_status(fetch=False):
     Returns a dict: is_git, upstream, local, remote, behind, dirty. Fields are None
     when they don't apply (e.g. not a git checkout, or no upstream configured).
     """
-    result = {"is_git": _checkout_root() is not None,
+    root = _checkout_root()
+    result = {"is_git": root is not None,
               "upstream": None, "local": None, "remote": None, "behind": None, "dirty": None}
     if not result["is_git"]:
         return result
 
     if fetch:
-        _git("fetch", "--quiet", "origin")
+        _git("fetch", "--quiet", "origin", cwd=root)
 
     # one `status --branch` call yields HEAD, the upstream, how far behind it is, and whether the
     # tree is dirty -- instead of a separate git process for each
-    status = _git("status", "--porcelain=v2", "--branch")
+    status = _git("status", "--porcelain=v2", "--branch", cwd=root)
     if status.returncode != 0:
         return result
     oid = upstream = behind = None
@@ -141,7 +142,7 @@ def update_status(fetch=False):
         return result
     result["upstream"] = upstream
     result["local"] = None if oid == "(initial)" else oid
-    result["remote"] = _git("rev-parse", upstream).stdout.strip()
+    result["remote"] = _git("rev-parse", upstream, cwd=root).stdout.strip()
     result["behind"] = behind
     result["dirty"] = dirty
     return result
@@ -164,7 +165,7 @@ def plan_update():
     root = _checkout_root()
     if root:
         plan["mode"] = "git"
-        fetch = _git("fetch", "--quiet", "origin")
+        fetch = _git("fetch", "--quiet", "origin", cwd=root)
         if fetch.returncode != 0:
             plan["error"] = f"git fetch failed: {fetch.stderr.strip()}"
             return plan
@@ -258,7 +259,7 @@ def apply_update(check=False, capture=False, defer_refresh=False):
         return 0, False
 
     if plan["mode"] == "git":
-        pull = _git("pull", "--ff-only")
+        pull = _git("pull", "--ff-only", cwd=_checkout_root())
         if pull.returncode != 0:
             print(f"error: git pull failed: {pull.stderr.strip()}", file=sys.stderr)
             return 1, False

@@ -10,7 +10,7 @@ import subprocess
 
 from . import pkb_common as pc
 
-# Read by kb's discover_sync_sources() -- see docs/reference/ingestion.md for
+# Read by kb's sources.source_meta() -- see docs/reference/ingestion.md for
 # the SOURCE_META contract.
 SOURCE_META = {
     "cli_tool": "gh",

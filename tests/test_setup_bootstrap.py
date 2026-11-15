@@ -18,7 +18,7 @@ from pkb_cli import pkb_common as pc  # noqa: E402
 
 
 import fakes  # noqa: E402
-from pkb_cli import admin
+from pkb_cli import onboarding
 from pkb_cli import cli as kb_cli
 from pkb_cli import service  # noqa: E402
 
@@ -58,7 +58,7 @@ class SetupBootstrapTest(unittest.TestCase):
         real_which = shutil.which
         with contextlib.redirect_stdout(buf), \
                 mock.patch.object(kb_cli.shutil, "which", side_effect=lambda name: None if name == "brew" else real_which(name)):
-            admin.cmd_setup(args)
+            onboarding.cmd_setup(args)
         return buf.getvalue()
 
     def test_bootstraps_central_kb_when_none_found(self):
