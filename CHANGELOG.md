@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/dantuck/pkb-cli/compare/v0.13.1...v0.14.0) (2026-11-15)
+
+
+### Features
+
+* filter the web todo drawer by created/updated/closed date range ([7a65cd3](https://github.com/dantuck/pkb-cli/commit/7a65cd371705932806430eb96798093fe8b660d2))
+
 ## [0.13.1](https://github.com/dantuck/pkb-cli/compare/v0.13.0...v0.13.1) (2026-11-15)
 
 
