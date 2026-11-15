@@ -20,6 +20,8 @@ CI runs both on every push and PR, plus a type-check of the Worker
 | `pkb_cli/cli.py` | CLI entry point: argparse wiring and the `cmd_*` handlers for search, journal, inbox, tags, links, setup |
 | `pkb_cli/search.py` | Querying the index: FTS5 keyword match with a plain-terms fallback, semantic ranking, fusion. `kb_web` imports it directly |
 | `pkb_cli/journal.py` | Journal entries on disk: paths, creation, listing, appending, look-back helpers (no terminal I/O) |
+| `pkb_cli/project.py` | Project-side docs: `kb project`, `kb spec`, `kb adr`, `kb agents` (specs/ADRs as markdown in the project, AGENTS.md/CLAUDE.md). Registers its own parsers via `add_parsers` |
+| `pkb_cli/projdocs.py` | `kb docs`: create, check (misfiled/unlinked pages, broken links) and search a project's `docs/` pages |
 | `pkb_cli/todos.py` | TODO logic over the `bd` CLI: list/create/update/snooze, due dates, reminder de-dup state |
 | `pkb_cli/reminders.py`, `pkb_cli/notifier.py` | The reminder timer (install/info/status) and desktop notifications |
 | `pkb_cli/service.py` | launchd / systemd units for `kb web`, `kb sync` and the reminder timer |
