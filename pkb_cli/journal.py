@@ -139,3 +139,92 @@ def journal_months(root):
     """YYYY-MM for every month with at least one journal entry, newest first --
     the months `kb journal rollup` has something to roll up."""
     return list(dict.fromkeys(date[:7] for date, _path in list_journal_entries(root)))
+
+
+def _rollup_month(month_arg):
+    """(year, month) for `month_arg` (YYYY-MM), or the previous calendar month
+    if not given -- the current month is usually still in progress, so it's a
+    poor default for "summarize what happened"."""
+    if month_arg:
+        try:
+            dt = datetime.strptime(month_arg, "%Y-%m")
+        except ValueError:
+            return None
+        return dt.year, dt.month
+    today = datetime.now().date()
+    year, month = today.year, today.month - 1
+    if month == 0:
+        year, month = year - 1, 12
+    return year, month
+
+
+def journal_rollup(root, month_arg, json_out=False):
+    """Generate/refresh reference/journal-summaries/YYYY-MM.md: every day's
+    entry in the month concatenated under a heading, plus a tag-frequency line,
+    so a month of daily files can be browsed as one page instead of opened one
+    by one. Deliberately not AI summarization -- just the raw entries assembled
+    in one place; the point is browsability, not compression."""
+    parsed = _rollup_month(month_arg)
+    if parsed is None:
+        return pc.report_error(f"invalid month '{month_arg}' -- expected YYYY-MM", json_out)
+    year, month = parsed
+    month_label = f"{year:04d}-{month:02d}"
+
+    month_dir = os.path.join(root, "journal", f"{year:04d}", f"{month:02d}")
+    if not os.path.isdir(month_dir):
+        return pc.report_error(f"no journal entries found for {month_label}", json_out)
+
+    days = []
+    for name in sorted(os.listdir(month_dir)):
+        if not name.endswith(".md"):
+            continue
+        fm, body = pc.read_entry(os.path.join(month_dir, name))
+        days.append((name[:-3], fm, body))
+    if not days:
+        return pc.report_error(f"no journal entries found for {month_label}", json_out)
+
+    tag_counts, day_ids, sections = {}, [], []
+    for date_str, fm, body in days:
+        if fm.get("id"):
+            day_ids.append(fm["id"])
+        for t in fm.get("tags") or []:
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        text = body.strip("\n")
+        heading = f"# {date_str}"
+        if text.startswith(heading):
+            text = text[len(heading):].lstrip("\n")
+        sections.append(f"## {date_str}\n\n{text.strip() or '(no content)'}\n")
+
+    out_path = os.path.join(root, "reference", "journal-summaries", f"{month_label}.md")
+    now = pc.now_iso()
+    existing_fm = pc.read_entry(out_path)[0] if os.path.exists(out_path) else None
+    if existing_fm and existing_fm.get("id"):
+        entry_id, created = existing_fm["id"], existing_fm.get("created", now)
+    else:
+        entry_id = pc.gen_id(pc.collect_existing_ids(root), dt=datetime(year, month, 1))
+        created = now
+
+    fm = {
+        "id": entry_id,
+        "created": created,
+        "updated": now,
+        "type": "reference",
+        "extension": None,
+        "source": "manual",
+        "source_id": None,
+        "tags": ["journal-summary"],
+        "links": day_ids,
+        "title": f"Journal summary: {month_label}",
+    }
+
+    body = f"# Journal summary: {month_label}\n\n{len(days)} entries.\n"
+    if tag_counts:
+        top = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        body += "tags: " + ", ".join(f"{t} ({n})" for t, n in top) + "\n"
+    body += "\n---\n\n" + "\n".join(sections)
+
+    pc.write_entry(out_path, fm, body)
+    pkb_entries._reindex_fast(root)
+    pc.emit_result(json_out, {"id": entry_id, "path": out_path, "month": month_label, "entries": len(days)}, out_path)
+    return 0

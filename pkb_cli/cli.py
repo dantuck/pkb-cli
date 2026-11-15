@@ -3,10 +3,8 @@
 one-shot per invocation. Operates on a data repo (found by walking up from cwd to a
 .pkb/ directory), which lives separately from wherever this tool is installed."""
 import argparse
-import contextlib
 import difflib
 import getpass
-import io
 import json
 import os
 import re
@@ -22,10 +20,12 @@ from . import index_fts
 from . import pkb_common as pc
 from . import remind_push
 from . import notifier
-from . import proc
 from . import service
 from . import health
 from . import journal
+from . import inbox
+from . import pkb_entries
+from . import admin
 from . import project
 from . import projdocs
 from . import reminders
@@ -35,23 +35,10 @@ from . import updater
 from . import worker_deploy
 from . import search
 from . import semantic
-# Re-exported because kb_web calls these as `_kb().<name>` (see tests/test_module_contracts.py).
-from .notifier import open_notification_settings, send_test_notification  # noqa: F401
-from .todos import (  # noqa: F401
-    bd_action, bd_available, bd_create, bd_delete, bd_dep_add, bd_dep_remove, bd_deps, bd_list, bd_snooze, bd_unsnooze, bd_update,
-)
-from .health import doctor_checks, push_status  # noqa: F401
-from .sources import discover_sync_sources  # noqa: F401
-from .reminders import reminders_info, reminders_install  # noqa: F401
-from .journal import journal_append, journal_months  # noqa: F401
-from .service import cmd_sync_service, service_info  # noqa: F401
-from .updater import apply_update, schedule_kb_command, update_info  # noqa: F401
 from . import __version__
-from .pkb_entries import (  # noqa: F401  (re-exported)
-    _all_tags, _apply_tag_changes, _clean_list, _find_entry, _iter_all_entries, _reindex_fast,
-    _readonly_error, _readonly_guard, _readonly_source_info, entry_delete,
-    entry_move, entry_new, entry_set_links, entry_set_tags, entry_update_content,
-    inbox_list,
+from .pkb_entries import (
+    _all_tags, _find_entry, _iter_all_entries, entry_delete,
+    entry_move, entry_new, entry_set_links, entry_set_tags, inbox_list,
 )
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -192,7 +179,7 @@ def _search_interactive(root, rows):
                 print(f"error: editor '{parts[0]}' not found on PATH -- fix it with `kb config editor <cmd>`",
                       file=sys.stderr)
     elif choice == "links":
-        show_links(root, chosen_id)
+        pkb_entries.show_links(root, chosen_id)
     return 0
 
 
@@ -272,7 +259,7 @@ def cmd_journal(args):
     root = pc.get_repo_root()
 
     if args.date == "rollup":
-        return _journal_rollup(root, args.month, args.json)
+        return journal.journal_rollup(root, args.month, args.json)
     if args.tag:
         return _journal_by_tag(root, args.tag)
 
@@ -374,95 +361,6 @@ def _journal_by_tag(root, tag):
     return 0
 
 
-def _rollup_month(month_arg):
-    """(year, month) for `month_arg` (YYYY-MM), or the previous calendar month
-    if not given -- the current month is usually still in progress, so it's a
-    poor default for "summarize what happened"."""
-    if month_arg:
-        try:
-            dt = datetime.strptime(month_arg, "%Y-%m")
-        except ValueError:
-            return None
-        return dt.year, dt.month
-    today = datetime.now().date()
-    year, month = today.year, today.month - 1
-    if month == 0:
-        year, month = year - 1, 12
-    return year, month
-
-
-def _journal_rollup(root, month_arg, json_out=False):
-    """Generate/refresh reference/journal-summaries/YYYY-MM.md: every day's
-    entry in the month concatenated under a heading, plus a tag-frequency line,
-    so a month of daily files can be browsed as one page instead of opened one
-    by one. Deliberately not AI summarization -- just the raw entries assembled
-    in one place; the point is browsability, not compression."""
-    parsed = _rollup_month(month_arg)
-    if parsed is None:
-        return _fail(f"invalid month '{month_arg}' -- expected YYYY-MM", json_out)
-    year, month = parsed
-    month_label = f"{year:04d}-{month:02d}"
-
-    month_dir = os.path.join(root, "journal", f"{year:04d}", f"{month:02d}")
-    if not os.path.isdir(month_dir):
-        return _fail(f"no journal entries found for {month_label}", json_out)
-
-    days = []
-    for name in sorted(os.listdir(month_dir)):
-        if not name.endswith(".md"):
-            continue
-        fm, body = pc.read_entry(os.path.join(month_dir, name))
-        days.append((name[:-3], fm, body))
-    if not days:
-        return _fail(f"no journal entries found for {month_label}", json_out)
-
-    tag_counts, day_ids, sections = {}, [], []
-    for date_str, fm, body in days:
-        if fm.get("id"):
-            day_ids.append(fm["id"])
-        for t in fm.get("tags") or []:
-            tag_counts[t] = tag_counts.get(t, 0) + 1
-
-        text = body.strip("\n")
-        heading = f"# {date_str}"
-        if text.startswith(heading):
-            text = text[len(heading):].lstrip("\n")
-        sections.append(f"## {date_str}\n\n{text.strip() or '(no content)'}\n")
-
-    out_path = os.path.join(root, "reference", "journal-summaries", f"{month_label}.md")
-    now = pc.now_iso()
-    existing_fm = pc.read_entry(out_path)[0] if os.path.exists(out_path) else None
-    if existing_fm and existing_fm.get("id"):
-        entry_id, created = existing_fm["id"], existing_fm.get("created", now)
-    else:
-        entry_id = pc.gen_id(pc.collect_existing_ids(root), dt=datetime(year, month, 1))
-        created = now
-
-    fm = {
-        "id": entry_id,
-        "created": created,
-        "updated": now,
-        "type": "reference",
-        "extension": None,
-        "source": "manual",
-        "source_id": None,
-        "tags": ["journal-summary"],
-        "links": day_ids,
-        "title": f"Journal summary: {month_label}",
-    }
-
-    body = f"# Journal summary: {month_label}\n\n{len(days)} entries.\n"
-    if tag_counts:
-        top = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        body += "tags: " + ", ".join(f"{t} ({n})" for t, n in top) + "\n"
-    body += "\n---\n\n" + "\n".join(sections)
-
-    pc.write_entry(out_path, fm, body)
-    _reindex_fast(root)
-    _emit(json_out, {"id": entry_id, "path": out_path, "month": month_label, "entries": len(days)}, out_path)
-    return 0
-
-
 def cmd_inbox(args):
     root = pc.get_repo_root()
     inbox_dir = os.path.join(root, "inbox")
@@ -514,7 +412,7 @@ def _inbox_act(root, inbox_dir, args):
     ever gets the interactive picker."""
     if args.action is None:
         return _fail(f"`kb inbox {args.id}` needs an action: promote <type> | redirect | discard", args.json)
-    found = _inbox_find(inbox_dir, args.id)
+    found = inbox.find(inbox_dir, args.id)
     if found is None:
         return _fail(f"no inbox item with id '{args.id}'", args.json)
     path, fm, body = found
@@ -523,88 +421,11 @@ def _inbox_act(root, inbox_dir, args):
         if not args.type:
             return _fail(f"`kb inbox {args.id} promote` needs a Diataxis type: {', '.join(pc.CORE_TYPES)}",
                          args.json)
-        return _inbox_promote(root, path, fm, body, args.type, args.json)
+        return inbox.promote(root, path, fm, body, args.type, args.json)
     elif args.action == "redirect":
-        return _inbox_redirect(root, path, fm, body, args.json)
+        return inbox.redirect(root, path, fm, body, args.json)
     else:
-        return _inbox_discard(root, path, args.json)
-
-
-def _inbox_promote(root, path, fm, body, target_type, json_out=False):
-    """Move an inbox item into core content as `target_type`, clearing
-    `extension`. Shared by the interactive picker and non-interactive
-    `kb inbox <id> promote <type>`."""
-    title = fm.get("title") or os.path.basename(path)
-    fm["type"] = target_type
-    fm["extension"] = None
-    fm["updated"] = pc.now_iso()
-    new_path = os.path.join(root, pc.TYPE_DIR[target_type], f"{fm['id']}-{pc.slugify(title)}.md")
-    pc.write_entry(new_path, fm, body)
-    os.remove(path)
-    rel = os.path.relpath(new_path, root)
-    _emit(json_out, {"action": "promote", "id": fm["id"], "type": target_type, "path": rel},
-          f"promoted -> {rel}")
-    _reindex_fast(root)
-    pc.git_autocommit(root, f"inbox promote: {title} -> {target_type}")
-    return 0
-
-
-def _inbox_redirect(root, path, fm, body, json_out=False):
-    """Append an inbox item into its created-date's journal entry (creating
-    that entry first if needed) and remove it from inbox/. Shared by the
-    interactive picker and non-interactive `kb inbox <id> redirect`."""
-    title = fm.get("title") or os.path.basename(path)
-    created_dt = pc.parse_iso(fm.get("created")) or datetime.now().astimezone()
-    journal_dir = os.path.join(root, "journal", f"{created_dt.year:04d}", f"{created_dt.month:02d}")
-    journal_path = os.path.join(journal_dir, f"{created_dt.date().isoformat()}.md")
-    if not os.path.exists(journal_path):
-        all_ids = pc.collect_existing_ids(root)
-        jid = pc.gen_id(all_ids, dt=created_dt)
-        now_s = pc.now_iso()
-        jfm = {
-            "id": jid, "created": now_s, "updated": now_s,
-            "type": "journal", "extension": "journal", "source": "manual",
-            "source_id": None, "tags": [], "links": [],
-            "title": created_dt.date().isoformat(),
-        }
-        pc.write_entry(journal_path, jfm, f"# {created_dt.date().isoformat()}\n\n")
-    with open(journal_path, "r", encoding="utf-8") as f:
-        existing = f.read()
-    with open(journal_path, "w", encoding="utf-8") as f:
-        f.write(existing.rstrip("\n") + f"\n\n## {title}\n\n{body.strip()}\n")
-    os.remove(path)
-    rel = os.path.relpath(journal_path, root)
-    _emit(json_out, {"action": "redirect", "id": fm.get("id"), "path": rel}, f"redirected -> {rel}")
-    _reindex_fast(root)
-    pc.git_autocommit(root, f"inbox redirect: {title}")
-    return 0
-
-
-def _inbox_discard(root, path, json_out=False):
-    name = os.path.basename(path)
-    os.remove(path)
-    _emit(json_out, {"action": "discard", "name": name}, f"discarded {name}")
-    _reindex_fast(root)
-    pc.git_autocommit(root, f"inbox discard: {name}")
-    return 0
-
-
-def _inbox_find(inbox_dir, item_id):
-    """(path, fm, body) for the inbox item with this id, or None. Inbox items
-    are addressed by id here, same as kb tag/kb link, not by filename."""
-    if not os.path.isdir(inbox_dir):
-        return None
-    for name in os.listdir(inbox_dir):
-        if not name.endswith(".md"):
-            continue
-        path = os.path.join(inbox_dir, name)
-        try:
-            fm, body = pc.read_entry(path)
-        except ValueError:
-            continue
-        if fm.get("id") == item_id:
-            return path, fm, body
-    return None
+        return inbox.discard(root, path, args.json)
 
 
 def _inbox_interactive(root, items):
@@ -637,54 +458,12 @@ def _inbox_interactive(root, items):
         target_type = _fzf_select(pc.CORE_TYPES, "type> ", "promote to which Diataxis type?")
         if target_type is None:
             return 0
-        return _inbox_promote(root, chosen_path, fm, body, target_type)
+        return inbox.promote(root, chosen_path, fm, body, target_type)
     elif choice == "redirect":
-        return _inbox_redirect(root, chosen_path, fm, body)
+        return inbox.redirect(root, chosen_path, fm, body)
     elif choice == "discard":
-        return _inbox_discard(root, chosen_path)
+        return inbox.discard(root, chosen_path)
     return 0
-
-
-def cmd_triage(args):
-    return proc.run_script("triage_report", ["--json"] if args.json else [])
-
-
-def cmd_sync(args):
-    sync_sources = sources.discover_sync_sources()
-    # sources whose SOURCE_META sets uses_sops read credentials from the environment;
-    # if this data repo keeps them sops-encrypted, decrypt straight into that one
-    # subprocess's env via `sops exec-env` -- no wrapping needed at the call site,
-    # and the values never pass through kb's own environment or output.
-    targets = list(sync_sources.keys()) if args.source in (None, "all") else [args.source]
-    root = pc.get_repo_root()
-    secrets_path = os.path.join(root, ".pkb", "secrets.enc.env")
-    use_sops = shutil.which("sops") and os.path.exists(secrets_path)
-
-    rc = 0
-    for t in targets:
-        print(f"--- sync: {t} ---")
-        fname, meta = sync_sources[t]
-        cmd = proc.module_cmd(fname[:-len(".py")])
-        if use_sops and meta.get("uses_sops"):
-            cmd_str = shlex.join(cmd)
-            target_rc = proc.run_captured(["sops", "exec-env", secrets_path, cmd_str], env=health.sops_key_env())
-        else:
-            target_rc = proc.run_captured(cmd)
-        rc = target_rc or rc
-    pc.git_autocommit(root, f"sync: {', '.join(targets)}")
-    # sync writes new/updated files straight to disk -- without this the FTS
-    # index goes stale immediately and `kb doctor`/`kb search` won't see them
-    # until someone remembers to run `kb index` by hand.
-    index_rc = proc.run_script("index_fts")
-    return index_rc or rc
-
-
-def cmd_index(args):
-    return proc.run_script("index_fts", ["--full"] if args.full else [])
-
-
-def cmd_validate(args):
-    return proc.run_script("validate_frontmatter")
 
 
 def _entry_fzf_lines(entries):
@@ -838,7 +617,7 @@ def cmd_link(args):
             return 0
 
     if args.action is None:
-        return show_links(root, entry_id, json_out=args.json)
+        return pkb_entries.show_links(root, entry_id, json_out=args.json)
 
     found = _find_entry(root, entry_id)
     if found is None:
@@ -873,49 +652,9 @@ def cmd_link(args):
     return 0
 
 
-def show_links(root, target_id, json_out=False):
-    """Print forward links + backlinks for an entry. Shared by cmd_links and the
-    interactive search picker's 'links' action."""
-    forward = None
-    backlinks = []
-    target_path = None
-
-    for path in pc.iter_markdown_files(root):
-        try:
-            fm, _ = pc.read_entry(path)
-        except ValueError:
-            continue
-        if fm.get("id") == target_id:
-            forward = fm.get("links") or []
-            target_path = os.path.relpath(path, root)
-        if target_id in (fm.get("links") or []):
-            backlinks.append((fm.get("id"), fm.get("title"), os.path.relpath(path, root)))
-
-    if forward is None:
-        return _fail(f"no entry with id '{target_id}'", json_out)
-
-    if json_out:
-        print(json.dumps({
-            "id": target_id,
-            "path": target_path,
-            "forward": forward,
-            "backlinks": [{"id": lid, "title": title, "path": path} for lid, title, path in backlinks],
-        }))
-        return 0
-
-    print(f"{target_id}  ({target_path})")
-    print(f"\nforward links ({len(forward)}):")
-    for link_id in forward:
-        print(f"  -> {link_id}")
-    print(f"\nbacklinks ({len(backlinks)}):")
-    for link_id, title, path in backlinks:
-        print(f"  <- {link_id}  {title}  ({path})")
-    return 0
-
-
 def cmd_links(args):
     root = pc.get_repo_root()
-    return show_links(root, args.id, json_out=args.json)
+    return pkb_entries.show_links(root, args.id, json_out=args.json)
 
 
 def cmd_show(args):
@@ -1134,12 +873,7 @@ def cmd_remind(args):
                 _print_result(ok, msg)
             return rc
         if args.action == "uninstall":
-            rc = service._interval_service_uninstall(kind, "remind")
-            app = notifier._notifier_app_path()
-            if sys.platform == "darwin" and os.path.isdir(app):
-                shutil.rmtree(app)
-                print(f"removed {app}")
-            return rc
+            return reminders.reminders_uninstall(kind)
         rc = service._interval_service_status(kind, "remind", "kb remind install")
         if remind_push.get_config():
             _print_result(*remind_push.status())
@@ -1416,235 +1150,10 @@ def cmd_push(args):
     return 0
 
 
-def cmd_setup(args):
-    # root is optional: --install (and the tool/sync checks below) don't need a data
-    # repo at all -- only the hook/index/bd/secrets steps do.
-    ok, todo = [], []
-    try:
-        root = pc.get_repo_root()
-    except SystemExit:
-        # No data repo found anywhere (walking up from cwd) and no central kb at
-        # ~/.pkb either -- this is a brand-new machine. Bootstrap the central kb
-        # here instead of requiring a manual `mkdir -p ~/.pkb/.pkb && git init`
-        # before setup can do anything, since that step was easy to miss (e.g.
-        # when a scripted `kb setup --yes` runs non-interactively).
-        central = os.path.join(os.path.expanduser("~"), ".pkb")
-        os.makedirs(os.path.join(central, ".pkb"), exist_ok=True)
-        if shutil.which("git") and not os.path.isdir(os.path.join(central, ".git")):
-            subprocess.run(["git", "init", "-q"], cwd=central, check=True)
-        pc.REPO_ROOT = central
-        root = central
-        ok.append(f"created central kb at {central} (none found)")
-
-    # 0. kb itself is put on PATH by the installer (pipx/uv/pip); just confirm it.
-    on_path = shutil.which("kb")
-    if on_path:
-        ok.append(f"kb is on PATH ({on_path})")
-    else:
-        todo.append("`kb` isn't on your PATH -- if installed with pipx, run `pipx ensurepath` and open a new shell")
-
-    # 0b. install the bundled Claude Code skill -- guided, default no (not
-    # everyone using kb also uses Claude Code). A symlink, not a copy --
-    # Claude Code follows a skill-directory symlink and reads SKILL.md from
-    # the target, so this repo stays the single source of truth and a `kb
-    # update` picks up any skill changes automatically, same reasoning as
-    # symlinking the kb binary itself above.
-    skill_src = os.path.join(PKG_DIR, "skills", "kb")
-    skill_dir = os.path.expanduser("~/.claude/skills")
-    skill_target = os.path.join(skill_dir, "kb")
-    if os.path.islink(skill_target) and os.readlink(skill_target) == skill_src:
-        ok.append(f"kb skill already installed at {skill_target}")
-    elif os.path.islink(skill_target) and os.readlink(skill_target).endswith(os.path.join("skills", "kb")):
-        # our own symlink from an older layout/install location -- repoint it
-        os.remove(skill_target)
-        os.symlink(skill_src, skill_target)
-        ok.append(f"repointed kb skill -> {skill_src}")
-    elif os.path.lexists(skill_target):
-        todo.append(f"{skill_target} already exists and isn't this repo's skill -- remove it yourself "
-                     f"if you want kb's version there")
-    elif _confirm("Install the Claude Code skill for kb (lets Claude Code drive kb directly)?",
-                   default=False, assume_yes=args.yes):
-        os.makedirs(skill_dir, exist_ok=True)
-        os.symlink(skill_src, skill_target)
-        ok.append(f"installed kb skill -> {skill_target}")
-
-    sync_sources = sources.discover_sync_sources()
-    tools = health.tool_status(sync_sources)
-
-    # 0c. install missing optional CLI deps via brew -- guided, default yes
-    # (this is the "including optional tooling" part of setup: bd/beads,
-    # glab/gh for sync sources, rg/fzf for Tier 1 search, sops for secrets).
-    to_install = health.missing_deps_with_formulas(tools, sync_sources)
-    if not to_install:
-        ok.append("all optional CLI deps (bd/glab/gh/rg/fzf/sops) already installed")
-    elif not shutil.which("brew"):
-        todo.append("brew not found -- install manually: " +
-                    ", ".join(f"{t} (`{f}`)" for t, f in to_install))
-    else:
-        names = ", ".join(t for t, _f in to_install)
-        if _confirm(f"Install missing optional CLI deps via brew ({names})?", default=True, assume_yes=args.yes):
-            formulas = sorted({f for _t, f in to_install})
-            result = subprocess.run(["brew", "install", *formulas], capture_output=True, text=True)
-            if result.returncode == 0:
-                ok.append(f"installed missing deps via brew: {', '.join(formulas)}")
-                # just recheck presence of what we installed -- no need to re-discover
-                # sync sources or re-run every auth_check subprocess again
-                tools.update({t: shutil.which(t) is not None for t, _f in to_install})
-            else:
-                todo.append(f"brew install {' '.join(formulas)} failed: "
-                            f"{result.stderr.strip() or result.stdout.strip()}")
-        else:
-            todo.append(f"skipped installing optional deps: {names} -- rerun `kb setup` "
-                        f"or `brew install {' '.join(sorted({f for _t, f in to_install}))}` later")
-
-    if root is None:
-        todo.append("not inside a pkb data repo (no .pkb/ found) -- cd into one to also set up the "
-                     "pre-commit hook, search index, and local bd store")
-    else:
-        # 1. pre-commit hook -- generated directly (not a symlinked template) since it
-        # must hardcode this machine's path to the tool install, which lives in a
-        # separate repo from the data repo the hook runs in.
-        git_dir = os.path.join(root, ".git")
-        if not os.path.isdir(git_dir):
-            todo.append("not a git repo (or .git not found here) -- pre-commit hook skipped")
-        else:
-            hook_content = health.hook_expected_content()
-            hook_path, existing = health.read_hook(root)
-            if existing == hook_content:
-                ok.append("pre-commit hook already installed")
-            elif existing is not None and health.HOOK_MARKER not in existing:
-                todo.append(f"{os.path.relpath(hook_path, root)} exists and isn't our hook -- leaving it alone")
-            else:
-                os.makedirs(os.path.dirname(hook_path), exist_ok=True)
-                if os.path.lexists(hook_path):  # e.g. a stale/broken symlink from an older kb setup
-                    os.remove(hook_path)
-                with open(hook_path, "w", encoding="utf-8") as f:
-                    f.write(hook_content)
-                os.chmod(hook_path, 0o755)
-                ok.append("installed pre-commit hook" if existing is None else "refreshed pre-commit hook path")
-
-            # 1b. auto-commit excludes (fts.db, entry locks) -- every kb mutation
-            # commits automatically, so these must be in place before that ever
-            # runs, not just lazily on first write
-            pc._ensure_git_excludes(root)
-            ok.append("auto-commit excludes (fts.db, entry locks) are in place")
-
-        # 2. FTS index
-        db_path = health.index_status(root)
-        full = not os.path.exists(db_path)
-        rc = proc.run_script("index_fts", ["--full"] if full else [])
-        ok.append(f"{'built' if full else 'refreshed'} the FTS5 search index" if rc == 0 else "index build failed")
-        sem = health.semantic_status(root)
-        if sem:
-            (ok if sem[0] else todo).append(sem[1])
-        elif semantic.missing_dependency() and semantic.config(root)[0]:
-            ok.append("semantic search not installed (optional) -- `uv tool install 'pkb-cli[semantic]'` "
-                      "adds meaning-based search")
-
-        # 3. local bd store
-        if tools["bd"]:
-            store_exists, _git_excluded = health.bd_store_status(root)
-            if store_exists:
-                ok.append("local bd (beads) store already initialized")
-            else:
-                result = subprocess.run(
-                    ["bd", "init", "--stealth", "--non-interactive"],
-                    cwd=root, capture_output=True, text=True,
-                )
-                if result.returncode == 0:
-                    ok.append("initialized a local bd store (--stealth: excluded from git)")
-                else:
-                    todo.append(f"bd init failed: {result.stderr.strip() or result.stdout.strip()}")
-            # 3b. TODO reminders -- opt-in, default no (a background job on a timer is
-            # not something to turn on unasked, including under --yes)
-            kind = service.service_kind()
-            reminders_on, reminder_msg = reminders.reminder_status_line(kind)
-            if reminders_on:
-                ok.append(reminder_msg)
-            elif kind is not None and not service._service_state(kind, "remind")["installed"]:
-                if _confirm("Check for due TODOs every 5 minutes and send desktop notifications "
-                            "(kb remind install)?", default=False, assume_yes=args.yes):
-                    out = io.StringIO()
-                    with contextlib.redirect_stdout(out):
-                        rc = service._interval_service_install(kind, "remind", root, ["remind", "check"], 5,
-                                                       "kb remind -- notify about due TODOs")
-                    if rc != 0:
-                        todo.append(f"kb remind install failed: {out.getvalue().strip()}")
-                    else:
-                        ok.append("installed the TODO reminder check (every 5 minutes)")
-                        notified, note = notifier.finish_reminder_install()
-                        (ok if notified else todo).append(note.replace("\n", "\n         "))
-                else:
-                    todo.append(reminder_msg)
-            else:
-                todo.append(reminder_msg)
-        else:
-            todo.append("bd CLI not found -- `brew install beads` if you want local TODO tracking via kb sync beads")
-
-        # 4. secrets (sops), informational only -- never touch/create real secrets ourselves
-        sops_configured, secrets_exists = health.secrets_status(root)
-        if sops_configured:
-            if secrets_exists:
-                ok.append(".pkb/secrets.enc.env already set up")
-            elif tools["sops"]:
-                example_path = os.path.join(PKG_DIR, "templates", "secrets.env.example")
-                todo.append("run `kb secrets` to create encrypted memos/gitlab/github credentials "
-                            f"(see {os.path.normpath(example_path)} for the expected keys)")
-            else:
-                todo.append("sops CLI not found -- install it to use encrypted credentials, or export "
-                            "PKB_MEMOS_URL/PKB_MEMOS_TOKEN/PKB_GITLAB_PROJECT/PKB_GITHUB_REPO directly")
-
-    # 5. cli_tool sync sources (e.g. glab/gh, required for GitLab/GitHub issue sync)
-    todo.extend(sources.sync_tool_todos(sync_sources, tools))
-
-    # 6. rg/fzf (Tier 1 search, optional -- kb search/index work without them)
-    missing_search_tools = [t for t in ("rg", "fzf") if not tools[t]]
-    if missing_search_tools:
-        todo.append(f"{'/'.join(missing_search_tools)} not found -- optional, only needed for zero-setup "
-                     f"search (`brew install ripgrep fzf`); kb search/index don't need them")
-
-    # 7. what's actually configured for sync right now (informational)
-    configured = sources.sync_configured_sources(sync_sources, tools)
-    if configured:
-        ok.append(f"sync sources ready in this shell: {', '.join(configured)}")
-    else:
-        todo.append("no sync source has credentials in this shell yet (memos/gitlab/github need env vars, "
-                     "see README 'Ingestion credentials')")
-
-    print("kb setup\n")
-    for line in ok:
-        print(f"  [ok]   {line}")
-    for line in todo:
-        print(f"  [todo] {line}")
-    return 1 if any("failed" in t for t in todo) else 0
-
-
 def cmd_web(args):
     root = pc.get_repo_root()
     from . import kb_web
     return kb_web.serve(root, args.port, open_browser=not args.no_open)
-
-
-def cmd_doctor(args):
-    """Read-only health check -- reuses the same detection helpers as `kb setup`
-    but never writes anything, and adds a few deeper checks setup doesn't do."""
-    try:
-        root = pc.get_repo_root()
-    except SystemExit:
-        root = None
-    ok, todo = health.doctor_checks(root)
-
-    p_ok, p_todo = projdocs.doctor_lines()
-    ok, todo = ok + p_ok, todo + p_todo
-
-    print("kb doctor\n")
-    for line in ok:
-        print(f"  [ok]   {line}")
-    for line in todo:
-        print(f"  [todo] {line}")
-    if not todo:
-        print("\nall clear")
-    return 1 if todo else 0
 
 
 EPILOG = """\
@@ -1786,13 +1295,13 @@ def build_parser():
 
     p = sub.add_parser("triage", help="flag inbox items overdue for triage")
     p.add_argument("--json", action="store_true", help="machine-readable output")
-    p.set_defaults(func=cmd_triage)
+    p.set_defaults(func=admin.cmd_triage)
 
     sync_source_names = list(sources.discover_sync_sources().keys())
     p = sub.add_parser("sync", help="pull in " + " / ".join(sync_source_names))
     p.add_argument("source", nargs="?", choices=sync_source_names + ["all"], default="all",
                     help="which source to sync (default: all)")
-    p.set_defaults(func=cmd_sync)
+    p.set_defaults(func=admin.cmd_sync)
 
     p = sub.add_parser(
         "push", help="push the data repo's commits to its upstream",
@@ -1805,10 +1314,10 @@ def build_parser():
 
     p = sub.add_parser("index", help="rebuild or refresh the FTS5 search index")
     p.add_argument("--full", action="store_true", help="rebuild from scratch instead of incrementally")
-    p.set_defaults(func=cmd_index)
+    p.set_defaults(func=admin.cmd_index)
 
     p = sub.add_parser("validate", help="check frontmatter, id, and link integrity")
-    p.set_defaults(func=cmd_validate)
+    p.set_defaults(func=admin.cmd_validate)
 
     p = sub.add_parser("links", help="show forward links and backlinks for an entry")
     p.add_argument("id", help="entry id, e.g. 2026-08-31-1423")
@@ -2012,7 +1521,7 @@ def build_parser():
     )
     p.add_argument("-y", "--yes", action="store_true",
                     help="skip prompts and accept defaults (for scripted installs)")
-    p.set_defaults(func=cmd_setup)
+    p.set_defaults(func=admin.cmd_setup)
 
     p = sub.add_parser(
         "web", aliases=["open"], help="run the local web UI, or open it if already running",
@@ -2074,7 +1583,7 @@ def build_parser():
     p.set_defaults(func=service.cmd_sync_service)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
-    p.set_defaults(func=cmd_doctor)
+    p.set_defaults(func=admin.cmd_doctor)
 
     p = sub.add_parser("update", help="check for and pull kb tool updates")
     p.add_argument("--check", action="store_true", help="only check, don't pull even if behind")

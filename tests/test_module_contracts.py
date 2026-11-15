@@ -1,20 +1,28 @@
-"""kb_web reaches into the cli module lazily (`_kb().name`, `kb.name`), and its tests mock that
-accessor -- so a function moved out of cli.py would pass every test and still break at runtime.
-This checks every attribute kb_web uses actually exists."""
+"""kb_web calls straight into the modules that own each function (no lazy hop through cli, which
+imports kb_web). Its tests patch functions by name via fakes.patched_kb_web, so a function moved
+or renamed would pass every test and still break at runtime -- this checks every patch target
+exists, and that kb_web has no way back into cli."""
+import importlib
 import re
 import unittest
 
-from pkb_cli import cli, kb_web
+import fakes
+from pkb_cli import kb_web
 
 
 class KbWebContractTest(unittest.TestCase):
-    def test_every_cli_attribute_kb_web_uses_exists(self):
+    def test_every_patch_target_exists(self):
+        missing = []
+        for name, (mod, attr) in fakes._KB_WEB_TARGETS.items():
+            if not hasattr(importlib.import_module(f"pkb_cli.{mod}"), attr):
+                missing.append(f"{mod}.{attr}")
+        self.assertEqual(missing, [], f"patch targets that no longer exist: {missing}")
+
+    def test_kb_web_does_not_import_cli(self):
         with open(kb_web.__file__, encoding="utf-8") as f:
             src = f.read()
-        used = set(re.findall(r"_kb\(\)\.(\w+)", src)) | set(re.findall(r"(?<![\w.])kb\.(\w+)", src))
-        used.discard("pc")  # `_kb().pc` is the pkb_common alias
-        missing = sorted(n for n in used if not hasattr(cli, n))
-        self.assertEqual(missing, [], f"kb_web uses these cli attributes, but cli has no such name: {missing}")
+        self.assertIsNone(re.search(r"^\s*(from \. import cli\b|from \.cli import|import pkb_cli\.cli)", src, re.M))
+        self.assertNotIn("_kb()", src)
 
 
 if __name__ == "__main__":

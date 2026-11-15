@@ -21,9 +21,21 @@ import webbrowser
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from . import __version__
+from . import admin
+from . import health
 from . import index_fts
+from . import inbox
+from . import journal
+from . import notifier
 from . import pkb_common as pc
+from . import pkb_entries
+from . import reminders
 from . import search
+from . import service
+from . import sources
+from . import todos
+from . import updater
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "web")
 
@@ -39,13 +51,6 @@ _CONTENT_DIR_PREFIXES = tuple(f"/{d}/" for d in pc.CONTENT_DIRS)
 # recompile the pattern.
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _RANGE_COPY_BLOCK_SIZE = 64 * 1024
-
-def _kb():
-    """The cli module, imported lazily (it imports this one) to reuse its logic
-    (journal_append, etc.) instead of duplicating it here."""
-    from . import cli
-    return cli
-
 
 # [(method, compiled_path_regex, handler), ...]; handler(h, root, *path_params)
 # writes its own response via h.send_json(...). Routes are added with @route as
@@ -148,7 +153,7 @@ def api_capture(h, root):
     if not text:
         h.send_json({"error": "empty"}, status=400)
         return
-    result = _kb().journal_append(root, datetime.now().date(), text)
+    result = journal.journal_append(root, datetime.now().date(), text)
     if result is None:
         h.send_json({"error": "empty"}, status=400)
         return
@@ -265,7 +270,7 @@ def api_feed(h, root):
 def api_tags(h, root):
     """Every tag used anywhere in the repo, for the tag editor's autocomplete
     -- reuses the same listing `kb tag add` offers through fzf."""
-    h.send_json({"tags": _kb()._all_tags(root)})
+    h.send_json({"tags": pkb_entries._all_tags(root)})
 
 
 @route("GET", "/api/entries")
@@ -274,7 +279,7 @@ def api_entries_list(h, root):
     the same listing `kb link add`'s fzf picker is built from. ?exclude=<id>
     drops one id (the entry being edited, so it can't link to itself)."""
     exclude = h.query.get("exclude", [None])[0]
-    entries = _kb()._iter_all_entries(root)
+    entries = pkb_entries._iter_all_entries(root)
     h.send_json({"items": [
         {"id": e["id"], "title": e["title"], "type": e["type"]}
         for e in entries if e["id"] != exclude
@@ -286,13 +291,12 @@ def api_entry_create(h, root):
     """Create a new core-content entry directly -- the web equivalent of
     `kb new <type> "<title>"`, without the capture-then-promote-from-inbox
     detour. Reuses entry_new(), same as cmd_new does on the CLI side."""
-    kb = _kb()
     payload = h.read_json()
     title = (payload.get("title") or "").strip()
     if not title:
         h.send_json({"error": "title is required"}, status=400)
         return
-    result = kb.entry_new(root, payload.get("type"), title,
+    result = pkb_entries.entry_new(root, payload.get("type"), title,
                            tags=payload.get("tags"), links=payload.get("links"),
                            body=payload.get("body"))
     if "error" in result:
@@ -303,15 +307,14 @@ def api_entry_create(h, root):
 
 @route("GET", "/api/entries/{entry_id}")
 def api_entry_show(h, root, entry_id):
-    kb = _kb()
-    found = kb._find_entry(root, entry_id)
+    found = pkb_entries._find_entry(root, entry_id)
     if found is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
     path, fm, body = found
     # Lets the UI grey out editing and point at the upstream source before the
     # user ever tries a PATCH (which would 409 anyway -- see api_error_status).
-    readonly = kb._readonly_source_info(path, body)
+    readonly = pkb_entries._readonly_source_info(path, body)
     readonly_info = {"label": readonly[0], "url": readonly[1]} if readonly else None
     h.send_json({"id": entry_id, "path": os.path.relpath(path, root), "frontmatter": fm, "body": body,
                  "readonly": readonly_info})
@@ -319,7 +322,7 @@ def api_entry_show(h, root, entry_id):
 
 @route("GET", "/api/entries/{entry_id}/links")
 def api_entry_links(h, root, entry_id):
-    rc, message = _capture_stdout(_kb().show_links, root, entry_id, json_out=True)
+    rc, message = _capture_stdout(pkb_entries.show_links, root, entry_id, json_out=True)
     if rc != 0:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
@@ -344,7 +347,7 @@ def _mutation_error_status(result):
 @route("PATCH", "/api/entries/{entry_id}/tags")
 def api_entry_tags_patch(h, root, entry_id):
     payload = h.read_json()
-    result = _kb().entry_set_tags(root, entry_id, add=payload.get("add"), rm=payload.get("rm"))
+    result = pkb_entries.entry_set_tags(root, entry_id, add=payload.get("add"), rm=payload.get("rm"))
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
@@ -357,7 +360,7 @@ def api_entry_tags_patch(h, root, entry_id):
 @route("PATCH", "/api/entries/{entry_id}/links")
 def api_entry_links_patch(h, root, entry_id):
     payload = h.read_json()
-    result = _kb().entry_set_links(root, entry_id, add=payload.get("add"), rm=payload.get("rm"))
+    result = pkb_entries.entry_set_links(root, entry_id, add=payload.get("add"), rm=payload.get("rm"))
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
@@ -370,7 +373,7 @@ def api_entry_links_patch(h, root, entry_id):
 @route("PATCH", "/api/entries/{entry_id}")
 def api_entry_content_patch(h, root, entry_id):
     payload = h.read_json()
-    result = _kb().entry_update_content(root, entry_id, title=payload.get("title"), body=payload.get("body"))
+    result = pkb_entries.entry_update_content(root, entry_id, title=payload.get("title"), body=payload.get("body"))
     if result is None:
         h.send_json({"error": f"no entry with id '{entry_id}'"}, status=404)
         return
@@ -382,58 +385,54 @@ def api_entry_content_patch(h, root, entry_id):
 
 @route("GET", "/api/inbox")
 def api_inbox_list(h, root):
-    h.send_json({"items": _kb().inbox_list(root)})
+    h.send_json({"items": pkb_entries.inbox_list(root)})
 
 
 @route("POST", "/api/inbox/{item_id}/promote")
 def api_inbox_promote(h, root, item_id):
-    kb = _kb()
     target_type = (h.read_json() or {}).get("type")
-    if target_type not in kb.pc.CORE_TYPES:
-        h.send_json({"error": f"type must be one of {list(kb.pc.CORE_TYPES)}"}, status=400)
+    if target_type not in pc.CORE_TYPES:
+        h.send_json({"error": f"type must be one of {list(pc.CORE_TYPES)}"}, status=400)
         return
-    found = kb._inbox_find(os.path.join(root, "inbox"), item_id)
+    found = inbox.find(os.path.join(root, "inbox"), item_id)
     if found is None:
         h.send_json({"error": f"no inbox item with id '{item_id}'"}, status=404)
         return
     path, fm, body = found
-    _, message = _capture_stdout(kb._inbox_promote, root, path, fm, body, target_type)
+    _, message = _capture_stdout(inbox.promote, root, path, fm, body, target_type)
     h.send_json({"message": message})
 
 
 @route("POST", "/api/inbox/{item_id}/redirect")
 def api_inbox_redirect(h, root, item_id):
-    kb = _kb()
-    found = kb._inbox_find(os.path.join(root, "inbox"), item_id)
+    found = inbox.find(os.path.join(root, "inbox"), item_id)
     if found is None:
         h.send_json({"error": f"no inbox item with id '{item_id}'"}, status=404)
         return
     path, fm, body = found
-    _, message = _capture_stdout(kb._inbox_redirect, root, path, fm, body)
+    _, message = _capture_stdout(inbox.redirect, root, path, fm, body)
     h.send_json({"message": message})
 
 
 @route("DELETE", "/api/inbox/{item_id}")
 def api_inbox_discard(h, root, item_id):
-    kb = _kb()
-    found = kb._inbox_find(os.path.join(root, "inbox"), item_id)
+    found = inbox.find(os.path.join(root, "inbox"), item_id)
     if found is None:
         h.send_json({"error": f"no inbox item with id '{item_id}'"}, status=404)
         return
     path, _fm, _body = found
-    _, message = _capture_stdout(kb._inbox_discard, root, path)
+    _, message = _capture_stdout(inbox.discard, root, path)
     h.send_json({"message": message})
 
 
 @route("GET", "/api/todo")
 def api_todo_list(h, root):
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     include_all = h.query.get("all", ["0"])[0] in ("1", "true")
     try:
-        issues = kb.bd_list(root, include_all=include_all)
+        issues = todos.bd_list(root, include_all=include_all)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -442,8 +441,7 @@ def api_todo_list(h, root):
 
 @route("POST", "/api/todo")
 def api_todo_create(h, root):
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     payload = h.read_json()
@@ -452,7 +450,7 @@ def api_todo_create(h, root):
         h.send_json({"error": "missing title"}, status=400)
         return
     try:
-        message = kb.bd_create(
+        message = todos.bd_create(
             root, title, description=payload.get("description"),
             priority=str(payload.get("priority", "2")),
             issue_type=payload.get("type", "task"), labels=payload.get("labels"),
@@ -469,8 +467,7 @@ def api_todo_update(h, root, issue_id):
     """Edit priority/type/description/assignee/due date, or add/remove one label, on
     an existing todo -- the fields bd_create sets at creation time but
     bd_action's show/close/comment/reopen never touch. due="" clears the due date."""
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     payload = h.read_json() or {}
@@ -486,7 +483,7 @@ def api_todo_update(h, root, issue_id):
         h.send_json({"error": "nothing to update"}, status=400)
         return
     try:
-        message = kb.bd_update(root, issue_id, priority=priority, issue_type=issue_type,
+        message = todos.bd_update(root, issue_id, priority=priority, issue_type=issue_type,
                                 description=description, assignee=assignee,
                                 add_label=add_label, remove_label=remove_label, due=due)
     except RuntimeError as e:
@@ -500,8 +497,7 @@ def api_todo_delete(h, root, issue_id):
     """Permanently delete a todo. Requires the caller to echo the issue id back
     as `confirm` -- deletion is irreversible, so a stray DELETE (a typo'd
     script, a forgotten confirm dialog) can't take it out by accident."""
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     payload = h.read_json() or {}
@@ -509,7 +505,7 @@ def api_todo_delete(h, root, issue_id):
         h.send_json({"error": "confirmation required"}, status=400)
         return
     try:
-        message = kb.bd_delete(root, issue_id)
+        message = todos.bd_delete(root, issue_id)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -520,13 +516,12 @@ def api_todo_delete(h, root, issue_id):
 def api_todo_deps(h, root, issue_id):
     """Both directions at once: what this issue is blocked by (down) and what
     it blocks (up) -- the modal wants both whenever it opens, not one at a time."""
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     try:
-        blocked_by = kb.bd_deps(root, issue_id, direction="down")
-        blocks = kb.bd_deps(root, issue_id, direction="up")
+        blocked_by = todos.bd_deps(root, issue_id, direction="down")
+        blocks = todos.bd_deps(root, issue_id, direction="up")
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -535,8 +530,7 @@ def api_todo_deps(h, root, issue_id):
 
 @route("POST", "/api/todo/{issue_id}/deps")
 def api_todo_deps_add(h, root, issue_id):
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     payload = h.read_json() or {}
@@ -547,7 +541,7 @@ def api_todo_deps_add(h, root, issue_id):
         return
     from_id, to_id = (issue_id, target_id) if direction == "blocked_by" else (target_id, issue_id)
     try:
-        message = kb.bd_dep_add(root, from_id, to_id)
+        message = todos.bd_dep_add(root, from_id, to_id)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -556,8 +550,7 @@ def api_todo_deps_add(h, root, issue_id):
 
 @route("DELETE", "/api/todo/{issue_id}/deps/{target_id}")
 def api_todo_deps_remove(h, root, issue_id, target_id):
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     direction = h.query.get("direction", [""])[0]
@@ -566,7 +559,7 @@ def api_todo_deps_remove(h, root, issue_id, target_id):
         return
     from_id, to_id = (issue_id, target_id) if direction == "blocked_by" else (target_id, issue_id)
     try:
-        message = kb.bd_dep_remove(root, from_id, to_id)
+        message = todos.bd_dep_remove(root, from_id, to_id)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -578,8 +571,7 @@ def api_todo_action(h, root, issue_id, action):
     if action not in ("show", "close", "comment", "reopen", "snooze", "unsnooze"):
         h.send_json({"error": f"unknown action '{action}'"}, status=404)
         return
-    kb = _kb()
-    if not kb.bd_available():
+    if not todos.bd_available():
         h.send_json({"error": "bd CLI not found"}, status=503)
         return
     if action in ("snooze", "unsnooze"):
@@ -588,7 +580,7 @@ def api_todo_action(h, root, issue_id, action):
             h.send_json({"error": "missing until"}, status=400)
             return
         try:
-            message = kb.bd_snooze(root, issue_id, until) if action == "snooze" else kb.bd_unsnooze(root, issue_id)
+            message = todos.bd_snooze(root, issue_id, until) if action == "snooze" else todos.bd_unsnooze(root, issue_id)
         except RuntimeError as e:
             h.send_json({"error": str(e)}, status=502)
             return
@@ -601,7 +593,7 @@ def api_todo_action(h, root, issue_id, action):
             h.send_json({"error": "missing text"}, status=400)
             return
     try:
-        message = kb.bd_action(root, action, issue_id, comment_text=comment_text)
+        message = todos.bd_action(root, action, issue_id, comment_text=comment_text)
     except RuntimeError as e:
         h.send_json({"error": str(e)}, status=502)
         return
@@ -652,12 +644,12 @@ def _admin_task(h, fn, *args, extra=None):
 @route("POST", "/api/index")
 def api_index(h, root):
     args = types.SimpleNamespace(full=bool((h.read_json() or {}).get("full")))
-    _admin_task(h, _kb().cmd_index, args)
+    _admin_task(h, admin.cmd_index, args)
 
 
 @route("POST", "/api/validate")
 def api_validate(h, root):
-    _admin_task(h, _kb().cmd_validate, types.SimpleNamespace())
+    _admin_task(h, admin.cmd_validate, types.SimpleNamespace())
 
 
 @route("POST", "/api/sync")
@@ -665,26 +657,26 @@ def api_sync(h, root):
     source = (h.read_json() or {}).get("source", "all")
     # derived from discover_sync_sources() (not a hardcoded list) so a new
     # sync_<name>.py script is immediately syncable from the web UI too
-    if source not in (*_kb().discover_sync_sources().keys(), "all"):
+    if source not in (*sources.discover_sync_sources().keys(), "all"):
         h.send_json({"error": f"unknown source '{source}'"}, status=400)
         return
     args = types.SimpleNamespace(source=None if source == "all" else source)
-    _admin_task(h, _kb().cmd_sync, args)
+    _admin_task(h, admin.cmd_sync, args)
 
 
 @route("GET", "/api/doctor")
 def api_doctor(h, root):
-    _admin_task(h, _kb().cmd_doctor, types.SimpleNamespace())
+    _admin_task(h, admin.cmd_doctor, types.SimpleNamespace())
 
 
 @route("GET", "/api/admin/triage")
 def api_admin_triage(h, root):
-    _admin_task(h, _kb().cmd_triage, types.SimpleNamespace(json=False))
+    _admin_task(h, admin.cmd_triage, types.SimpleNamespace(json=False))
 
 
 @route("GET", "/api/admin/journal-months")
 def api_admin_journal_months(h, root):
-    h.send_json({"months": _kb().journal_months(root)})
+    h.send_json({"months": journal.journal_months(root)})
 
 
 @route("POST", "/api/admin/rollup")
@@ -694,21 +686,21 @@ def api_admin_rollup(h, root):
     if month and not re.fullmatch(r"\d{4}-\d{2}", month):
         h.send_json({"error": "month must be YYYY-MM"}, status=400)
         return
-    _admin_task(h, _kb()._journal_rollup, root, month)
+    _admin_task(h, journal.journal_rollup, root, month)
 
 
 @route("POST", "/api/admin/setup")
 def api_admin_setup(h, root):
     """`kb setup --yes` -- idempotent, so re-running it is how the pre-commit
     hook, index, bd store and optional tools get repaired after an update."""
-    _admin_task(h, _kb().cmd_setup, types.SimpleNamespace(yes=True))
+    _admin_task(h, admin.cmd_setup, types.SimpleNamespace(yes=True))
 
 
 @route("GET", "/api/admin/update")
 def api_admin_update_check(h, root):
     """Whether a newer kb exists -- the one admin read that touches the network
     (`kb update --check`'s structured form), so it's only called on demand."""
-    h.send_json(_kb().update_info())
+    h.send_json(updater.update_info())
 
 
 @route("POST", "/api/admin/update")
@@ -717,21 +709,20 @@ def api_admin_update(h, root):
     service refresh would restart this very process mid-request, so it's
     deferred (apply_update only reports that new code went in) and scheduled
     after the response goes out; the client waits for the server to come back."""
-    kb = _kb()
 
     def schedule_refresh(updated):
-        services = kb.service_info() if updated else {"supported": False}
+        services = service.service_info() if updated else {"supported": False}
         scheduled = services["supported"] and (services["web"]["installed"] or services["sync"]["installed"])
         if scheduled:
-            kb.schedule_kb_command("service", "refresh")
+            updater.schedule_kb_command("service", "refresh")
         return {"restart_scheduled": bool(scheduled)}
 
-    _admin_task(h, lambda: kb.apply_update(capture=True, defer_refresh=True), extra=schedule_refresh)
+    _admin_task(h, lambda: updater.apply_update(capture=True, defer_refresh=True), extra=schedule_refresh)
 
 
 @route("GET", "/api/admin/services")
 def api_admin_services(h, root):
-    h.send_json(_kb().service_info())
+    h.send_json(service.service_info())
 
 
 @route("POST", "/api/admin/services/{name}/{action}")
@@ -741,12 +732,11 @@ def api_admin_service_action(h, root, name, action):
     web is itself running under go through schedule_kb_command; installing the web
     service is left to the CLI -- by the time this page is open it's already
     running, and a second one would just fight it for the port."""
-    kb = _kb()
     payload = h.read_json() or {}
     if name not in ("web", "sync") or action not in ("install", "uninstall", "refresh"):
         h.send_json({"error": f"no such service action: {name} {action}"}, status=404)
         return
-    services = kb.service_info()
+    services = service.service_info()
     if not services["supported"]:
         h.send_json({"error": f"services aren't supported on {sys.platform}"}, status=400)
         return
@@ -758,7 +748,7 @@ def api_admin_service_action(h, root, name, action):
         if not services["web"]["installed"]:
             h.send_json({"error": "the web service isn't installed"}, status=400)
             return
-        kb.schedule_kb_command("service", action)
+        updater.schedule_kb_command("service", action)
         h.send_json({"ok": True, "output": "", "restart_scheduled": True})
         return
     if action == "refresh":
@@ -774,14 +764,14 @@ def api_admin_service_action(h, root, name, action):
             h.send_json({"error": "interval_minutes must be between 1 and 10080"}, status=400)
             return
     args = types.SimpleNamespace(action=action, interval_minutes=interval, repo=root)
-    _admin_task(h, kb.cmd_sync_service, args)
+    _admin_task(h, service.cmd_sync_service, args)
 
 
 @route("GET", "/api/admin/reminders")
 def api_admin_reminders(h, root):
     """State of the TODO reminder timer and, on macOS, the "kb reminders" notifier's
     notification permission. Read-only: never prompts or posts a notification."""
-    h.send_json(_kb().reminders_info())
+    h.send_json(reminders.reminders_info())
 
 
 @route("POST", "/api/admin/reminders/{action}")
@@ -789,29 +779,28 @@ def api_admin_reminders_action(h, root, action):
     """install/uninstall the reminder timer, send a test notification, or open the
     System Settings pane where the person allows notifications. Each is a button
     click: nothing here runs on its own."""
-    kb = _kb()
     if action not in ("install", "uninstall", "test", "open-settings"):
         h.send_json({"error": f"no such reminders action: {action}"}, status=404)
         return
-    info = kb.reminders_info()
+    info = reminders.reminders_info()
     if not info["supported"]:
         h.send_json({"error": f"reminders aren't supported on {sys.platform}"}, status=400)
         return
     if action == "test":
-        ok, message = kb.send_test_notification()
-        h.send_json({"ok": ok, "message": message, "reminders": kb.reminders_info()})
+        ok, message = notifier.send_test_notification()
+        h.send_json({"ok": ok, "message": message, "reminders": reminders.reminders_info()})
         return
     if action == "open-settings":
         if info["kind"] != "launchd":
             h.send_json({"error": "System Settings only exists on macOS"}, status=400)
             return
-        if not kb.open_notification_settings(force=True):
+        if not notifier.open_notification_settings(force=True):
             h.send_json({"error": "couldn't open System Settings"}, status=502)
             return
         h.send_json({"ok": True})
         return
     if action == "uninstall":
-        _admin_task(h, kb.cmd_remind, types.SimpleNamespace(action="uninstall"))
+        _admin_task(h, reminders.reminders_uninstall, info["kind"])
         return
     payload = h.read_json() or {}
     try:
@@ -823,7 +812,7 @@ def api_admin_reminders_action(h, root, action):
         return
 
     def install():
-        rc, notifications_ok, message = kb.reminders_install(root, interval)
+        rc, notifications_ok, message = reminders.reminders_install(root, interval)
         if message:
             print(message)
         return rc, notifications_ok
@@ -860,14 +849,13 @@ def api_admin_status(h, root):
     file/sqlite checks, no network) that the web UI polls this on a timer to
     surface "needs attention" without anyone opening Manage and clicking Doctor
     themselves."""
-    kb = _kb()
-    push = kb.push_status(root)
-    ok, todo = kb.doctor_checks(root, push=push)
-    inbox_count = len(kb.inbox_list(root))
+    push = health.push_status(root)
+    ok, todo = health.doctor_checks(root, push=push)
+    inbox_count = len(pkb_entries.inbox_list(root))
     todo_open_count = None
-    if kb.bd_available():
+    if todos.bd_available():
         try:
-            todo_open_count = len(kb.bd_list(root))
+            todo_open_count = len(todos.bd_list(root))
         except RuntimeError:
             todo_open_count = None
     h.send_json({
@@ -875,9 +863,9 @@ def api_admin_status(h, root):
         "inbox_count": inbox_count, "todo_open_count": todo_open_count,
         "needs_attention": bool(todo),
         "push": push,
-        "version": kb.__version__,
+        "version": __version__,
         "root": root,
-        "sources": list(kb.discover_sync_sources().keys()),
+        "sources": list(sources.discover_sync_sources().keys()),
         "busy": _ADMIN_LOCK.locked(),
     })
 
@@ -934,7 +922,7 @@ def api_push(h, root):
     """Push whatever auto-commit has accumulated to the data repo's upstream --
     the web equivalent of `kb push`. Reuses git_push() directly (not cmd_push,
     which prints to stdout) since there's no terminal to print into here."""
-    ok, message = _kb().pc.git_push(root)
+    ok, message = pc.git_push(root)
     h.send_json({"ok": ok, "message": message})
 
 
