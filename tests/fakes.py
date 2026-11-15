@@ -33,6 +33,7 @@ def write_test_entry(root, rel_path, body="body\n", **fm_overrides):
 # kb_web name -> (module, attribute) it is looked up through. A test patches by the name kb_web
 # calls and never has to know which module the function lives in.
 _KB_WEB_TARGETS = {
+    "__version__": ("kb_web", "__version__"),
     "_all_tags": ("pkb_entries", "_all_tags"),
     "_find_entry": ("pkb_entries", "_find_entry"),
     "_inbox_discard": ("inbox", "discard"),
@@ -90,14 +91,11 @@ class _PatchedKbWeb:
     def __init__(self, stack):
         for name in _KB_WEB_TARGETS:
             mod, attr = self._target(name)
-            object.__setattr__(self, name, stack.enter_context(mock.patch.object(mod, attr)))
-        mod, attr = self._target("__version__")
-        stack.enter_context(mock.patch.object(mod, attr, "0.0.0-test"))
+            new = "0.0.0-test" if name == "__version__" else mock.DEFAULT
+            object.__setattr__(self, name, stack.enter_context(mock.patch.object(mod, attr, new)))
 
     @staticmethod
     def _target(name):
-        if name == "__version__":
-            return importlib.import_module("pkb_cli.kb_web"), "__version__"
         mod, attr = _KB_WEB_TARGETS[name]
         return importlib.import_module(f"pkb_cli.{mod}"), attr
 
