@@ -287,6 +287,14 @@ class KbWebTest(unittest.TestCase):
         self.assertIn("no pkb data repo", data["error"])
         self.assertFalse(kb_web._ADMIN_LOCK.locked())
 
+    def test_admin_lock_is_released_before_the_response_is_sent(self):
+        held = []
+        handler = mock.Mock()
+        handler.send_json.side_effect = lambda *a, **k: held.append(kb_web._ADMIN_LOCK.locked())
+        kb_web._admin_task(handler, lambda: 0)
+        kb_web._admin_task(handler, mock.Mock(side_effect=SystemExit("no pkb data repo found")))
+        self.assertEqual(held, [False, False])  # the success path and the SystemExit path
+
     def test_admin_tasks_do_not_overlap(self):
         self.assertTrue(kb_web._ADMIN_LOCK.acquire(blocking=False))
         try:
