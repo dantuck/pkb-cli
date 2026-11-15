@@ -339,13 +339,24 @@
     <label class="todo-show-closed">
       <input type="checkbox" :checked="todoShowClosed" @change="toggleTodoShowClosed()"> show closed
     </label>
+    <button class="link-btn" :class="{ active: todoDateOpen || todoDateActive() }" :aria-expanded="todoDateOpen"
+            aria-controls="todo-date-filters" @click="todoDateOpen = !todoDateOpen">dates</button>
   </div>
-  <div id="todo-chip-filters" x-show="todoAllLabels().length">
+  <div id="todo-date-filters" x-show="todoDateOpen">
+    <select x-model="todoDateField" aria-label="Date to filter on">
+      <option value="created">created</option>
+      <option value="updated">updated</option>
+      <option value="closed" x-show="todoShowClosed" :disabled="!todoShowClosed">closed</option>
+    </select>
+    <label>from <input type="date" x-model="todoDateFrom" :max="todoDateTo || null"></label>
+    <label>to <input type="date" x-model="todoDateTo" :min="todoDateFrom || null"></label>
+  </div>
+  <div id="todo-chip-filters" x-show="todoAllLabels().length || todoTypeFilter || todoDateActive()">
     <template x-for="l in todoAllLabels()" :key="l">
       <button class="chip-filter" :class="{ active: todoLabelFilter === l }" @click="setTodoLabelFilter(l)" x-text="l"></button>
     </template>
-    <button class="link-btn" x-show="todoTypeFilter || todoLabelFilter"
-            @click="todoTypeFilter = ''; todoLabelFilter = ''">clear filters</button>
+    <button class="link-btn" x-show="todoTypeFilter || todoLabelFilter || todoDateActive()"
+            @click="clearTodoFilters()">clear filters</button>
   </div>
   <ul id="todo-list">
     <template x-for="item in filteredTodos()" :key="item.id">

@@ -708,6 +708,11 @@ document.addEventListener("alpine:init", () => {
     todoFilter: "",
     todoTypeFilter: "",
     todoLabelFilter: "",
+    // created/updated/closed date range; bounds are local YYYY-MM-DD, inclusive, "" = open-ended
+    todoDateOpen: false,
+    todoDateField: "created",
+    todoDateFrom: "",
+    todoDateTo: "",
 
     priorityLevel(p) {
       const n = Number(p);
@@ -724,6 +729,7 @@ document.addEventListener("alpine:init", () => {
     },
     async toggleTodoShowClosed() {
       this.todoShowClosed = !this.todoShowClosed;
+      if (!this.todoShowClosed && this.todoDateField === "closed") this.todoDateField = "created";
       await this.loadTodos();
     },
     todoAllLabels() {
@@ -731,6 +737,13 @@ document.addEventListener("alpine:init", () => {
       for (const i of this.todoItems) for (const l of i.labels || []) set.add(l);
       return [...set].sort();
     },
+    todoDateActive() { return !!(this.todoDateFrom || this.todoDateTo); },
+    clearTodoFilters() {
+      this.todoTypeFilter = ""; this.todoLabelFilter = "";
+      this.todoDateFrom = ""; this.todoDateTo = "";
+    },
+    // an item's calendar day in the viewer's timezone, so "created on 2026-10-29" means their 29th
+    todoDay(ts) { return ts ? new Date(ts).toLocaleDateString("sv-SE") : ""; },
     setTodoTypeFilter(t) { this.todoTypeFilter = this.todoTypeFilter === t ? "" : t; },
     setTodoLabelFilter(l) { this.todoLabelFilter = this.todoLabelFilter === l ? "" : l; },
     filteredTodos() {
@@ -738,6 +751,12 @@ document.addEventListener("alpine:init", () => {
       const matches = this.todoItems.filter((i) => {
         if (this.todoTypeFilter && i.type !== this.todoTypeFilter) return false;
         if (this.todoLabelFilter && !(i.labels || []).includes(this.todoLabelFilter)) return false;
+        if (this.todoDateActive()) {
+          const day = this.todoDay(i[`${this.todoDateField}_at`]);
+          if (!day) return false; // e.g. no closed_at on an open item
+          if (this.todoDateFrom && day < this.todoDateFrom) return false;
+          if (this.todoDateTo && day > this.todoDateTo) return false;
+        }
         if (!q) return true;
         return i.title.toLowerCase().includes(q) ||
           i.id.toLowerCase().includes(q) ||
