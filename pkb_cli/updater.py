@@ -2,12 +2,15 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 import typing
 import urllib.error
+from importlib import metadata
+from urllib.parse import unquote, urlparse
 
 from . import __version__
 from . import pkb_common as pc
@@ -15,15 +18,37 @@ from . import proc
 from . import remind_push
 from . import service
 
-TOOL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the source checkout, when running from one (has .git)
+_SOURCE_TREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the checkout this file sits in, if it's one
 
-LEGACY_VERSION_PATH = os.path.join(TOOL_ROOT, ".pkb-cli-version")  # marker left by the old tarball installer
 # Where kb itself is published, for `kb update`'s release check.
 TOOL_REPO_SLUG = os.environ.get("PKB_CLI_REPO", "dantuck/pkb-cli")
 
 
+def _checkout_root():
+    """The git checkout this kb runs from, or None for a regular (release) install.
+
+    Asked of the installed package's metadata (PEP 610 `direct_url.json`) rather than guessed from
+    where the code sits: only an editable install points back at a source tree, while a wheel or
+    `git+https` install -- what uv/pipx make -- is a release, even if a checkout happens to be nearby.
+    With no metadata at all (running `python -m pkb_cli` from an uninstalled tree) fall back to
+    whether this tree is itself a checkout."""
+    try:
+        dist = metadata.distribution("pkb-cli")
+    except metadata.PackageNotFoundError:
+        return _SOURCE_TREE if os.path.isdir(os.path.join(_SOURCE_TREE, ".git")) else None
+    try:
+        info = json.loads(dist.read_text("direct_url.json") or "{}")
+    except ValueError:
+        return None
+    url = info.get("url", "")
+    if not (info.get("dir_info", {}).get("editable") and url.startswith("file:")):
+        return None
+    path = unquote(urlparse(url).path)
+    return path if os.path.isdir(os.path.join(path, ".git")) else None
+
+
 def _git(*args, cwd=None):
-    return subprocess.run(["git", "-C", cwd or TOOL_ROOT, *args], capture_output=True, text=True)
+    return subprocess.run(["git", "-C", cwd or _checkout_root(), *args], capture_output=True, text=True)
 
 
 def _github_request(url):
@@ -55,12 +80,26 @@ def _installer():
     return None
 
 
-def _install_command(installer, ref):
-    """Install pkb-cli at `ref` (a tag or branch) with `installer`. Reinstalling by
-    ref rather than running `upgrade`: installs are pinned to the tag they were made
-    from (see install.sh), and uv/pipx `upgrade` never moves a pinned ref."""
+def _install_command(installer, ref, extras=None):
+    """Install pkb-cli at `ref` (a tag or branch) with `installer`, optionally with an extra
+    (e.g. "semantic"). Reinstalling by ref rather than running `upgrade`: installs are pinned to
+    the tag they were made from (see install.sh), and uv/pipx `upgrade` never moves a pinned ref.
+
+    install.sh builds the same command in shell, because it runs before kb exists -- keep the two
+    in step (and PKB_CLI_SEMANTIC there is this function's `extras`)."""
     base = [installer, "tool", "install"] if installer == "uv" else [installer, "install"]
-    return base + ["--force", f"git+https://github.com/{TOOL_REPO_SLUG}@{ref}"]
+    spec = f"git+https://github.com/{TOOL_REPO_SLUG}@{ref}"
+    if extras:
+        spec = f"pkb-cli[{extras}] @ {spec}"
+    return base + ["--force", spec]
+
+
+def install_hint(extras):
+    """The one-line command that reinstalls this kb with `extras`, for the installer that owns
+    this venv (uv when that can't be told) -- what a "not installed (optional)" message tells the
+    user to run, instead of a hardcoded `uv tool install` that is wrong under pipx."""
+    ref = f"v{__version__}" if re.fullmatch(r"\d+(\.\d+)*", __version__) else "main"
+    return shlex.join(_install_command(_installer() or "uv", ref, extras))
 
 
 def update_status(fetch=False):
@@ -74,7 +113,7 @@ def update_status(fetch=False):
     Returns a dict: is_git, upstream, local, remote, behind, dirty. Fields are None
     when they don't apply (e.g. not a git checkout, or no upstream configured).
     """
-    result = {"is_git": os.path.isdir(os.path.join(TOOL_ROOT, ".git")),
+    result = {"is_git": _checkout_root() is not None,
               "upstream": None, "local": None, "remote": None, "behind": None, "dirty": None}
     if not result["is_git"]:
         return result
@@ -106,15 +145,6 @@ def update_status(fetch=False):
     result["behind"] = behind
     result["dirty"] = dirty
     return result
-    result["upstream"] = upstream.stdout.strip()
-
-    result["local"] = _git("rev-parse", "HEAD").stdout.strip()
-    result["remote"] = _git("rev-parse", result["upstream"]).stdout.strip()
-    if result["local"] and result["remote"]:
-        behind = _git("rev-list", "--count", f"{result['local']}..{result['remote']}")
-        result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
-    result["dirty"] = bool(_git("status", "--porcelain").stdout.strip())
-    return result
 
 
 def plan_update():
@@ -124,31 +154,15 @@ def plan_update():
     network (git fetch / GitHub releases API) but never writes to the install.
 
     Returns {mode, current, latest, update_available, can_update, command,
-    installer, detail, error}. `mode` is "git" (source checkout), "release"
-    (uv/pipx/pip install) or "legacy" (old tarball installer). `detail` is the
-    status line to show; `error` is why it can't proceed (or couldn't check);
-    `command` is the argv that installs the update (release/legacy modes)."""
+    installer, detail, error}. `mode` is "git" (source checkout) or "release"
+    (uv/pipx/pip install). `detail` is the status line to show; `error` is why
+    it can't proceed (or couldn't check); `command` is the argv that installs
+    the update (release mode)."""
     plan = {"mode": "release", "current": __version__, "latest": None, "update_available": False,
             "can_update": False, "command": None, "installer": None, "detail": None, "error": None}
 
-    if os.path.exists(LEGACY_VERSION_PATH):
-        plan["mode"] = "legacy"
-        plan["update_available"] = True
-        installer = next((t for t in ("uv", "pipx") if shutil.which(t)), None)
-        if installer is None:
-            plan["error"] = ("kb was installed by the old tarball installer, which can't update itself any "
-                             "more.\ninstall uv (https://docs.astral.sh/uv/) or pipx, then re-run the "
-                             f"installer:\n  curl -fsSL https://raw.githubusercontent.com/{TOOL_REPO_SLUG}/main/install.sh | bash")
-            return plan
-        try:
-            ref = f"v{_latest_release_version()}"
-        except (urllib.error.URLError, OSError, ValueError, KeyError):
-            ref = "main"  # no release yet (or GitHub unreachable) -- fall back to the branch
-        plan.update(installer=installer, can_update=True, command=_install_command(installer, ref))
-        plan["detail"] = f"migrating this old-style install to {installer}: {' '.join(plan['command'])}"
-        return plan
-
-    if os.path.isdir(os.path.join(TOOL_ROOT, ".git")):
+    root = _checkout_root()
+    if root:
         plan["mode"] = "git"
         fetch = _git("fetch", "--quiet", "origin")
         if fetch.returncode != 0:
@@ -156,7 +170,7 @@ def plan_update():
             return plan
         status = update_status(fetch=False)  # already fetched above, no need to do it twice
         if not status["upstream"]:
-            plan["error"] = f"no upstream branch configured for {TOOL_ROOT}"
+            plan["error"] = f"no upstream branch configured for {root}"
             return plan
         local, remote = status["local"][:8], status["remote"][:8]
         plan.update(current=local, latest=remote, update_available=bool(status["behind"]))
@@ -165,7 +179,7 @@ def plan_update():
         else:
             plan["detail"] = f"kb is {status['behind']} commit(s) behind {status['upstream']} ({local} -> {remote})"
             if status["dirty"]:
-                plan["error"] = f"{TOOL_ROOT} has local changes -- commit or stash them before updating"
+                plan["error"] = f"{root} has local changes -- commit or stash them before updating"
             else:
                 plan["can_update"] = True
         return plan
@@ -257,11 +271,7 @@ def apply_update(check=False, capture=False, defer_refresh=False):
         return rc, False
     _refresh_services_after_update(opts)
     _refresh_worker_after_update(opts)
-    if plan["mode"] == "legacy":
-        print(f"migrated. future `kb update`s use {plan['installer']}; run `kb setup` to refresh the hook and "
-              f"skill link, and delete {TOOL_ROOT} once you've confirmed `kb --version` works.")
-    else:
-        print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
+    print("updated -- run `kb setup` again if this changed onboarding behavior (e.g. hook logic).")
     return 0, True
 
 

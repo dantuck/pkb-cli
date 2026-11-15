@@ -1,4 +1,5 @@
 """updater.update_status against real git repos: a clone behind its origin, with and without local edits."""
+import json
 import os
 import subprocess
 import tempfile
@@ -24,7 +25,7 @@ class UpdateStatusTest(unittest.TestCase):
             git(self.origin, "config", k, v)
         git(self.origin, "commit", "--allow-empty", "-q", "-m", "one")
         subprocess.run(["git", "clone", "-q", self.origin, self.clone], check=True)
-        patcher = mock.patch.object(updater, "TOOL_ROOT", self.clone)
+        patcher = mock.patch.object(updater, "_checkout_root", return_value=self.clone)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -51,6 +52,46 @@ class UpdateStatusTest(unittest.TestCase):
         git(self.clone, "branch", "--unset-upstream")
         s = updater.update_status()
         self.assertEqual((s["is_git"], s["upstream"], s["behind"]), (True, None, None))
+
+
+
+class CheckoutRootTest(unittest.TestCase):
+    """_checkout_root reads how kb was installed from package metadata (PEP 610 direct_url.json)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.checkout = os.path.join(tmp.name, "my checkout")  # a space: the URL is percent-encoded
+        os.makedirs(os.path.join(self.checkout, ".git"))
+
+    def _dist(self, direct_url):
+        dist = mock.Mock()
+        dist.read_text.return_value = None if direct_url is None else json.dumps(direct_url)
+        return mock.patch.object(updater.metadata, "distribution", return_value=dist)
+
+    def test_editable_install_points_at_its_checkout(self):
+        url = "file://" + self.checkout.replace(" ", "%20")
+        with self._dist({"url": url, "dir_info": {"editable": True}}):
+            self.assertEqual(updater._checkout_root(), self.checkout)
+
+    def test_editable_install_whose_checkout_has_no_git_dir_is_a_release(self):
+        os.rmdir(os.path.join(self.checkout, ".git"))
+        with self._dist({"url": "file://" + self.checkout, "dir_info": {"editable": True}}):
+            self.assertIsNone(updater._checkout_root())
+
+    def test_vcs_wheel_and_unrecorded_installs_are_releases(self):
+        for direct_url in ({"url": "https://github.com/x/pkb-cli", "vcs_info": {"vcs": "git", "commit_id": "a"}},
+                           {"url": "file://" + self.checkout, "dir_info": {}},  # non-editable local install
+                           None):
+            with self._dist(direct_url):
+                self.assertIsNone(updater._checkout_root(), direct_url)
+
+    def test_uninstalled_source_tree_falls_back_to_whether_it_is_a_checkout(self):
+        with mock.patch.object(updater.metadata, "distribution", side_effect=updater.metadata.PackageNotFoundError), \
+                mock.patch.object(updater, "_SOURCE_TREE", self.checkout):
+            self.assertEqual(updater._checkout_root(), self.checkout)
+            with mock.patch.object(updater.os.path, "isdir", return_value=False):
+                self.assertIsNone(updater._checkout_root())
 
 
 if __name__ == "__main__":

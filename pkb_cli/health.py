@@ -379,9 +379,6 @@ def doctor_checks(root, push=None):
                             f"fetch -- run `kb update` to check for real and pull")
             else:
                 ok.append(f"pkb-cli is up to date with {update['upstream']} as of the last fetch")
-    elif os.path.exists(updater.LEGACY_VERSION_PATH):
-        todo.append("pkb-cli is an old tarball-style install that can no longer self-update -- "
-                    "run `kb update` to migrate it to uv/pipx")
     else:
         ok.append(f"pkb-cli {__version__} (run `kb update` to check for a newer release)")
 

@@ -17,6 +17,7 @@ from . import reminders
 from . import semantic
 from . import service
 from . import sources
+from . import updater
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _confirm = pc.confirm
@@ -193,7 +194,7 @@ def cmd_setup(args):
         if sem:
             (ok if sem[0] else todo).append(sem[1])
         elif semantic.missing_dependency() and semantic.config(root)[0]:
-            ok.append("semantic search not installed (optional) -- `uv tool install 'pkb-cli[semantic]'` "
+            ok.append(f"semantic search not installed (optional) -- `{updater.install_hint('semantic')}` "
                       "adds meaning-based search")
 
         # 3. local bd store
