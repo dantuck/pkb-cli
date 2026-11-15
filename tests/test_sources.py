@@ -18,17 +18,17 @@ class DiscoverSyncSourcesTest(unittest.TestCase):
         imp.assert_not_called()
 
     def test_meta_loads_on_first_read(self):
-        found = sources.discover_sync_sources()
-        fname, meta = found["github"]
-        self.assertEqual(fname, "sync_github.py")
-        self.assertEqual(meta.get("cli_tool"), "gh")
+        self.assertEqual(sources.discover_sync_sources()["github"], "sync_github.py")
+        self.assertEqual(sources.source_meta("github").get("cli_tool"), "gh")
 
     def test_broken_module_gives_empty_meta_and_warning(self):
-        meta = sources._LazyMeta("nope", "sync_nope.py")
+        sources.source_meta.cache_clear()
+        self.addCleanup(sources.source_meta.cache_clear)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            self.assertEqual(dict(meta), {})
-        self.assertIn("sync_nope.py failed to load", err.getvalue())
+            self.assertEqual(sources.source_meta("nope"), {})
+            sources.source_meta("nope")  # cached: warned once
+        self.assertEqual(err.getvalue().count("sync_nope.py failed to load"), 1)
 
 
 if __name__ == "__main__":

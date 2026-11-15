@@ -28,6 +28,7 @@ from . import index_fts
 from . import inbox
 from . import journal
 from . import notifier
+from . import onboarding
 from . import pkb_common as pc
 from . import pkb_entries
 from . import reminders
@@ -666,7 +667,7 @@ def api_sync(h, root):
 
 @route("GET", "/api/doctor")
 def api_doctor(h, root):
-    _admin_task(h, admin.cmd_doctor, types.SimpleNamespace())
+    _admin_task(h, health.cmd_doctor, types.SimpleNamespace())
 
 
 @route("GET", "/api/admin/triage")
@@ -693,7 +694,7 @@ def api_admin_rollup(h, root):
 def api_admin_setup(h, root):
     """`kb setup --yes` -- idempotent, so re-running it is how the pre-commit
     hook, index, bd store and optional tools get repaired after an update."""
-    _admin_task(h, admin.cmd_setup, types.SimpleNamespace(yes=True))
+    _admin_task(h, onboarding.cmd_setup, types.SimpleNamespace(yes=True))
 
 
 @route("GET", "/api/admin/update")

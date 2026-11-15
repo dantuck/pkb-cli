@@ -42,7 +42,7 @@ import urllib.error
 
 from . import pkb_common as pc
 
-# Read by kb's discover_sync_sources() -- see docs/reference/ingestion.md for
+# Read by kb's sources.source_meta() -- see docs/reference/ingestion.md for
 # the SOURCE_META contract. No cli_tool: memos talks straight to the REST API
 # over urllib, no external CLI to check for.
 SOURCE_META = {

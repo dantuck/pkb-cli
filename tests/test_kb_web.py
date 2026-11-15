@@ -130,7 +130,7 @@ class KbWebTest(unittest.TestCase):
             kb.health.doctor_checks.return_value = (["fine"], [])
             kb.pkb_entries.inbox_list.return_value = []
             kb.todos.bd_available.return_value = False
-            kb.sources.discover_sync_sources.return_value = {"memos": ("sync_memos.py", {})}
+            kb.sources.discover_sync_sources.return_value = {"memos": "sync_memos.py"}
             kb.kb_web.__version__ = "9.9.9"
             status, data = self.json("GET", "/api/admin/status")
         self.assertEqual(status, 200)
@@ -324,10 +324,10 @@ class KbWebTest(unittest.TestCase):
 
     def test_setup_runs_non_interactively(self):
         with patched_kb_web() as kb:
-            kb.admin.cmd_setup.return_value = 0
+            kb.onboarding.cmd_setup.return_value = 0
             status, data = self.json("POST", "/api/admin/setup", {})
         self.assertEqual((status, data["ok"]), (200, True))
-        self.assertTrue(kb.admin.cmd_setup.call_args.args[0].yes)
+        self.assertTrue(kb.onboarding.cmd_setup.call_args.args[0].yes)
 
     def test_update_check_returns_structured_info(self):
         info = {"mode": "release", "current": "0.2.0", "latest": "0.3.0", "update_available": True}

@@ -9,6 +9,7 @@ from datetime import datetime
 from . import __version__
 from . import pkb_common as pc
 from . import proc
+from . import projdocs
 from . import reminders
 from . import semantic
 from . import sources
@@ -60,7 +61,8 @@ def missing_deps_with_formulas(tools, sync_sources):
     install that isn't currently on PATH -- the always-checked tools plus any
     sync source that declares both cli_tool and brew_formula."""
     missing = [(t, f) for t, f in BUILTIN_BREW_FORMULAS.items() if not tools.get(t)]
-    for _name, (_fname, meta) in sync_sources.items():
+    for name in sync_sources:
+        meta = sources.source_meta(name)
         cli_tool, formula = meta.get("cli_tool"), meta.get("brew_formula")
         if cli_tool and formula and not tools.get(cli_tool):
             missing.append((cli_tool, formula))
@@ -80,11 +82,13 @@ def tool_status(sync_sources=None, check_auth=True):
     if sync_sources is None:
         sync_sources = sources.discover_sync_sources()
     cli_tools = set(BUILTIN_BREW_FORMULAS)
-    for _name, (_fname, meta) in sync_sources.items():
+    for name in sync_sources:
+        meta = sources.source_meta(name)
         if meta.get("cli_tool"):
             cli_tools.add(meta["cli_tool"])
     status = {t: shutil.which(t) is not None for t in cli_tools}
-    for _name, (_fname, meta) in sync_sources.items():
+    for name in sync_sources:
+        meta = sources.source_meta(name)
         cli_tool, auth_check = meta.get("cli_tool"), meta.get("auth_check")
         if cli_tool and auth_check:
             status[f"{cli_tool}_auth"] = (
@@ -175,10 +179,11 @@ def push_status(root):
     if upstream.returncode != 0:
         return result
     result["upstream"] = upstream.stdout.strip()
-    ahead = updater._git("rev-list", "--count", f"{result['upstream']}..HEAD", cwd=root)
-    behind = updater._git("rev-list", "--count", f"HEAD..{result['upstream']}", cwd=root)
-    result["ahead"] = int(ahead.stdout.strip()) if ahead.returncode == 0 else None
-    result["behind"] = int(behind.stdout.strip()) if behind.returncode == 0 else None
+    # left = commits only upstream has (behind), right = commits only HEAD has (ahead); one read-only
+    # call rather than a rev-list per direction (and unlike `git status`, it never refreshes the index)
+    counts = updater._git("rev-list", "--left-right", "--count", f"{result['upstream']}...HEAD", cwd=root)
+    if counts.returncode == 0:
+        result["behind"], result["ahead"] = (int(n) for n in counts.stdout.split())
     return result
 
 
@@ -192,8 +197,8 @@ def doctor_checks(root, push=None):
 
     `push` lets a caller that already computed push_status(root) (kb web's
     /api/admin/status also reports it separately) pass it in instead of this
-    function running its own -- push_status shells out to git twice
-    (rev-list ahead + behind), not worth doing twice per request."""
+    function running its own -- push_status shells out to git twice,
+    not worth doing twice per request."""
     ok, todo = [], []
 
     if root is None:
@@ -383,3 +388,25 @@ def doctor_checks(root, push=None):
         ok.append(f"pkb-cli {__version__} (run `kb update` to check for a newer release)")
 
     return ok, todo
+
+
+def cmd_doctor(args):
+    """Read-only health check -- reuses the same detection helpers as `kb setup`
+    but never writes anything, and adds a few deeper checks setup doesn't do."""
+    try:
+        root = pc.get_repo_root()
+    except SystemExit:
+        root = None
+    ok, todo = doctor_checks(root)
+
+    p_ok, p_todo = projdocs.doctor_lines()
+    ok, todo = ok + p_ok, todo + p_todo
+
+    print("kb doctor\n")
+    for line in ok:
+        print(f"  [ok]   {line}")
+    for line in todo:
+        print(f"  [todo] {line}")
+    if not todo:
+        print("\nall clear")
+    return 1 if todo else 0

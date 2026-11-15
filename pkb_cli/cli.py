@@ -20,6 +20,7 @@ from . import index_fts
 from . import pkb_common as pc
 from . import remind_push
 from . import notifier
+from . import onboarding
 from . import service
 from . import health
 from . import journal
@@ -1521,7 +1522,7 @@ def build_parser():
     )
     p.add_argument("-y", "--yes", action="store_true",
                     help="skip prompts and accept defaults (for scripted installs)")
-    p.set_defaults(func=admin.cmd_setup)
+    p.set_defaults(func=onboarding.cmd_setup)
 
     p = sub.add_parser(
         "web", aliases=["open"], help="run the local web UI, or open it if already running",
@@ -1583,7 +1584,7 @@ def build_parser():
     p.set_defaults(func=service.cmd_sync_service)
 
     p = sub.add_parser("doctor", help="diagnose issues (read-only, never writes anything)")
-    p.set_defaults(func=admin.cmd_doctor)
+    p.set_defaults(func=health.cmd_doctor)
 
     p = sub.add_parser("update", help="check for and pull kb tool updates")
     p.add_argument("--check", action="store_true", help="only check, don't pull even if behind")
