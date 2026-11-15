@@ -55,9 +55,25 @@ class ProjectCliTest(unittest.TestCase):
         self.assertEqual(self.kbj("spec", "list", "--status", "done")[0]["tasks"], {"done": 2, "total": 2})
         self.assertIn("Add login", self.kb("spec", "list")[1])  # text mode renders
 
-    def test_usage_errors_exit_1(self):
-        for argv in (["spec", "new"], ["spec", "show"], ["spec", "task", "1"], ["spec", "status", "9"],
-                     ["docs", "new", "how-to"], ["docs", "search"]):
+    def test_missing_arguments_are_argparse_usage_errors(self):
+        for argv in (["spec", "new"], ["spec", "show"], ["spec", "task", "1"], ["spec", "bogus"],
+                     ["adr", "task", "1", "T1"], ["docs", "new", "how-to"], ["docs", "search"],
+                     ["docs", "new", "nope", "x"]):
+            with self.assertRaises(SystemExit) as ctx, contextlib.redirect_stderr(io.StringIO()):
+                self.kb(*argv)
+            self.assertEqual(ctx.exception.code, 2, argv)
+
+    def test_bare_group_prints_help_and_exits_2(self):
+        for group in ("spec", "adr", "agents", "docs"):
+            args = cli.build_parser().parse_args([group])
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                code = args.func(args)
+            self.assertEqual(code, 2, group)
+            self.assertIn("usage:", err.getvalue())
+
+    def test_runtime_errors_exit_1_with_message(self):
+        for argv in (["spec", "status", "9"], ["spec", "show", "9"], ["adr", "status", "9", "accepted"],
+                     ["docs", "new", "how-to", "  "]):
             code, _, err = self.kb(*argv)
             self.assertEqual(code, 1, argv)
             self.assertTrue(err.startswith("error:"), (argv, err))

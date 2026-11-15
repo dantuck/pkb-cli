@@ -7,6 +7,7 @@ import contextlib
 import copy
 import fcntl
 import functools
+import hashlib
 import json
 import os
 import re
@@ -174,11 +175,13 @@ def _dump_scalar(value):
     return s
 
 
-def dump_frontmatter(data):
+def dump_frontmatter(data, fields=None):
+    """Frontmatter block for `data`; `fields` (default: the personal-repo schema) picks the keys
+    and their order, so other markdown stores (project specs) can reuse the same serializer."""
     lines = ["---"]
-    for key in FRONTMATTER_FIELDS:
+    for key in fields or FRONTMATTER_FIELDS:
         value = data.get(key)
-        if key in ("tags", "links"):
+        if key in ("tags", "links") or isinstance(value, list):
             items = value or []
             lines.append(f"{key}: [{', '.join(str(i) for i in items)}]")
         elif key == "title":
@@ -202,10 +205,10 @@ def read_entry(path):
     return fm, body
 
 
-def write_entry(path, fm, body):
+def write_entry(path, fm, body, fields=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(dump_frontmatter(fm))
+        f.write(dump_frontmatter(fm, fields))
         f.write("\n")
         f.write(body.lstrip("\n"))
 
@@ -305,17 +308,35 @@ def git_autocommit(root, message):
 
 
 @contextlib.contextmanager
-def entry_lock(path):
+def entry_lock(path, lock_dir=None):
     """Advisory per-file lock so concurrent read-modify-write updates to the
     same entry's frontmatter (tags/links/content) serialize instead of
-    racing and silently dropping one writer's change."""
-    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+    racing and silently dropping one writer's change. The lock file sits next
+    to `path`, or in `lock_dir` (named by a hash of the path) when the caller
+    does not want stray `.lock` files beside the content."""
+    if lock_dir:
+        lock_path = os.path.join(lock_dir, hashlib.sha1(os.path.abspath(path).encode()).hexdigest() + ".lock")
+    else:
+        lock_path = path + ".lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def emit_result(json_out, payload, text):
+    """Print `payload` as one JSON line under --json, else the human `text`."""
+    print(json.dumps(payload) if json_out else text)
+
+
+def report_error(message, json_out=False, code=1):
+    """Report an error on stderr -- as {"error": ...} JSON under --json, so a caller
+    parsing the output gets one shape on both success and failure -- and return `code`."""
+    print(json.dumps({"error": message}) if json_out else f"error: {message}", file=sys.stderr)
+    return code
 
 
 def iter_markdown_files(root):
