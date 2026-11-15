@@ -31,7 +31,7 @@ class IndexCorrupt(sqlite3.DatabaseError):
     """fts.db exists but is not a usable database."""
 
 
-def get_db(root, recover=False):
+def get_db(root, recover=False, err=None):
     """Open the index, creating it if needed. A corrupt one raises IndexCorrupt, so a
     search reports the problem rather than silently returning nothing; with
     `recover=True` (kb index) it is discarded and recreated empty instead, since the
@@ -44,7 +44,7 @@ def get_db(root, recover=False):
             raise
         if not recover:
             raise IndexCorrupt(f"the search index is corrupt ({e}) -- run `kb index` to rebuild it") from e
-        print(f"warning: the search index was corrupt ({e}); rebuilding it", file=sys.stderr)
+        print(f"warning: the search index was corrupt ({e}); rebuilding it", file=err or sys.stderr)
         for suffix in ("", "-wal", "-shm", "-journal"):
             try:
                 os.remove(db_path + suffix)
@@ -53,11 +53,12 @@ def get_db(root, recover=False):
         return _open(db_path)
 
 
-def index_repo(root, full=False, quiet=False, allow_download=False):
+def index_repo(root, full=False, quiet=False, allow_download=False, err=None):
     """Bring the keyword index -- and, when the `semantic` extra and its model are
     available, the embeddings -- in line with the files on disk. `allow_download`
-    lets a missing embedding model be fetched once (kb index / kb setup only)."""
-    conn = get_db(root, recover=True)
+    lets a missing embedding model be fetched once (kb index / kb setup only). Warnings go
+    to `err` (default stderr)."""
+    conn = get_db(root, recover=True, err=err)
     cur = conn.cursor()
 
     if full:
@@ -133,7 +134,7 @@ def index_repo(root, full=False, quiet=False, allow_download=False):
         extra = f", {embedded} embedded" if embedded else ""
         print(f"index: {added} added, {updated} updated, {len(stale_ids)} pruned, {skipped} unchanged{extra}")
         if note:
-            print(f"semantic index skipped: {note}", file=sys.stderr)
+            print(f"semantic index skipped: {note}", file=err or sys.stderr)
 
 
 def _embed(conn, model_ref, wanted, allow_download):
@@ -151,14 +152,14 @@ def _embed(conn, model_ref, wanted, allow_download):
         return 0, str(e)
 
 
-def run(root, full=False):
+def run(root, full=False, err=None):
     """Index `root` for the CLI/web entry points; returns an exit code instead of raising, so callers
     that used to shell out to `python -m pkb_cli.index_fts` can run it in-process and keep the same
     contract (progress on stdout, 0 on success, nonzero plus a message on failure)."""
     try:
-        index_repo(root, full=full, allow_download=True)
+        index_repo(root, full=full, allow_download=True, err=err)
     except Exception as e:
-        print(f"error: index failed: {e}", file=sys.stderr)
+        print(f"error: index failed: {e}", file=err or sys.stderr)
         return 1
     return 0
 

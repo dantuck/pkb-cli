@@ -58,10 +58,9 @@ def cmd_sync(args):
 
 
 def _index(root, full=False):
-    """Run the indexer in-process (no fresh interpreter). Its stderr (semantic-index notes, errors) is
-    folded into stdout, as the old subprocess run did, so kb web's stdout capture still shows it."""
-    with contextlib.redirect_stderr(sys.stdout):
-        return index_fts.run(root, full=full)
+    """Run the indexer in-process (no fresh interpreter). Its warnings and errors go to stdout, as the
+    old subprocess run's did, so kb web's stdout capture still shows them."""
+    return index_fts.run(root, full=full, err=sys.stdout)
 
 
 def cmd_index(args):
