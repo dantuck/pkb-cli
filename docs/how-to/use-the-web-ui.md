@@ -74,7 +74,9 @@ on macOS or `journalctl --user -u kb-web.service` on Linux.
   **Redirect** into today's journal, or **Discard**. Same three outcomes as
   `kb inbox <id> promote|redirect|discard`.
 - **Todos** (header button, with a live count) — the full `bd` (beads) todo
-  list: filter by title/id/label, add a todo (with optional description and
+  list: filter by title/id/label, or by a created/updated/closed date range
+  (the **dates** button; days are in your local timezone, and "closed" appears
+  once **show closed** is on), add a todo (with optional description and
   labels), and open one to change priority/type/assignee/labels/description,
   manage `blocked by`/`blocks` dependencies, add comments, and close, reopen,
   or permanently delete it.

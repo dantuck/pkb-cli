@@ -297,6 +297,9 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 #todo-list li.snoozed .todo-title { opacity: 0.6; }
 #todo-list .row-badge.active { background: var(--accent-soft); color: var(--accent-text); }
 
+#todo-date-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0 1.1rem 0.6rem; font-size: 0.8rem; color: var(--muted); }
+#todo-date-filters select, #todo-date-filters input { font: inherit; font-size: 0.8rem; margin: 0; }
+#todo-filter-row .link-btn.active { color: var(--accent-text); }
 #todo-chip-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0 1.1rem 0.6rem; }
 .chip-filter {
   font: inherit; font-size: 0.72rem; color: var(--muted); background: var(--surface-2);
@@ -355,7 +358,8 @@ input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus {
 .todo-description { width: 100%; box-sizing: border-box; font-size: 0.85rem; resize: vertical; }
 
 #todo-filter-row { display: flex; align-items: center; gap: 0.6rem; padding: 0 1.1rem 0.6rem; }
-#todo-filter-row input[type=text] { flex: 1; }
+#todo-filter-row input[type=text] { flex: 1; min-width: 0; }
+#todo-filter-row .link-btn { flex-shrink: 0; white-space: nowrap; }
 .todo-show-closed {
   display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted);
   white-space: nowrap; cursor: pointer;
@@ -932,7 +936,7 @@ h1 { font-size: 1.3rem; }
   }
   .side-drawer.docked .side-drawer-header { position: static; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
   .side-drawer.docked .drawer-close { display: none; }
-  .side-drawer.docked #todo-filter-row, .side-drawer.docked #todo-chip-filters { padding-left: 0; padding-right: 0; }
+  .side-drawer.docked #todo-filter-row, .side-drawer.docked #todo-date-filters, .side-drawer.docked #todo-chip-filters { padding-left: 0; padding-right: 0; }
   .side-drawer.docked #todo-list, .side-drawer.docked #inbox-list { margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; }
   .side-drawer.docked #todo-list li { padding: 0.55rem 0.7rem; }
   .side-drawer.docked #todo-add-row { margin: 0.6rem 0 0.5rem; }
